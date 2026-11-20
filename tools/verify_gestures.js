@@ -474,21 +474,25 @@ console.log('\n==== v0.3.2 B2 选中高亮（含拖动中 / 托盘 / 成局隐�
   S.win = null;
 }
 
-/* ---------- V4 提示三档 + 星级 ---------- */
-console.log('\n==== V4 提示三档手动降级 / hint_used 星级封顶（A3）====');
+/* ---------- V4 提示阶梯 + 星级（v0.10 重写：三档统一、第 1 档免费、第 2 档起弹面板） ---------- */
+console.log('\n==== V4 提示阶梯：免费 1 档 → 面板 → 广告/巧币（v0.10）====');
 {
+  const HX = 511, HY = CFG.LAYOUT.TOOLBAR.y + CFG.LAYOUT.TOOLBAR.h / 2;
   reset(0);
-  const seq = [S.hintTier];
-  for (let i = 0; i < 4; i++) { tapD(511, CFG.LAYOUT.TOOLBAR.y + CFG.LAYOUT.TOOLBAR.h / 2); seq.push(S.hintTier); }
-  check('V4 提示手动降级 1→2→3 单向、本关内不回升',
-    JSON.stringify(seq) === JSON.stringify([1, 1, 2, 3, 3]) && S.hintUsed === true,
-    'hintTier 序列=' + seq.join('→') + '（第 1 次为启用提示+高亮）');
-  check('V4 当前档指示随 state.hintTier 更新（工具栏 badge）',
-    S.hintTier === 3, 'badge 取 core.js 1471 行 state.hintTier');
-  check('V4 hint_used 已写入本数据集存档',
-    !!(JSON.parse(store['tangram7_save_v1'] || '{}').hintUsed || {})['1'] === true ||
-    !!S.save.hintUsed['1'],
+  tapD(HX, HY);
+  check('V4 第 1 档免费直接给（不弹面板、不播广告）',
+    S.hintLv === 1 && !!S.hint && S.hint.tier === 1 && S.overlay !== 'hint' && S.hintUsed === true,
+    `hintLv=${S.hintLv} tier=${S.hint && S.hint.tier} overlay=${S.overlay}`);
+  tapD(HX, HY);
+  check('V4 第 2 档先弹提示面板（不偷加档、不静默播广告）',
+    S.overlay === 'hint' && S.hintLv === 1, `overlay=${S.overlay} hintLv=${S.hintLv}`);
+  check('V4 工具栏角标 = 剩余档位（3−已用）',
+    CFG.HINT.maxTier - S.hintLv === 2, 'left=' + (CFG.HINT.maxTier - S.hintLv));
+  check('V4 hint_used 已写入本数据集存档（只作历史标记）',
+    !!S.save.hintUsed['1'] ||
+    !!(JSON.parse(store['tangram7_save_v1'] || '{}').hintUsed || {})['1'] === true,
     'keys=' + Object.keys(store).join(','));
+  S.overlay = null;
 }
 {
   function winWith(hintUsed) {

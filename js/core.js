@@ -240,8 +240,11 @@
       elapsed: 0,
       running: false,
       steps: 0,
-      hintUsed: false,
-      hintTier: 2,          // v0.3 A3 当前提示档（1=轮廓+分割线 2=轮廓 3=纯剪影）
+      hintUsed: false,      // v0.10：本局是否用过提示（只看本局，不再从存档恢复）
+      hintLv: 0,            // v0.10：本关已用到第几档（0..HINT.maxTier）
+      hintPaid: 0,          // v0.10：本关已为提示付过费（广告/巧币）的次数
+      hintTipShown: false,  // v0.10：本次运行是否已提示过「用提示最高 ★★」（只说一次）
+      hintTier: 2,          // 目标轮廓样式档（只读，取关卡数据 hintTier）
       covFrom: 0, covTo: 0, covT: 1, cov: 0,
       msg: '', msgT: 0,
       overlapT: 0,
@@ -680,6 +683,7 @@
       if (kind === 'energy') grantFreeEnergy(true);
       else if (kind === 'revive') doRevive(true);
       else if (kind === 'invite') doInviteShare();
+      else if (kind === 'hint') useHint(true);     // v0.10：看完广告才给下一档提示
     }
 
     /* ---------------- v0.9 广告位 ---------------- */
@@ -815,8 +819,14 @@
       state.drag = null;
       state.elapsed = 0;
       state.steps = 0;
-      state.hintUsed = !!(state.save.hintUsed && state.save.hintUsed[String(idx + 1)]);
-      state.hintTier = LEVELS[idx].hintTier || 2;   // 默认档由关卡数据自带（v0.3 A3）
+      /* v0.10：提示改为「每关独立的三档阶梯」。
+       * 不再从存档 hintUsed 恢复：旧版一旦用过提示，该关永久封顶 ★★（重玩也拿不到三星），
+       * 玩家反馈"这关废了"。存档字段只留作历史标记，不参与星级计算。 */
+      state.hintUsed = false;
+      state.hintLv = 0;
+      state.hintPaid = 0;
+      state.hintTier = LEVELS[idx].hintTier ||
+        ((LEVELS[idx].splitLines && LEVELS[idx].splitLines.length) ? 2 : 1);
       state.cov = 0; state.covFrom = 0; state.covTo = 0; state.covT = 1;
       state.msg = ''; state.msgT = 0;
       state.overlapT = 0; state.overlapPairs = [];
@@ -1334,21 +1344,19 @@
           break;
         }
         case 'hint': {
-          var lvH = LEVELS[state.levelIdx];
-          var hasTiers = !!(lvH.splitLines && lvH.splitLines.length);   // 七巧板关卡才带分割线
-          if (!state.hintUsed) {
-            // 第一次用提示：高亮「下一块该放哪」+ 写存档（影响星级，★☆☆→★★☆ 封顶）
-            state.hintUsed = true;
-            var k = String(state.levelIdx + 1);
-            state.save.hintUsed[k] = true; persist();
-            state.hint = { id: pickHintPiece(), t: 0, until: nowMs() + C.ANIM.hintShow };
-          } else if (hasTiers && state.hintTier < 3) {
-            // v0.3 A3：手动降档 1→2→3 单向（本关内不回升）
-            state.hintTier++;
-            flashMsg('提示降为档 ' + state.hintTier + (state.hintTier === 2 ? '（轮廓）' : '（纯剪影）'));
+          /* v0.10 统一提示：每关 3 档，免费 1 次，其余走「看视频 / 巧币」二选一。
+           * 不再有「按一次就灰掉」和「按一次反而更模糊」两种相反行为。 */
+          if (state.hintLv >= C.HINT.maxTier) { toast('本关提示已经用完'); break; }
+          if (state.hintLv < C.HINT.freePerLevel) {
+            useHint(false);                 // 免费档：直接给
+          } else {
+            state.overlay = 'hint';         // 付费档：先弹提示面板，绝不静默播广告
+            env.audio.play('sfx_tap');
           }
           break;
         }
+        case 'hint_ad': adStart('hint'); break;
+        case 'hint_coin': useHintCoin(); break;
         case 'restart': setupLevel(state.levelIdx); break;
         case 'next': nextLevel(); break;
         case 'replay': setupLevel(state.levelIdx); state.overlay = null;
@@ -1389,6 +1397,7 @@
         case 'task_t3': claimTask('t3'); break;
         case 'close_sheet':
         case 'close_energy':
+        case 'close_hint':
         case 'close_fail':
           if (!state.adSim) state.overlay = null;
           break;
@@ -1414,6 +1423,46 @@
       var s = state.save;
       s.taskPlays = (s.taskPlays || 0) + 1;
       persist();
+    }
+
+    /* ---------------- v0.10 提示阶梯 ----------------
+     * useHint(paid)：消耗一档提示。paid=false 只有「每关首次」会走到（免费档），
+     *                paid=true 由「看完激励视频」或「扣巧币」触发。
+     * 返回 true 表示真的给了提示（广告回调/扣币分支据此决定要不要提示失败）。 */
+    function useHint(paid) {
+      var H = C.HINT;
+      if (state.hintLv >= H.maxTier) return false;
+      if (state.page !== 'play' || state.win) return false;
+
+      var tier = state.hintLv + 1;
+      state.hintLv = tier;
+      if (paid) state.hintPaid++;
+      if (!state.hintUsed) {
+        state.hintUsed = true;
+        /* 只写历史标记：本关"用过提示"这件事记在存档里（云端/老版本可读），
+         * 但星级判定只看本局，重玩不用提示仍能拿三星。 */
+        state.save.hintUsed[String(state.levelIdx + 1)] = true;
+        persist();
+      }
+      state.hint = { id: pickHintPiece(), tier: tier, t: 0, until: nowMs() + (H.showMs[tier - 1] || 3500) };
+      state.overlay = null;
+      env.audio.play('sfx_snap');
+      var msg = '提示 ' + tier + '/' + H.maxTier + ' · ' + H.names[tier - 1];
+      if (tier === 1 && !state.hintTipShown) {
+        state.hintTipShown = true;
+        msg += '（本关最高 ★★）';
+      }
+      toast(msg);
+      return true;
+    }
+    /* 巧币买提示：钱够就扣，不够给一句"看视频也行"，不弹失败页 */
+    function useHintCoin() {
+      var H = C.HINT, s = state.save;
+      if (state.hintLv >= H.maxTier) { toast('本关提示已经用完'); return; }
+      if ((s.coin || 0) < H.coinCost) { toast('巧币不足，看视频也能拿提示'); return; }
+      s.coin -= H.coinCost;
+      persist();
+      useHint(true);
     }
 
     function pickHintPiece() {
@@ -1903,16 +1952,16 @@
       } else {
         // secondary
         rr(x, y, b.w, b.h, 20);
-        ctx.fillStyle = COL.card; ctx.fill();
-        ctx.lineWidth = 1.5; ctx.strokeStyle = COL.cardEdge; ctx.stroke();
+        ctx.fillStyle = b.disabled ? COL.disabledBg : COL.card; ctx.fill();
+        ctx.lineWidth = 1.5; ctx.strokeStyle = b.disabled ? COL.disabledBg : COL.cardEdge; ctx.stroke();
         ctx.save(); rr(x, y, b.w, b.h, 20); ctx.clip();
-        ctx.fillStyle = COL.cardEdge;
+        ctx.fillStyle = b.disabled ? COL.disabledBg : COL.cardEdge;
         ctx.fillRect(x, y + b.h - C.LAYOUT.BTN_EDGE + (pressed ? 2 : 0), b.w, C.LAYOUT.BTN_EDGE * 2);
         ctx.restore();
         // v0.8：secondary 也支持左侧图标（分享 / 排行榜），文字随之右移，避免压图标
         if (b.icon) drawIcon(b.icon, x + 46, b.y + dy, COL.text, 0.86);
         text(b.label, b.x + (b.icon ? 20 : 0), b.y + dy, b.size || 30,
-          b.disabled ? COL.textSub : COL.text, 'center', '500');
+          b.disabled ? COL.disabledIcon : COL.text, 'center', '500');
       }
       ctx.restore();
     }
@@ -2586,10 +2635,10 @@
         ctx.restore();
       }
 
-      /* 目标轮廓（v0.3.1 A2 提示三档重定义：三档都不泄露拼法，只渐进弱化目标形状）
+      /* 目标轮廓（v0.3.1 A2 样式，v0.10 起固定不变）
        * 档1 虚线轮廓(3px,[8,6])+淡填充 / 档2 细实线轮廓(1.5px)+淡填充 / 档3 纯剪影无描边。
-       * v0.3 的「档1 内部分割线」已整块删除——那等于把标准解画给玩家。
-       * 四巧板（无 splitLines）不参与降档，固定用档1 样式，保持 v0.3 外观零回归。 */
+       * v0.10：这三档是「关卡自带的显示难度」，不再由提示按钮改动
+       * （旧版按提示会把轮廓越按越淡，等于提示越用越难，语义是反的）。 */
       var hasTiersLv = !!(lv.splitLines && lv.splitLines.length);
       var drawTier = hasTiersLv ? (state.hintTier || 2) : 1;
       var outline = lv.outline.map(function (v) { return [w2d(v[0]), h2d(v[1])]; });
@@ -2613,24 +2662,8 @@
       }
       ctx.restore();
 
-      /* 提示高亮 */
-      if (state.hint) {
-        var hs = null;
-        for (var q = 0; q < lv.solution.length; q++) if (lv.solution[q].id === state.hint.id) hs = lv.solution[q];
-        if (hs) {
-          var hp = G.toWorld(LOCAL[hs.id], hs).map(function (v) { return [w2d(v[0]), h2d(v[1])]; });
-          var a = 0.35 + 0.3 * Math.sin(state.time / 180);
-          ctx.save();
-          ctx.beginPath();
-          ctx.moveTo(hp[0][0], hp[0][1]);
-          for (var h2 = 1; h2 < hp.length; h2++) ctx.lineTo(hp[h2][0], hp[h2][1]);
-          ctx.closePath();
-          ctx.fillStyle = 'rgba(255,185,61,' + a.toFixed(2) + ')';
-          ctx.fill();
-          ctx.lineWidth = 3; ctx.strokeStyle = COL.gold; ctx.stroke();
-          ctx.restore();
-        }
-      }
+      /* 提示引导（v0.10 三档；档2 的托盘描边单独画在托盘之上，见 drawHintTray） */
+      if (state.hint) drawHintGuide(lv);
 
       /* 已上板的板件（先画，被拖的那块最后画） */
       var dragging = state.drag ? state.drag.id : null;
@@ -2646,6 +2679,8 @@
       for (var t = 0; t < state.pieces.length; t++) {
         if (!state.pieces[t].onBoard) drawTrayPiece(state.pieces[t]);
       }
+      /* v0.10 档2：把「托盘里的哪一块」标出来（画在托盘之上，压住叠放关系） */
+      if (state.hint) drawHintTray();
 
       /* 拖动中的板最后画（在最上层） */
       if (dragging) {
@@ -2699,23 +2734,24 @@
 
       /* 工具栏 */
       var sel = pieceOf(state.selId);
-      var hasTiers = !!(lv.splitLines && lv.splitLines.length);
       var tools = [
         { id: 'rot_ccw', icon: 'rotL', disabled: !sel },
         { id: 'rot_cw', icon: 'rotR', disabled: !sel },
         /* v0.4 A1/A3：翻转 = 双击板件本体 或 本按钮；长按已移除、tip 汉字已删除 */
         { id: 'flip', icon: 'flip', disabled: !sel },
-        /* v0.3 A3：提示按钮 = 首次高亮下一块；再用 = 降档 1→2→3（仅带分割线的关卡）。
-         * 角标显示当前档；四巧板关卡无分割线，行为与 v0.2 完全一致。 */
-        { id: 'hint', icon: 'hint', badge: hasTiers ? state.hintTier : 0,
-          disabled: state.hintUsed && (!hasTiers || state.hintTier >= 3) },
+        /* v0.10：角标 = 本关还剩几档提示（3/2/1），用满 3 档才置灰。
+         * 免费档直接用；第 2、3 档点按钮先弹「看视频 / 巧币」面板，不静默播广告。 */
+        { id: 'hint', icon: 'hint',
+          badge: Math.max(0, C.HINT.maxTier - state.hintLv),
+          disabled: state.hintLv >= C.HINT.maxTier },
         { id: 'restart', icon: 'restart', disabled: false }
       ];
       for (var i2 = 0; i2 < tools.length; i2++) {
         var tb = {
           id: tools[i2].id, x: TOOL_X[i2], y: TOOL_Y,
           w: LAY.TOOLBAR.w, h: LAY.TOOLBAR.h,
-          variant: 'tool', icon: tools[i2].icon, disabled: tools[i2].disabled
+          variant: 'tool', icon: tools[i2].icon, disabled: tools[i2].disabled,
+          badge: tools[i2].badge        // v0.10：剩余档位角标（之前漏传，角标根本没画出来）
         };
         addHit(tb.x, tb.y, tb.w, tb.h, tb.id);
         drawButton(tb);
@@ -2903,6 +2939,104 @@
         ctx.stroke();
         ctx.restore();
       }
+    }
+
+    /* ================= v0.10 提示绘制（三档统一） =================
+     * 档1 只画"落点"，档2 加"是哪一块"，档3 直接把整幅标准解淡显。
+     * 三档都画在板件之下（档1/2）或同层（档3 的 ghost），不抢拖动板的最上层。 */
+    function drawHintGuide(lv) {
+      var H = C.HINT, hh = state.hint, tier = hh.tier || 1;
+      var hs = null;
+      for (var q = 0; q < lv.solution.length; q++) if (lv.solution[q].id === hh.id) hs = lv.solution[q];
+      if (!hs) return;
+
+      /* 档3：整幅标准解淡显。玩家一眼看清每块的位置/朝向，3.6s 后自动消失；
+       * 不代打、不自动归位，关卡本身仍然要靠自己拼完。
+       * 这一档已经给了全图，就不再单独指某一块（否则"全图 + 指一块"互相打架）。 */
+      if (tier >= 3) {
+        var ga = H.ghostAlpha * (0.85 + 0.15 * Math.sin(state.time / 240));
+        ctx.save();
+        for (var g = 0; g < lv.solution.length; g++) {
+          var st = lv.solution[g];
+          var gp = G.toWorld(LOCAL[st.id], st).map(function (v) { return [w2d(v[0]), h2d(v[1])]; });
+          ctx.beginPath();
+          ctx.moveTo(gp[0][0], gp[0][1]);
+          for (var gi = 1; gi < gp.length; gi++) ctx.lineTo(gp[gi][0], gp[gi][1]);
+          ctx.closePath();
+          ctx.globalAlpha = ga;
+          ctx.fillStyle = DS.pieces[st.id].color;
+          ctx.fill();
+          /* 白色分隔线：让相邻同色块也能看出边界，不然整片糊成一块 */
+          ctx.globalAlpha = Math.min(1, ga * 2.4);
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.stroke();
+        }
+        ctx.restore();
+        return;
+      }
+
+      /* 档1/2：这一块的落点脉冲 */
+      var hp = G.toWorld(LOCAL[hs.id], hs).map(function (v) { return [w2d(v[0]), h2d(v[1])]; });
+      var a = 0.35 + 0.3 * Math.sin(state.time / 180);
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(hp[0][0], hp[0][1]);
+      for (var h2 = 1; h2 < hp.length; h2++) ctx.lineTo(hp[h2][0], hp[h2][1]);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(255,185,61,' + a.toFixed(2) + ')';
+      ctx.fill();
+      ctx.lineWidth = 3; ctx.strokeStyle = COL.gold; ctx.stroke();
+      /* 档2：从托盘那块拉一条引导虚线，省掉"眼睛在棋盘和托盘之间来回找" */
+      if (tier === 2) {
+        var pz = pieceOf(hh.id);
+        if (pz && !pz.onBoard) {
+          var sp0 = SLOT_POS[pz.slot];
+          ctx.setLineDash([10, 10]);
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = 'rgba(255,159,28,0.5)';
+          ctx.beginPath();
+          ctx.moveTo(sp0.x, sp0.y);
+          ctx.lineTo(w2d(hs.x), h2d(hs.y));
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+      ctx.restore();
+    }
+
+    /* 档2：托盘上那一块的描边 + 「用这块」小牌（档3 给了全图，不再指单块） */
+    function drawHintTray() {
+      var hh = state.hint;
+      if (!hh || (hh.tier || 1) !== 2) return;
+      var p = pieceOf(hh.id);
+      if (!p || p.onBoard) return;                 // 已经拿到棋盘上了就不再标托盘
+      var pts = trayPoly(p);
+      var a = 0.6 + 0.35 * Math.sin(state.time / 200);
+      ctx.save();
+      ctx.beginPath();
+      for (var i = 0; i < pts.length; i++) {
+        if (i === 0) ctx.moveTo(pts[i][0], pts[i][1]); else ctx.lineTo(pts[i][0], pts[i][1]);
+      }
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(255,185,61,0.16)';
+      ctx.fill();
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = 'rgba(255,159,28,' + a.toFixed(2) + ')';
+      ctx.stroke();
+
+      /* 小牌：放在这块板的正上方；若太高会顶到进度条就压到下方 */
+      var sp = SLOT_POS[p.slot];
+      var minY = Math.min.apply(null, pts.map(function (v) { return v[1]; }));
+      var maxY = Math.max.apply(null, pts.map(function (v) { return v[1]; }));
+      var py = minY - 34;
+      if (py < C.LAYOUT.PROGRESS.y + 40) py = maxY + 34;
+      var pw = 132, ph = 46;
+      rr(sp.x - pw / 2, py - ph / 2, pw, ph, ph / 2);
+      ctx.fillStyle = 'rgba(44,58,75,0.88)';
+      ctx.fill();
+      text('用这块', sp.x, py + 1, 24, '#FFFFFF', 'center', '600');
+      ctx.restore();
     }
 
     function drawTrayPiece(p) {
@@ -3399,6 +3533,48 @@
       hits = [];   // 广告期间吞掉所有点击
     }
 
+    /* v0.10 提示面板：免费档用完后，点提示按钮弹这里。
+     * 先讲清"下一档能多拿到什么"，再让玩家二选一（看视频 / 巧币）；
+     * 绝不静默自动播广告，也不把"广告"和"提示"两个概念混在一个按钮里。 */
+    function renderHint() {
+      var H = C.HINT, s = state.save, done = state.hintLv;
+      var ch = 800, cy = sheetBg(640, ch);
+      sheetTitle('提示', cy, ch);
+      var top = cy - ch / 2;
+
+      /* 三档进度点：已用过的打勾，没用到的显示档号 */
+      for (var i = 0; i < H.maxTier; i++) {
+        var dx = C.DESIGN.w / 2 + (i - 1) * 168;
+        var on = i < done;
+        ctx.save();
+        ctx.beginPath(); ctx.arc(dx, top + 156, 28, 0, Math.PI * 2);
+        ctx.fillStyle = on ? COL.gold : COL.track; ctx.fill();
+        if (!on) { ctx.lineWidth = 2; ctx.strokeStyle = COL.cardEdge; ctx.stroke(); }
+        ctx.restore();
+        text(on ? '✓' : String(i + 1), dx, top + 157, 26, on ? COL.btnText : COL.textSub, 'center', '700');
+        text(H.names[i], dx, top + 208, 22, on ? COL.goldDeep : COL.textSub, 'center', on ? '600' : '400');
+      }
+
+      text('第 ' + (done + 1) + ' 档 · ' + H.names[done], C.DESIGN.w / 2, top + 306, 40, COL.text, 'center', '700');
+      text(H.descs[done], C.DESIGN.w / 2, top + 358, 26, COL.textSub, 'center');
+
+      var busy = !!state.adSim || !!state.adWait;
+      var bAd = { id: 'hint_ad', x: C.DESIGN.w / 2, y: top + 470, w: 480, h: 104,
+        label: '看视频 · 免费看', variant: 'danger', size: 30, icon: 'tv', disabled: busy };
+      var canCoin = (s.coin || 0) >= H.coinCost && !busy;
+      var bCoin = { id: 'hint_coin', x: C.DESIGN.w / 2, y: top + 590, w: 420, h: 88,
+        label: (s.coin || 0) >= H.coinCost ? ('花 ' + H.coinCost + ' 巧币') : '巧币不足，看视频吧',
+        variant: 'secondary', size: 28, disabled: !canCoin };
+      addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'hint_ad');
+      addHit(bCoin.x, bCoin.y, bCoin.w, bCoin.h, 'hint_coin');
+      drawButton(bAd); drawButton(bCoin);
+
+      text('用提示本关最高 ★★ · 重玩可再冲三星', C.DESIGN.w / 2, top + 672, 22, COL.textSub, 'center');
+      text('巧币余额 ' + (s.coin || 0), C.DESIGN.w / 2, top + 710, 22, COL.textSub, 'center');
+      sheetClose(top + 776, 'close_hint');
+      adLayer();
+    }
+
     /* 复活弹窗（参考图 1） */
     function renderFail() {
       var cy = sheetBg(600, 820);
@@ -3580,6 +3756,7 @@
       else if (state.overlay === 'rank') renderRank();
       else if (state.overlay === 'settings') renderSettings();
       else if (state.overlay === 'fail') renderFail();
+      else if (state.overlay === 'hint') renderHint();
       else if (state.overlay === 'energy') renderEnergy();
       else if (state.overlay === 'tasks') renderTasks();
       else if (state.overlay === 'invite') renderInvite();

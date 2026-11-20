@@ -149,7 +149,13 @@
         S.selId = S.pieces[2] && S.pieces[2].id;
       }
       if (screen === 'hint') {
-        S.hint = { id: lv.solution[0] && lv.solution[0].id, until: Date.now() + 1e6 };
+        /* v0.10：hinttier=1/2/3 指定「提示阶梯」的哪一档（与 tier= 的目标轮廓档不是一回事） */
+        var ht = +(q.match(/hinttier=(\d+)/) || [])[1];
+        if (isNaN(ht) || ht < 1) ht = 1;
+        if (ht > 3) ht = 3;
+        S.hintLv = ht;
+        S.hintUsed = true;
+        S.hint = { id: lv.solution[0] && lv.solution[0].id, tier: ht, until: Date.now() + 1e6 };
         S.msg = '还差一点点'; S.msgT = 1500;
       }
       if (screen === 'result') {
@@ -162,6 +168,17 @@
         var gain = +(q.match(/gain=(\d+)/) || [])[1];
         S.streakGain = isNaN(gain) ? 0 : gain;
       }
+    } else if (screen === 'hintpanel') {
+      /* v0.10：提示面板（免费档用完后点提示按钮）。lv=1 表示已用 1 档 → 卖第 2 档。 */
+      game._debug.setupLevel(0);
+      S.page = 'play'; S.fade = 1; S.pageT = 9999;
+      var hl = +(q.match(/(?:^|[&?])lv=(\d+)/) || [])[1];
+      if (isNaN(hl) || hl < 1) hl = 1;
+      if (hl > 2) hl = 2;
+      S.hintLv = hl; S.hintUsed = true;
+      var coinQ = +(q.match(/coin=(\d+)/) || [])[1];
+      S.save.coin = isNaN(coinQ) ? 168 : coinQ;
+      S.overlay = 'hint';
     } else if (screen === 'rank') {
       /* v0.8：排行榜浮层（tab=0 主线 / 1 连胜 / 2 好友） */
       S.page = 'home'; S.fade = 1; S.pageT = 9999; S.overlay = 'rank'; S.rankT = 999;
