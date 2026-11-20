@@ -276,7 +276,8 @@ const HH = CFG.LAYOUT.HOME;
 tap(CFG.DESIGN.w - HH.entryX, HH.entryY0 + HH.entryGap * 3);
 for (let k = 0; k < 6; k++) step(16);
 check('打开设置面板', S.overlay === 'settings', 'overlay=' + S.overlay);
-tap(480 + 54, CFG.DESIGN.h / 2 - 120);
+/* v0.14：设置页加了玩家资料卡，音效开关从 cy-120 下移到 cy+40 */
+tap(480 + 54, CFG.DESIGN.h / 2 + 40);
 for (let k = 0; k < 6; k++) step(16);
 check('音效开关可切换', S.settingsFx === false, 'sfx=' + S.settingsFx);
 check('设置已写入存档', S.save.settings.sfx === false && !!store[CFG.SAVE_KEY]);
