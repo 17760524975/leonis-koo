@@ -9,7 +9,7 @@
   'use strict';
 
   return {
-    version: 'v0.7',
+    version: 'v0.7.1',
 
     /* ---------- 品牌（v0.6 改名「方寸巧拼」） ----------
      * 游戏名只在这里定义一次：主页标题、分享文案、工程名都从这里取，
@@ -101,6 +101,10 @@
         pillStroke: 'rgba(255,255,255,0.62)',
         border: 2.5,
         plusR: 24, plusInset: 6, plusHit: 76, plusFill: '#46C46B', plusPad: 34,
+        /* v0.7.1：两行胶囊等长——实际宽度取「两行文字所需宽度的较大值」与
+         * pillMinW 的最大值，巧币行与体力行永远同长（用户反馈一长一短）。
+         * pillMinW 兜住数字位数少的场景，避免胶囊短到图标压字。 */
+        pillMinW: 172,
         coinScale: 1.45, energyScale: 1.32   // 图标直径 ≈ 胶囊高的 0.7~0.75，才压得住整条胶囊
       }
     },

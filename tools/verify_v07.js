@@ -90,7 +90,8 @@ function renderHomeClean() {
 
 /* ---------- 1. 版本 ---------- */
 section('1. 版本');
-check('版本号 v0.7', CFG.version === 'v0.7', CFG.version);
+/* v0.7.1 起版本号带补丁位（胶囊等长修正），断言放宽到 v0.7.x */
+check('版本号 v0.7.x', /^v0\.7(\.\d+)?$/.test(CFG.version), CFG.version);
 
 /* ---------- 2. HUD 胶囊 ---------- */
 section('2. HUD：上移 + 同字号 + 底框描边');
@@ -124,6 +125,37 @@ const coreTxt = fs.readFileSync(path.join(ROOT, 'js/core.js'), 'utf8');
 check('旧的 32px/26px 硬编码已移除',
   !/text\(String\(state\.save\.coin \|\| 0\), 114, hy, 32/.test(coreTxt) &&
   !/state\.save\.energyMax, 114, ey, 26/.test(coreTxt));
+
+/* ---------- 2b. 两行胶囊等长（v0.7.1） ---------- */
+section('2b. 巧币 / 体力胶囊等长');
+check('配置有 pillMinW', typeof HU.pillMinW === 'number' && HU.pillMinW >= 150, 'pillMinW=' + HU.pillMinW);
+check('两行共用同一个 pillW（取两行文字所需宽度较大值）',
+  /var pillW = Math\.max\(pwCoin, pwEnergy, HU\.pillMinW\)/.test(coreTxt));
+/* hudPill 调用只传 5 个参数（不再各自传 padRight）→ 两行必然同宽 */
+const pillCalls = (coreTxt.match(/hudPill\('(?:coin|energy)'[^;]*;/g) || []);
+check('两条胶囊绘制调用参数一致（各 5 个）',
+  pillCalls.length === 2 && pillCalls.every(c => c.split(',').length === 5),
+  pillCalls.map(c => c.replace(/\s+/g, ' ').slice(0, 46)).join(' | '));
+/* 像素复核：最新主页截图里巧币胶囊的深色填充宽度应 ≈ pillMinW */
+const shotFile = path.join(ROOT, 'tools/out/v07_home_750.png');
+if (fs.existsSync(shotFile)) {
+  const { readPng, at } = require(path.join(ROOT, 'tools/png'));
+  const img = readPng(shotFile);
+  const dark = (x, y) => { const p = at(img, x, y); return p[0] < 105 && p[1] < 115 && p[2] < 125; };
+  let best = { len: -1 };
+  for (let y = 60; y < 158; y++) {
+    let f = -1, l = -1;
+    for (let x = 50; x < 340; x++) if (dark(x, y)) { if (f < 0) f = x; l = x; }
+    if (f > 0 && l - f > best.len) best = { len: l - f, f, l, y };
+  }
+  /* 左端从 iconX+pillDx 起算（图标压在胶囊左端外侧，深色填充会被图标吃掉几像素） */
+  const leftEdge = HU.iconX + HU.pillDx;
+  const measured = best.l - leftEdge + 1;
+  check('巧币胶囊实测宽度 ≈ pillMinW', Math.abs(measured - HU.pillMinW) <= 8,
+    `实测 ${measured}px（x ${leftEdge}→${best.l}） / 配置 ${HU.pillMinW}px`);
+} else {
+  check('像素复核（缺少截图，跳过）', true, shotFile + ' 不存在');
+}
 
 /* ---------- 3. 设置下移 ---------- */
 section('3. 设置按钮从右上角挪到右列');

@@ -1885,11 +1885,18 @@
       var HU = C.LAYOUT.HUD;
       var hy = view.safeTop + HU.y0;
       var ey = hy + HU.rowGap;
-      function hudPill(iconName, iconColor, iconScale, label, rowY, padRight) {
-        ctx.font = font(HU.fontSize, HU.fontWeight);
-        var tw = ctx.measureText(label).width;
+      /* v0.7.1：两行胶囊等长。旧版按各自文字宽度自适应，巧币「120」比体力
+       * 「16/16」短一截（用户反馈「一长一短」）。改为先量两行所需宽度取最大值、
+       * 两条胶囊统一用这个宽度，左端起齐 + 右端对齐，数字仍从 padL 处左对齐。 */
+      var coinLabel = String(state.save.coin || 0);
+      var energyLabel = (state.save.energy || 0) + '/' + state.save.energyMax;
+      ctx.font = font(HU.fontSize, HU.fontWeight);
+      var pwCoin = HU.padL + ctx.measureText(coinLabel).width + HU.padR;
+      var pwEnergy = HU.padL + ctx.measureText(energyLabel).width + HU.plusPad;
+      var pillW = Math.max(pwCoin, pwEnergy, HU.pillMinW);
+      function hudPill(iconName, iconColor, iconScale, label, rowY) {
         var px = HU.iconX + HU.pillDx;
-        var pw = HU.padL + tw + (padRight || HU.padR);
+        var pw = pillW;
         var ph = HU.pillH;
         ctx.save();
         shadow(10, 4, 'rgba(44,58,75,0.22)');
@@ -1905,10 +1912,9 @@
         text(label, px + HU.padL, rowY + 1, HU.fontSize, HU.textColor, 'left', HU.fontWeight);
         return px + pw;
       }
-      hudPill('coin', COL.gold, HU.coinScale, String(state.save.coin || 0), hy);
-      /* 体力行右侧多留 HU.plusPad，给「+」圆钮腾位置，避免压住分母 */
-      var energyRight = hudPill('energy', '#3DBEF0', HU.energyScale,
-        (state.save.energy || 0) + '/' + state.save.energyMax, ey, HU.plusPad);
+      hudPill('coin', COL.gold, HU.coinScale, coinLabel, hy);
+      /* 体力行：等长胶囊，右侧留 HU.plusPad 给「+」圆钮，避免压住分母 */
+      var energyRight = hudPill('energy', '#3DBEF0', HU.energyScale, energyLabel, ey);
 
       /* 体力「+」：骑在胶囊右端（参考图同位置），点开免费体力面板 */
       var pcx = energyRight - HU.plusInset, pcy = ey, pr = HU.plusR;

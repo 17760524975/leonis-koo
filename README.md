@@ -54,6 +54,13 @@ animation/ art-src/ audio-src/   动效演示、素材源文件
 | v0.5 | 倒计时+生命、巧币/体力、主页四入口、皮肤、多首 BGM |
 | v0.6 | 修 BGM 无声、主页版式、固定入口、底纹动效、鲜花持续化、改名方寸巧拼 |
 | v0.7 | HUD 胶囊底框+统一字号+上移、设置下移到右列、进关体力 2 点、BGM 再提 10dB（含软限幅） |
+| v0.7.1 | 巧币/体力胶囊改为等长（共用 pillW + pillMinW 兜底） |
+
+## 代码存档
+
+- GitHub：`https://github.com/17760524975/leonis-koo.git`，分支 **`tangram`**（另打 `v0.6.0` / `v0.7.0` / `v0.7.1` 标签）
+- 推送：`git push origin master:tangram && git push origin --tags`
+- 不入库：`tools/out/`（截图产物）、`node_modules/`、一次性补丁脚本（`.gitignore` 已排除）
 
 ## 素材替换
 
