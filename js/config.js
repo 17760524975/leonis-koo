@@ -9,7 +9,7 @@
   'use strict';
 
   return {
-    version: 'v0.13',
+    version: 'v0.14',
 
     /* ---------- 品牌（v0.6 改名「方寸巧拼」） ----------
      * 游戏名只在这里定义一次：主页标题、分享文案、工程名都从这里取，
@@ -308,6 +308,28 @@
       fn: 'player',              // 云函数名（cloudfunctions/player）
       pushDebounceMs: 3500,      // 存档上行节流：连拼几关只写一次
       pullOnBoot: true           // 启动时拉一次云端存档做合并
+    },
+
+    /* ---------- v0.14 玩家资料（微信昵称 / 头像） ----------
+     * 微信自 2022-10-25 起收回了「静默读取真实头像昵称」：
+     *   · 小程序侧   → 只能让用户自己填（button open-type="chooseAvatar" + input type="nickname"）；
+     *   · 小游戏侧   → 官方唯一途径是 wx.createUserInfoButton（用户点击授权），
+     *                  已授权后再用 wx.getUserInfo 静默刷新。
+     * 所以本作分三档 identity：
+     *   auto   = 云函数按 openid 生成的化名「巧手1234」（默认，零打扰）
+     *   wx     = 玩家点了「使用微信昵称头像」，拿到真实昵称 + 头像 URL
+     *   custom = 玩家自己起的名字（小程序授权按钮不可用 / 玩家拒绝时的兜底）
+     * 昵称会随存档上行到 players 集合，排行榜展示的就是这一份。 */
+    PLAYER: {
+      nickMax: 12,               // 与云函数 MAX_NICK 保持一致
+      defaultName: '巧手',       // 云还没登录时的占位名（云函数会补 4 位数字）
+      authLabel: '使用微信昵称头像',
+      editLabel: '改昵称',
+      /* 设置页资料卡（设计坐标，相对卡片中心 cy 的纵向偏移） */
+      card: { w: 496, h: 168, dy: -246, avatarR: 46, gap: 20 },
+      authBtn: { w: 340, h: 76, dy: -104 },
+      /* 榜单每行头像半径（rankRow 里用） */
+      rankAvatarR: 26
     },
 
     /* ---------- v0.9 广告位 ----------

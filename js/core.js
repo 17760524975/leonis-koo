@@ -275,6 +275,12 @@
       /* v0.9 云端：登录态 / 榜单缓存 / 同步状态。没有云环境时全部保持默认，
        * 界面自动降级成「未开启云同步」，不影响本地玩。 */
       net: { on: false, ready: false, nick: '', syncing: false, ts: 0, err: '' },
+      /* v0.14 玩家资料：nick/avatar 是展示用的一份，src 标明来源
+       *   auto   云函数按 openid 生成的化名（巧手1234）
+       *   wx     微信授权拿到的真实昵称 + 头像
+       *   custom 玩家自己起的名字
+       * auth 只表示「微信资料已授权」，与 src=wx 不完全等价（授权后改过名仍是 auth=true）。 */
+      me: { nick: '', avatar: '', src: 'auto', auth: false, err: '', busy: false },
       rankList: null,         // null=未拉取；{list,me}=云榜结果
       rankErr: '',
       rankLoading: false,
@@ -308,6 +314,8 @@
         skin: 'warm',
         bgmIdx: 0,
         streak: 0,
+        /* v0.14 玩家资料缓存：断网 / 云端不可用时也能显示自己的昵称头像 */
+        profile: null,
         updatedAt: Date.now()        // v0.9：云端合并按这份时间戳判新旧
       };
     }
@@ -338,6 +346,8 @@
             s.taskPlays = (typeof o.taskPlays === 'number') ? o.taskPlays : 0;
             s.inviteCount = (typeof o.inviteCount === 'number') ? o.inviteCount : 0;
             s.inviteDay = o.inviteDay || '';
+            /* v0.14：老存档没有 profile，留 null 让登录后由云端补 */
+            s.profile = (o.profile && typeof o.profile === 'object') ? o.profile : null;
             s.skin = o.skin || 'warm';
             s.bgmIdx = (typeof o.bgmIdx === 'number') ? o.bgmIdx : 0;
             s.streak = (typeof o.streak === 'number') ? o.streak : 0;
@@ -374,6 +384,139 @@
     var CLOUD = env.cloud || null;
 
     function cloudOn() { return !!(CLOUD && CLOUD.enabled && CLOUD.enabled()); }
+
+    /* ==================== v0.14 玩家资料：微信昵称 / 头像 ====================
+     * 平台差异（wx.createUserInfoButton / 隐私弹窗 / 键盘输入）全在 env.profile 里，
+     * core 只认这几个方法：
+     *   enabled()              这台设备有没有资料能力
+     *   canAuth()              能不能走「微信授权」（小游戏里 = 有 createUserInfoButton）
+     *   restore(local)         把本地缓存放进来（启动时最先做，头像不会闪一下）
+     *   request(cb)            走授权流程 → cb(err, { nick, avatar, src, auth })
+     *   rename(nick, cb)       改昵称（小游戏用 wx.showKeyboard，没有输入框组件）
+     *   place(rect) / hide()   原生授权按钮的显隐与定位（只认 CSS px，不认画布变换）
+     *   imageOf(url)           头像 Image 缓存（拿不到就返回 null，退回「首字头像」）
+     *   onChange(fn)           资料变化通知（例如已授权用户静默刷新了头像）
+     *
+     * 为什么不是「一进游戏就自动拿昵称头像」：
+     * 微信 2022-10-25 起把小游戏的静默读取收口了，只有两种情况能拿到真实资料——
+     *   ① 玩家此前已在 wx.createUserInfoButton 上点过「允许」；
+     *   ② 玩家这次点了授权按钮。
+     * 所以默认身份是云函数生成的化名「巧手1234」，玩家愿意才换成微信昵称头像。 */
+    var PROFILE = env.profile || null;
+
+    function profileOn() { return !!(PROFILE && (!PROFILE.enabled || PROFILE.enabled())); }
+    function profileCanAuth() { return !!(PROFILE && PROFILE.canAuth && PROFILE.canAuth()); }
+
+    /* 展示用昵称：玩家资料 > 云端化名 > 占位 */
+    function meNick() {
+      return state.me.nick || state.net.nick || (C.PLAYER.defaultName + '玩家');
+    }
+    function meAvatarUrl() { return state.me.avatar || ''; }
+
+    /* 写入一份到本地存档 + 上行云端。
+     *   push  玩家主动动作（授权 / 改名）→ 落本地 + 上行
+     *  'local' 云端刚给的值 → 只落本地，不必再上行一次
+     *   false  启动时从本地缓存恢复 → 什么都不写（写了会把 updatedAt 刷新，
+     *          让 mergeSave 误判「本地比云端新」，新设备首次登录就会用默认币值盖掉云端） */
+    function applyProfile(p, push) {
+      if (!p) return false;
+      var changed = false;
+      if (p.nick && p.nick !== state.me.nick) { state.me.nick = p.nick; changed = true; }
+      if (p.avatar !== undefined && (p.avatar || '') !== state.me.avatar) {
+        state.me.avatar = p.avatar || ''; changed = true;
+      }
+      if (p.src && p.src !== state.me.src) { state.me.src = p.src; changed = true; }
+      if (p.auth !== undefined && !!p.auth !== !!state.me.auth) { state.me.auth = !!p.auth; changed = true; }
+      state.net.nick = meNick();
+      if (!changed) return false;                       // 值没变就别写盘，免得每帧刷 storage
+      state.save.profile = { nick: meNick(), avatar: meAvatarUrl(), src: state.me.src, auth: !!state.me.auth };
+      if (push === false) return true;                  // 纯内存
+      if (push === 'local') writeLocal();
+      else { persist(); cloudPush(true); }              // 玩家改完名立刻上行，不等 3.5s 节流
+      return true;
+    }
+
+    /* 设置页那行小字：把「现在是什么身份」说清楚，别让玩家猜 */
+    function profileStateText() {
+      if (!profileOn()) return '当前环境读不到微信资料';
+      if (state.me.busy) return '正在读取微信资料…';
+      if (state.me.err) return state.me.err;
+      if (state.me.auth) return '微信昵称头像已授权';
+      if (state.me.src === 'custom') return '自定义昵称 · 未授权微信资料';
+      if (profileCanAuth()) return '未授权 · 点下方按钮使用微信资料';
+      return '系统化名，可以自己改一个';
+    }
+
+    /* 设计坐标 → CSS px（原生按钮只认屏幕像素） */
+    function cssRect(cx, cy, w, h) {
+      return {
+        left: view.ox + (cx - w / 2) * view.scale,
+        top: view.oy + (cy - h / 2) * view.scale,
+        width: w * view.scale,
+        height: h * view.scale
+      };
+    }
+    /* 只有「设置页开着 + 还没授权 + 平台支持授权」时才需要这个原生按钮 */
+    function syncProfileButton() {
+      if (!PROFILE || !PROFILE.place) return;
+      var need = state.overlay === 'settings' && profileCanAuth() && !state.me.auth;
+      if (!need) { hideProfileButton(); return; }
+      var P = C.PLAYER;
+      var r = cssRect(C.DESIGN.w / 2, C.DESIGN.h / 2 + P.authBtn.dy, P.authBtn.w, P.authBtn.h);
+      r.label = P.authLabel;
+      r.fontSize = Math.round(28 * view.scale);
+      try { PROFILE.place(r); } catch (e) { /* 老基础库没有这个 API，退回纯画布按钮 */ }
+    }
+    function hideProfileButton() {
+      if (PROFILE && PROFILE.hide) { try { PROFILE.hide(); } catch (e) {} }
+    }
+
+    /* 点「使用微信昵称头像」 */
+    function requestProfile() {
+      if (!profileOn()) { toast('当前环境读不到微信资料'); return; }
+      if (state.me.busy) return;
+      state.me.busy = true;
+      state.me.err = '';
+      PROFILE.request(function (err, p) {
+        state.me.busy = false;
+        if (err) {
+          state.me.err = (err && err.msg) || '读取失败';
+          toast(state.me.err);
+          syncProfileButton();
+          return;
+        }
+        applyProfile(p);
+        toast(p && p.auth ? '已使用微信昵称头像' : '昵称已更新');
+        syncProfileButton();
+      });
+    }
+    /* 点「改昵称」：小游戏没有输入框组件，走 wx.showKeyboard */
+    function renameProfile() {
+      if (!PROFILE || !PROFILE.rename) { toast('当前环境不支持改昵称'); return; }
+      PROFILE.rename(meNick(), function (err, nick) {
+        if (err || !nick) return;
+        var n = String(nick).replace(/[\r\n\t]/g, ' ').trim().slice(0, C.PLAYER.nickMax);
+        if (!n || n === state.me.nick) return;
+        applyProfile({ nick: n, avatar: state.me.avatar, src: 'custom', auth: !!state.me.auth });
+        toast('昵称已改为「' + n + '」');
+        syncProfileButton();
+      });
+    }
+
+    /* 头像圆：有图贴图，没图退回「首字 + 底色」（榜单与设置页共用） */
+    function drawAvatar(cx, cy, r, nick, url, color) {
+      var img = (url && PROFILE && PROFILE.imageOf) ? PROFILE.imageOf(url) : null;
+      if (img) {
+        ctx.save();
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip();
+        try { ctx.drawImage(img, cx - r, cy - r, r * 2, r * 2); ctx.restore(); return; }
+        catch (e) { ctx.restore(); }             // 图坏了就当没有，别让整帧挂掉
+      }
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = color || COL.gold; ctx.fill();
+      text((nick || '?').slice(0, 1), cx, cy + 1, Math.round(r * 1.02), '#FFFFFF', 'center', '700');
+    }
+
     function saveKeys() {
       var ks = [C.SAVE_KEY];
       if (SETS && SETS.tangram7 && SETS.tangram7.saveKey && SETS.tangram7.saveKey !== C.SAVE_KEY) {
@@ -437,7 +580,9 @@
       }
       return {
         sets: sets,
-        stats: { stars: stars, cleared: cleared, streak: state.save.streak || 0 }
+        stats: { stars: stars, cleared: cleared, streak: state.save.streak || 0 },
+        /* v0.14：昵称头像跟着存档一起上行，players 集合里存的就是排行榜展示的那一份 */
+        profile: { nick: meNick(), avatar: meAvatarUrl(), src: state.me.src, auth: !!state.me.auth }
       };
     }
 
@@ -504,8 +649,8 @@
     /* 云同步状态一句话（设置页显示） */
     function netText() {
       /* 已登录优先：云端临时抖动时不要显示成"未开启"，那会让玩家以为存档丢了 */
-      if (state.net.ready && state.net.nick) {
-        return state.net.syncing ? '同步中…' : ('已同步 · ' + state.net.nick);
+      if (state.net.ready && (state.net.nick || state.me.nick)) {
+        return state.net.syncing ? '同步中…' : ('已同步 · ' + meNick());
       }
       if (!cloudOn()) return '未开启（纯本地）';
       if (state.net.err) return '同步失败：' + state.net.err;
@@ -804,6 +949,8 @@
         else if (page === 'play') env.audio.setScene(bgmSceneKey());
       }
       if (page !== 'play') { state.running = false; }
+      /* v0.14：切页就撤掉盖在画布上的原生授权按钮，别让它留在别的页面上 */
+      if (state.overlay !== 'settings') hideProfileButton();
       syncBanner(page === 'play');       // v0.9：只在拼图页挂 banner
       /* v0.6：离开对局页就收掉通关鲜花/结算态，避免下次进来还在飘 */
       if (page !== 'play') { state.win = null; state.flower = null; }
@@ -1323,7 +1470,10 @@
           break;
         }
         case 'settings': state.overlay = 'settings'; break;
-        case 'close_settings': state.overlay = null; break;
+        case 'close_settings': state.overlay = null; hideProfileButton(); break;
+        /* v0.14 玩家资料 */
+        case 'profile_auth': requestProfile(); break;
+        case 'profile_rename': renameProfile(); break;
         case 'toggle_sfx':
           state.settingsFx = !state.settingsFx;
           state.save.settings.sfx = state.settingsFx; persist(); applyAudio(); break;
@@ -1751,6 +1901,18 @@
       ctx.textAlign = align || 'left';
       ctx.textBaseline = 'middle';
       ctx.fillText(str, x, y);
+    }
+    /* v0.14：按最大宽度截断（昵称最长 12 字，长名字不能压到右边的「改昵称」） */
+    function textFit(str, x, y, size, color, align, weight, maxW) {
+      var s = String(str === undefined || str === null ? '' : str);
+      if (maxW && ctx.measureText) {
+        ctx.font = font(size, weight);
+        if (ctx.measureText(s).width > maxW) {
+          while (s.length > 1 && ctx.measureText(s + '…').width > maxW) s = s.slice(0, -1);
+          s += '…';
+        }
+      }
+      text(s, x, y, size, color, align, weight);
     }
 
     /* ---------------- v0.3.4 A4a 鲜花绽放（纯视觉层，零图片 / 零热区） ----------------
@@ -3441,6 +3603,7 @@
           n: r.n || r.nick || '玩家',
           v: (r.v !== undefined ? r.v : r.value) || 0,
           c: r.c || r.color || RANK_COLORS[i % RANK_COLORS.length],
+          a: r.a || r.avatar || '',
           me: !!r.me
         });
       }
@@ -3448,7 +3611,8 @@
       for (var j = 0; j < list.length; j++) if (list[j].me) { mine = list[j]; rank = j + 1; }
       if (!mine) {
         var mc = state.rankList && state.rankList.me;
-        mine = { n: (mc && mc.nick) || state.net.nick || '我', v: rankValue(tab), me: true, c: COL.gold };
+        mine = { n: (mc && mc.nick) || meNick(), v: rankValue(tab), me: true,
+          c: COL.gold, a: meAvatarUrl() };
         rank = (mc && mc.rank) || (list.length + 1);
       }
       var top = list.slice(0, 7);
@@ -3479,10 +3643,8 @@
         text(String(rk > 99 ? '99+' : rk), x0 + 42, y + 1, rk > 99 ? 20 : 24,
           highlight ? '#E2624A' : COL.textSub, 'center', '700');
       }
-      // 头像：首字 + 底色（无图资源，避免包体与 404）
-      ctx.beginPath(); ctx.arc(x0 + 96, y, 26, 0, Math.PI * 2);
-      ctx.fillStyle = item.c || COL.gold; ctx.fill();
-      text((item.n || '?').slice(0, 1), x0 + 96, y + 2, 26, '#FFFFFF', 'center', '700');
+      // 头像：v0.14 起优先用微信头像，取不到图仍退回「首字 + 底色」
+      drawAvatar(x0 + 96, y, C.PLAYER.rankAvatarR, item.n, item.a, item.c || COL.gold);
       // 名字
       text(item.n, x0 + 136, y + 1, 24, COL.text, 'left', highlight ? '700' : '500');
       // 数值
@@ -3582,13 +3744,56 @@
 
 
     function renderSettings() {
+      var P = C.PLAYER;
       ctx.fillStyle = COL.mask;
       ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
-      drawCard(C.DESIGN.w / 2, C.DESIGN.h / 2, 580, 620, 32);
+      /* v0.14：加了一张「玩家资料」卡 + 一个授权按钮，卡片从 620 长到 812。
+       * 设计稿 1624 高，卡片上下各留 406，仍不会压到安全区。 */
+      drawCard(C.DESIGN.w / 2, C.DESIGN.h / 2, 588, 812, 32);
       var cy = C.DESIGN.h / 2;
-      text('设置', C.DESIGN.w / 2, cy - 230, 44, COL.text, 'center', '600');
+      text('设置', C.DESIGN.w / 2, cy - 352, 44, COL.text, 'center', '600');
+
+      /* ---- 玩家资料卡：头像 + 昵称 + 一行状态 ---- */
+      var cw = P.card.w, ch = P.card.h, ccy = cy + P.card.dy;
+      rr(C.DESIGN.w / 2 - cw / 2, ccy - ch / 2, cw, ch, 24);
+      ctx.fillStyle = 'rgba(247,243,236,0.95)'; ctx.fill();
+      var ax = C.DESIGN.w / 2 - cw / 2 + 34 + P.card.avatarR;
+      drawAvatar(ax, ccy, P.card.avatarR, meNick(), meAvatarUrl(), COL.gold);
+      var nx = ax + P.card.avatarR + P.card.gap;
+      /* 主按钮已经叫「改昵称」时，卡片右上角就不再重复一个入口 */
+      var authable = profileCanAuth() && !state.me.auth;
+      var ebx = C.DESIGN.w / 2 + cw / 2 - 74;
+      var nickMaxW = authable ? (ebx - nx - 16) : (C.DESIGN.w / 2 + cw / 2 - 24 - nx);
+      textFit(meNick(), nx, ccy - 26, 30, COL.text, 'left', '700', nickMaxW);
+      if (authable) {
+        text(P.editLabel, ebx, ccy - 26, 20, COL.goldDeep, 'center', '600');
+        addHit(ebx, ccy - 26, 120, 56, 'profile_rename');
+      }
+      textFit(profileStateText(), nx, ccy + 22, 18,
+        state.me.err ? '#E5484D' : COL.textSub, 'left', null, C.DESIGN.w / 2 + cw / 2 - 24 - nx);
+
+      /* ---- 主操作：未授权 → 用微信昵称头像；已授权 / 不支持 → 改昵称 ---- */
+      var b1 = { id: authable ? 'profile_auth' : 'profile_rename',
+        x: C.DESIGN.w / 2, y: cy + P.authBtn.dy,
+        w: P.authBtn.w, h: P.authBtn.h,
+        label: authable ? P.authLabel : (state.me.auth ? '改昵称' : P.editLabel),
+        variant: 'secondary', size: 26 };
+      addHit(b1.x, b1.y, b1.w, b1.h, b1.id);
+      drawButton(b1);
+      /* v0.14：能授权时，真正的点击目标是一枚盖在画布按钮上的原生 UserInfoButton
+       * （wx.createUserInfoButton 必须由用户点原生按钮才弹授权，画布手势不算）。 */
+      syncProfileButton();
+
+      var r1 = { id: 'reset_progress', x: C.DESIGN.w / 2, y: cy + 250, w: 340, h: 84, label: '重置进度', variant: 'secondary', size: 28 };
+      addHit(r1.x, r1.y, r1.w, r1.h, 'reset_progress');
+      drawButton(r1);
+
+      var r2 = { id: 'close_settings', x: C.DESIGN.w / 2, y: cy + 344, w: 300, h: 92, label: '关闭', variant: 'primary', size: 32 };
+      addHit(r2.x, r2.y, r2.w, r2.h, 'close_settings');
+      drawButton(r2);
+
       /* v0.9：让玩家看得见「我的进度已存到云上」——这是接云开发后的信任基础 */
-      text('云端存档：' + netText(), C.DESIGN.w / 2, cy - 182, 19,
+      text('云端存档：' + netText(), C.DESIGN.w / 2, cy - 38, 19,
         state.net.err ? '#E5484D' : COL.textSub, 'center');
 
       var rows = [
@@ -3596,7 +3801,7 @@
         { label: '音乐', id: 'toggle_bgm', on: state.settingsBgm }
       ];
       for (var i = 0; i < rows.length; i++) {
-        var y = cy - 120 + i * 110;
+        var y = cy + 40 + i * 110;
         text(rows[i].label, 190, y, 32, COL.text, 'left');
         // 开关
         var sw = 108, sh = 56, sx = 480;
@@ -3608,14 +3813,6 @@
         ctx.fillStyle = '#FFFFFF'; ctx.fill();
         addHit(sx + sw / 2, y, sw + 40, 88, rows[i].id);
       }
-
-      var r1 = { id: 'reset_progress', x: C.DESIGN.w / 2, y: cy + 110, w: 340, h: 84, label: '重置进度', variant: 'secondary', size: 28 };
-      addHit(r1.x, r1.y, r1.w, r1.h, 'reset_progress');
-      drawButton(r1);
-
-      var r2 = { id: 'close_settings', x: C.DESIGN.w / 2, y: cy + 230, w: 300, h: 92, label: '关闭', variant: 'primary', size: 32 };
-      addHit(r2.x, r2.y, r2.w, r2.h, 'close_settings');
-      drawButton(r2);
     }
 
     /* ==================== v0.5 弹窗 ==================== */
@@ -3924,6 +4121,8 @@
       view.safeBottom = Math.max(C.SAFE.bottom, (si.bottom || 0) / view.scale);
       /* 原生 banner 不跟画布缩放：窗口尺寸/安全区一变就得重新摆一次 */
       if (typeof bannerOn !== 'undefined' && bannerOn) syncBanner(true, true);
+      /* v0.14：原生授权按钮同理，重算一次位置（不然转屏后会错位） */
+      if (state.overlay === 'settings') syncProfileButton();
       var cv = ctx.canvas;
       if (cv) {
         cv.width = Math.round(s.w * dpr);
@@ -3967,6 +4166,17 @@
       state.settingsBgm = state.save.settings.bgm !== false;
       initSkin();                    // v0.5：载入存档里的皮肤配色（必须在首次渲染前）
       applyAudio();
+      /* v0.14：先用本地缓存的昵称头像起步（不闪、断网也有名字），再等云端覆盖 */
+      if (state.save.profile) applyProfile(state.save.profile, false);
+      if (profileOn() && PROFILE.restore) {
+        try { PROFILE.restore(state.save.profile || null); } catch (e) {}
+      }
+      if (profileOn() && PROFILE.onChange) {
+        /* 平台层异步变化（已授权用户静默刷新到头像、或授权成功后回调） */
+        PROFILE.onChange(function (p) { applyProfile(p); syncProfileButton(); });
+      }
+      /* 此前授权过的人：启动时静默刷新一次昵称头像（换头像能跟上），没授权的不打扰 */
+      if (profileOn() && PROFILE.boot) { try { PROFILE.boot(); } catch (e) {} }
       resize();
       env.bindInput(function (type, cssX, cssY) {
         var d = toDesign(cssX, cssY);
@@ -3987,6 +4197,16 @@
           }
           state.net.nick = (info && info.nick) || '';
           state.net.ready = true;
+          /* v0.14：云端的资料优先（换设备也认这个名），但有个例外——
+           * 云端还是系统化名（src=auto），本地却已经是玩家自己起的名，就别把人家改回去。 */
+          if (info && (info.nick || info.avatar)) {
+            var remote = {
+              nick: info.nick || '', avatar: info.avatar || '',
+              src: info.src || 'auto', auth: !!info.auth
+            };
+            var keepLocal = (state.me.src === 'custom' || state.me.src === 'wx') && remote.src === 'auto';
+            if (!keepLocal) applyProfile(remote, 'local');
+          }
           if (C.CLOUD.pullOnBoot) cloudPull();
         });
       }
@@ -4010,6 +4230,11 @@
         /* v0.9：云同步 / 广告 / 榜单，供 verify_v09 直接驱动 */
         cloudPush: cloudPush, cloudPull: cloudPull, cloudRank: cloudRank,
         openRank: openRank, netText: netText, adRect: adRect, syncBanner: syncBanner, go: go,
+        /* v0.14：玩家资料 —— 供 verify_v14 直接驱动（授权 / 改名 / 云端覆盖） */
+        meNick: meNick, applyProfile: applyProfile, profileStateText: profileStateText,
+        requestProfile: requestProfile, renameProfile: renameProfile,
+        syncProfileButton: syncProfileButton, hideProfileButton: hideProfileButton,
+        profileCanAuth: profileCanAuth, drawAvatar: drawAvatar,
         get LEVELS() { return LEVELS; }, get slots() { return SLOT_POS; },
         get dataset() { return DS; }, get setKey() { return state.setKey; },
         get COLORS() { return COL; },

@@ -7,8 +7,15 @@
  *   rank   全服榜（tab 0 通关数 / 1 连胜；tab 2 好友榜需开放数据域，本期返回 note）
  *
  * 集合约定（云开发控制台手动建，见 docs 指南）：
- *   players  { _id, openid, nick, stars, cleared, streak, updatedAt }
+ *   players  { _id, openid, nick, avatar, src, auth, stars, cleared, streak, updatedAt }
  *   saves    { _id: openid, sets: { saveKey: save }, updatedAt, nick }
+ *
+ * v0.14 玩家资料（昵称/头像）：
+ *   · nick   展示名：授权后是微信昵称，玩家改过就是自定义名，否则是「巧手1234」化名
+ *   · avatar 头像 URL（thirdwx.qlogo.cn），没授权就是空串，前端画「首字头像」
+ *   · src    auto / wx / custom，标明这份名字从哪来（前端据此决定要不要覆盖本地）
+ *   · auth   是否已授权微信资料（改过名仍为 true，头像还是微信那张）
+ *   这些字段全部由本函数清洗后写入，客户端传超长昵称 / 非法头像 URL 一律丢弃。
  *
  * 安全：
  *   - 客户端不直连数据库，全部走本函数（管理员权限），改包改不出假成绩；
@@ -24,14 +31,27 @@ const _ = db.command;
 const PLAYERS = 'players';
 const SAVES = 'saves';
 const MAX_SETS_BYTES = 200 * 1024;
+const MAX_NICK = 12;                 // 与 config.js PLAYER.nickMax 一致
 
 function nickOf(openid) {
-  /* 稳定昵称：openid 做个简单的字符串哈希 → 巧手 + 4 位。
-   * 不调 wx.getUserInfo：那要授权弹窗与《用户信息保护指引》，
-   * 休闲游戏用不上真实头像昵称，稳定唯一的化名反而更省事。 */
+  /* 稳定化名：openid 做个简单的字符串哈希 → 巧手 + 4 位。
+   * 这是「没授权微信资料」时的默认身份：稳定、唯一、零权限、不打扰玩家。 */
   let h = 5381;
   for (let i = 0; i < openid.length; i++) h = ((h * 33) ^ openid.charCodeAt(i)) >>> 0;
   return '巧手' + String(h % 10000).padStart(4, '0');
+}
+
+/* ---- 玩家资料的清洗（客户端给的字符串一律不可信） ---- */
+function cleanNick(s) {
+  return String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, MAX_NICK);
+}
+function cleanAvatar(s) {
+  const v = String(s == null ? '' : s).slice(0, 300);
+  /* 只收 https：微信头像（thirdwx.qlogo.cn）与云存储 CDN 都是 https */
+  return /^https:\/\/[^\s]+$/i.test(v) ? v : '';
+}
+function cleanSrc(s) {
+  return ['wx', 'custom', 'auto'].indexOf(s) >= 0 ? s : 'auto';
 }
 
 async function getPlayer(openid) {
@@ -42,7 +62,10 @@ async function getPlayer(openid) {
 async function ensurePlayer(openid) {
   const p = await getPlayer(openid);
   if (p) return p;
-  const doc = { openid, nick: nickOf(openid), stars: 0, cleared: 0, streak: 0, updatedAt: Date.now() };
+  const doc = {
+    openid, nick: nickOf(openid), avatar: '', src: 'auto', auth: false,
+    stars: 0, cleared: 0, streak: 0, updatedAt: Date.now()
+  };
   const add = await db.collection(PLAYERS).add({ data: doc });
   doc._id = add._id;
   return doc;
@@ -58,12 +81,23 @@ async function rankOf(openid, tab, player) {
       .orderBy(field, 'desc')
       .limit(20)
       .get();
-    list = r.data.map(p => ({ nick: p.nick || nickOf(p.openid), v: p[field] || 0, me: p.openid === openid }));
+    list = r.data.map(p => ({
+      nick: p.nick || nickOf(p.openid),
+      avatar: p.avatar || '',
+      v: p[field] || 0,
+      me: p.openid === openid
+    }));
   } catch (e) {
     list = [];
   }
   const greater = await db.collection(PLAYERS).where({ [field]: _.gt(player[field] || 0) }).count();
-  return { list, me: { nick: player.nick, v: player[field] || 0, rank: greater.total + 1 } };
+  return {
+    list,
+    me: {
+      nick: player.nick, avatar: player.avatar || '',
+      v: player[field] || 0, rank: greater.total + 1
+    }
+  };
 }
 
 exports.main = async (event, context) => {
@@ -74,7 +108,29 @@ exports.main = async (event, context) => {
   try {
     if (action === 'login') {
       const p = await ensurePlayer(OPENID);
-      return { ok: true, openid: OPENID, nick: p.nick, appid: APPID };
+      return {
+        ok: true, openid: OPENID, appid: APPID,
+        nick: p.nick, avatar: p.avatar || '', src: p.src || 'auto', auth: !!p.auth
+      };
+    }
+
+    if (action === 'profile') {
+      /* 授权成功 / 改完昵称：只更新 players 里的资料，不碰存档（轻量、幂等）。
+       * 前端平时走 sync 一起带，这个分支留给「只想改名」的场景与联调。 */
+      const p = await ensurePlayer(OPENID);
+      const data = {};
+      const nk = cleanNick(event.nick);
+      if (nk) data.nick = nk;
+      if (event.avatar !== undefined) data.avatar = cleanAvatar(event.avatar);
+      if (event.src) data.src = cleanSrc(event.src);
+      if (event.auth !== undefined) data.auth = !!event.auth;
+      data.updatedAt = Date.now();
+      await db.collection(PLAYERS).doc(p._id).update({ data });
+      const now = await getPlayer(OPENID);
+      return {
+        ok: true, nick: now.nick, avatar: now.avatar || '',
+        src: now.src || 'auto', auth: !!now.auth
+      };
     }
 
     if (action === 'load') {
@@ -97,21 +153,36 @@ exports.main = async (event, context) => {
       const cleared = Math.max(0, Math.min(999, stats.cleared | 0));
       const streak = Math.max(0, Math.min(9999, stats.streak | 0));
 
+      /* v0.14：昵称头像跟着存档一起上行（一次往返，不额外加请求） */
+      const prof = event.profile || {};
+      let nick = p.nick || nickOf(OPENID);
+      let avatar = p.avatar || '';
+      let src = p.src || 'auto';
+      let auth = !!p.auth;
+      const pn = cleanNick(prof.nick);
+      if (pn) nick = pn;
+      if (prof.avatar !== undefined) avatar = cleanAvatar(prof.avatar);
+      if (prof.src) src = cleanSrc(prof.src);
+      if (prof.auth !== undefined) auth = !!prof.auth;
+
       await db.collection(PLAYERS).doc(p._id).update({
-        data: { stars, cleared, streak, updatedAt: now }
+        data: { stars, cleared, streak, nick, avatar, src, auth, updatedAt: now }
       });
       try {
         await db.collection(SAVES).doc(OPENID).set({
-          data: { openid: OPENID, nick: p.nick, sets, updatedAt: now }
+          data: { openid: OPENID, nick, sets, updatedAt: now }
         });
       } catch (e) {
         /* saves 文档可能不存在导致 set 失败：补一次 add */
         try {
-          await db.collection(SAVES).add({ data: { _id: OPENID, openid: OPENID, nick: p.nick, sets, updatedAt: now } });
+          await db.collection(SAVES).add({ data: { _id: OPENID, openid: OPENID, nick, sets, updatedAt: now } });
         } catch (e2) { /* 忽略：下次再来 */ }
       }
       const rk = await rankOf(OPENID, 0, Object.assign({}, p, { stars, cleared }));
-      return { ok: true, nick: p.nick, me: { nick: p.nick, v: stars, rank: rk.me.rank } };
+      return {
+        ok: true, nick, avatar, src, auth,
+        me: { nick, avatar, v: stars, rank: rk.me.rank }
+      };
     }
 
     if (action === 'rank') {

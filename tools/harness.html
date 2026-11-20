@@ -30,6 +30,8 @@
  *   &mark=1             叠加标记：红十字=质心，蓝圈=新手柄圆心（v0.3.2 B1 截图）
  *   &dragcenter=1       模拟「已选中板件再次按质心并拖动」→ 截图验证不旋转（v0.3.2 B1）
  *   &traysel=1          选中托盘里第一块板（v0.3.2 B2 托盘高亮截图）
+ *   &profile=anon|auto|wx|custom  玩家资料态（v0.14 设置页/榜单截图）：
+ *                       anon=未授权、auto=系统化名、wx=已授权微信昵称头像、custom=自定义名
  */
 (function () {
   var C = window.TANGRAM_CONFIG;
@@ -48,6 +50,29 @@
     }
     D.levels = out;
   }
+
+  /* v0.14 玩家资料桩：浏览器里没有 wx，用假的把四种身份态画出来。
+   * 头像用内联 SVG（不是真微信图），只为验证「圆形裁剪 + 首字回退」两套画法。 */
+  var avatarUrl = 'https://thirdwx.qlogo.cn/mmopen/fake/132';
+  var avatarImg = new Image();
+  (function () {
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">' +
+      '<rect width="96" height="96" fill="#7FB3E8"/>' +
+      '<circle cx="48" cy="37" r="17" fill="#FFF6E8"/>' +
+      '<path d="M13 96c0-19 16-30 35-30s35 11 35 30z" fill="#FFF6E8"/></svg>';
+    avatarImg.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  })();
+  var profMode = (q.match(/profile=(\w+)/) || [])[1] || 'anon';
+  var profileStub = {
+    enabled: function () { return true; },
+    canAuth: function () { return profMode !== 'wx'; },
+    state: function () { return { nick: '', avatar: '', src: 'auto', auth: false }; },
+    restore: function () {}, boot: function () {}, request: function () {}, rename: function () {},
+    onChange: function () {},
+    place: function () { return false; },       // 截图里不建原生按钮，画布按钮就是最终样子
+    hide: function () {},
+    imageOf: function () { return (avatarImg.complete && avatarImg.naturalWidth) ? avatarImg : null; }
+  };
 
   var images = {};
   var loaded = 0, need = Object.keys(C.ART.files).length;
@@ -94,11 +119,20 @@
       images: images,
       ad: window.TANGRAM_AD.createAd(),          // v0.9：截图里画出广告位占位框
       cloud: window.TANGRAM_CLOUD.createCloud(), // 浏览器无云：榜单走降级分支
+      profile: profileStub,                      // v0.14：玩家资料桩
       onHide: function () {},
       onShow: function () {}
     });
     game.init();
     var S = game.state;
+    /* v0.14：按 profile= 参数把资料填进去（云端/授权在真机上也是这么进来的） */
+    if (profMode === 'wx') {
+      game._debug.applyProfile({ nick: '古月三金', avatar: avatarUrl, src: 'wx', auth: true }, false);
+    } else if (profMode === 'custom') {
+      game._debug.applyProfile({ nick: '七巧小将', avatar: avatarUrl, src: 'custom', auth: true }, false);
+    } else if (profMode === 'auto') {
+      game._debug.applyProfile({ nick: '巧手4287', avatar: '', src: 'auto', auth: false }, false);
+    }
     // v0.3 Phase 0：set=tangram7 切到七巧板数据集（截图验收用）
     var setKey = (q.match(/set=(\w+)/) || [])[1];
     if (setKey === 'tangram7') game._debug.useSet('tangram7');
@@ -212,6 +246,17 @@
           { nick: '巧手4417', v: 9, me: false }, { nick: '巧手6620', v: 6, me: false }
         ], me: { nick: '巧手0921', v: 12, rank: 4 } };
         S.net = { on: true, ready: true, nick: '巧手0921', syncing: false, ts: 1, err: '' };
+        /* v0.14：资料态下把化名换成人名 + 头像，验证榜单头像是真头像而不是首字 */
+        if (profMode === 'wx' || profMode === 'custom') {
+          var myName = profMode === 'custom' ? '七巧小将' : '古月三金';
+          var rn = ['拼图小将', '木木不吃鱼', '小满', myName, '彩云之川', '阿树'];
+          for (var ri = 0; ri < S.rankList.list.length; ri++) {
+            S.rankList.list[ri].nick = rn[ri] || S.rankList.list[ri].nick;
+            S.rankList.list[ri].avatar = avatarUrl;
+          }
+          S.rankList.me.nick = myName;
+          S.net.nick = myName;
+        }
       }
       if (/net=1/.test(q)) S.net = { on: true, ready: true, nick: '巧手0921', syncing: false, ts: 1, err: '' };
     } else if (screen === 'settings') {

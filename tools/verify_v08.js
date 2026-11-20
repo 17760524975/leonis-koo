@@ -205,8 +205,10 @@ for (let i = 0; i < 2; i++) step(16);
 check('榜单标题已绘制', rec.texts.some(r => r.s === '排行榜'));
 check('三个页签都在', CFG.RANK.tabs.every(t => rec.texts.some(r => r.s === t)), CFG.RANK.tabs.join('/'));
 check('主线榜按「关」计数', S.overlay === 'rank');
-const selfRow = rec.texts.filter(r => r.s === '我');
-check('底部固定「我的排名」一行', selfRow.length >= 1, 'hits=' + selfRow.length);
+/* v0.14：自己那行不再写死「我」，改用玩家资料里的昵称（没登录时是「巧手玩家」） */
+const myNick = game._debug.meNick();
+const selfRow = rec.texts.filter(r => r.s === myNick);
+check('底部固定「我的排名」一行', selfRow.length >= 1, 'nick=' + myNick + ' hits=' + selfRow.length);
 check('我的通关数正确（3 关）', rec.texts.some(r => r.s === '3 关'), '期望 3 关');
 /* 榜尾名次 = 示例榜里比我高的 + 1 = 8 */
 check('榜尾名次显示 8', rec.texts.some(r => r.s === '8'), '');

@@ -38,9 +38,10 @@ animation/ art-src/ audio-src/   动效演示、素材源文件
 ## 开发约定
 
 - `js/` 是唯一真源，`preview/js/` 与 `miniprogram/js/` 由 `node tools/sync.js` 同步，**不要手改副本**。
-- 改完必须跑：`node tools/sync.js && node tools/verify_v11.js && node tools/verify_audio.js && node tools/smoke.js`。
+- 改完必须跑：`node tools/sync.js && node tools/verify_v14.js && node tools/verify_v11.js && node tools/verify_audio.js && node tools/smoke.js`。
 - 关卡数据变更需跑 `verify_levels.js` / `verify_tangram7.js` / `verify_tangram7_geometry.js`。
-- 截图验收：`node tools/shot_v11.js`（headless Edge，已摆块的提示/对局页/关卡页）。
+- 截图验收：`node tools/shot_v11.js`（提示/对局页）、`node tools/shot_v14.js`（设置页资料态/榜单头像）。
+- 玩家资料：`miniprogram/js/wxprofile.js`（只有小程序端有）；`core` 只认 `env.profile`，浏览器预览自动降级。
 - 音频链路：`node tools/verify_audio.js`（wx 桩真跑 game.js）+ `tools/audio_probe.html`（真实浏览器跑预览端 `<audio>`）。
 - 换关卡 BGM：把 mp3 丢进 `audio/`，按 `1_/2_/3_/4_` 前缀命名，跑 `cd tools/audiokit && node build.mjs`（90s/48kbps 单声道，4 首约 2.0MB）。
 - 主页 BGM 不用文件：`AUDIO.pad` 里的和弦表 + `AUDIO.bgm.home=''` 决定，改和弦/速度只动配置。
@@ -63,6 +64,7 @@ animation/ art-src/ audio-src/   动效演示、素材源文件
 | v0.11 | 提示改画在已上板件之上（摆歪时圈块+箭头）、BGM 换真人 mp3（每 5 关一首）、云开发权限指南 |
 | v0.12 | 主页/关卡列表改回合成柔和和弦（删 bgm_home.mp3）、关卡仍用 4 首真人 mp3 |
 | v0.13 | 主页换成 8 小节四声部轻音乐、切场景零延迟（预载+同步切）、四首关卡曲响度对齐 |
+| v0.14 | 微信登录态下的玩家资料：`createUserInfoButton` 授权拿微信昵称头像、`showKeyboard` 改名、设置页资料卡、榜单头像、云端 `players` 加 nick/avatar/src/auth |
 
 ## 代码存档
 

@@ -8,11 +8,13 @@
  *   rank(tab, cb)        全服榜（主线 = 通关数 / 连胜 = 连胜场次）
  *
  * 设计取舍：
- *   1. 不用 wx.getUserInfo / createUserInfoButton —— 那要授权弹窗、要《用户信息保护指引》，
- *      对这个体量的休闲游戏不划算。昵称由云函数按 openid 生成「巧手1234」，
- *      稳定、唯一、零权限；后续想接真实头像昵称，只需要改云函数里的 nick 来源。
- *   2. 存档走云函数写库（saves 集合），客户端不直连数据库 —— 免得被改包伪造成绩。
- *   3. 云端失败一律降级：本地存档照玩，界面显示「未开启云同步」。
+ *   1. 登录用云开发的 openid：云函数里 cloud.getWXContext().OPENID 就是微信登录结果，
+ *      等价于「wx.login 拿 code → 服务端 code2Session」，且不用自己管 AppSecret，
+ *      客户端也拿不到 openid 的明文控制权（改包也换不出别人的档）。
+ *   2. 昵称头像不在这里拿：真实微信资料要用户点授权按钮，交给 wxprofile.js；
+ *      这里只负责把 `players` 里存的那一份（云端化名或玩家授权后的资料）传上去。
+ *   3. 存档走云函数写库（saves 集合），客户端不直连数据库 —— 免得被改包伪造成绩。
+ *   4. 云端失败一律降级：本地存档照玩，界面显示「未开启云同步」。
  */
 'use strict';
 
@@ -21,7 +23,7 @@ var CONFIG = require('./config.js');
 function createCloud() {
   var C = CONFIG.CLOUD || {};
   var FN = C.fn || 'player';
-  var nick = '', openid = '', lastErr = '';
+  var nick = '', openid = '', avatar = '', pSrc = 'auto', pAuth = false, lastErr = '';
 
   function hasCloud() {
     return typeof wx !== 'undefined' && !!wx.cloud && !!wx.cloud.callFunction;
@@ -85,7 +87,10 @@ function createCloud() {
         if (err) { cb(err); return; }
         openid = res.openid || '';
         nick = res.nick || '';
-        cb(null, { openid: openid, nick: nick });
+        avatar = res.avatar || '';
+        pSrc = res.src || 'auto';
+        pAuth = !!res.auth;
+        cb(null, { openid: openid, nick: nick, avatar: avatar, src: pSrc, auth: pAuth });
       });
     },
 
@@ -104,7 +109,10 @@ function createCloud() {
       call('sync', payload, function (err, res) {
         if (err) { cb(err); return; }
         if (res.nick) nick = res.nick;
-        cb(null, { nick: nick, me: res.me || null });
+        if (res.avatar !== undefined) avatar = res.avatar || '';
+        if (res.src) pSrc = res.src;
+        if (res.auth !== undefined) pAuth = !!res.auth;
+        cb(null, { nick: nick, avatar: avatar, src: pSrc, auth: pAuth, me: res.me || null });
       });
     },
 
@@ -123,7 +131,7 @@ function createCloud() {
 
     /* 供设置页显示 */
     status: function () {
-      return { nick: nick, openid: openid, err: lastErr };
+      return { nick: nick, openid: openid, avatar: avatar, src: pSrc, auth: pAuth, err: lastErr };
     }
   };
 }
