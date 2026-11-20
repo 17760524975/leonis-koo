@@ -201,6 +201,64 @@ function loadBuffers() {
  * 选哪一首由 core.js 的 bgmSceneKey() 决定，这里只按键取文件。 */
 var bgmScene = 'home', bgmFadeTimer = 0, bgmFileNow = '', bgmPlaying = false;
 
+/* ---------------- v0.12 主页柔和和弦（合成，零音频文件） ----------------
+ * 主页/关卡列表不放 mp3，改由振荡器铺一层极慢的和弦（54 BPM，C–Am–F–G 循环）：
+ *   · 全部正弦 + 1.1s 渐入 / 1.8s 收尾 → 没有敲击感，不抢注意力；
+ *   · 每个音两路微失谐（±3‰），缓慢拍频让声音变"暖"；
+ *   · 走 bgmGain 总线，弹窗压低与静音开关对它同样生效。
+ * 排程：提前一小节把音符挂进 AC 时间轴，setInterval 抖动不会吞音。 */
+var padSeq = null;
+
+function padNote(freq, at, dur, gain) {
+  if (!AC || !bgmGain) return;
+  var P = (CONFIG.AUDIO && CONFIG.AUDIO.pad) || {};
+  var det = P.detune || 0.003;
+  for (var v = 0; v < 2; v++) {
+    try {
+      var o = AC.createOscillator(), g = AC.createGain();
+      o.type = 'sine';
+      o.frequency.value = freq * (v ? 1 + det : 1);
+      var peak = gain / 2;
+      var a = P.attack || 1.1, r = P.release || 1.8;
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.linearRampToValueAtTime(peak, at + a);
+      g.gain.setValueAtTime(peak, Math.max(at + a, at + dur - r));
+      g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+      o.connect(g); g.connect(bgmGain);
+      o.start(at); o.stop(at + dur + 0.2);
+    } catch (e) { return; }
+  }
+}
+function padStop() {
+  if (padSeq && padSeq.timer) clearInterval(padSeq.timer);
+  padSeq = null;
+}
+function padStart() {
+  if (!AC || !bgmGain || !enabled.bgm) return;
+  if (padSeq) { applyBgmGain(); return; }
+  var P = (CONFIG.AUDIO && CONFIG.AUDIO.pad) || null;
+  if (!P || !P.chords || !P.chords.length) return;
+  var beat = 60 / (P.bpm || 54), bar = beat * 4;
+  var G = P.noteGain || { root: 0.18, chord: 0.11 };
+  padSeq = { idx: 0, nextT: AC.currentTime + 0.12, timer: 0 };
+  var tick = function () {
+    if (!padSeq || !AC) return;
+    var horizon = AC.currentTime + bar + 0.4, guard = 0;
+    while (padSeq.nextT < horizon && guard++ < 4) {
+      var ch = P.chords[padSeq.idx % P.chords.length];
+      padNote(ch.root, padSeq.nextT, bar * 0.98, G.root || 0.18);
+      for (var k = 0; k < ch.notes.length; k++) {
+        padNote(ch.notes[k], padSeq.nextT + k * 0.18, bar * 0.96, G.chord || 0.11);
+      }
+      padSeq.nextT += bar;
+      padSeq.idx++;
+    }
+  };
+  tick();
+  padSeq.timer = setInterval(tick, 300);
+  applyBgmGain();
+}
+
 function bgmFile(key) {
   var m = (CONFIG.AUDIO && CONFIG.AUDIO.bgm) || {};
   if (key === 'home') return m.home || '';
@@ -217,8 +275,18 @@ function bgmTarget() {
   return ducked ? CONFIG.AUDIO.bgmDuckVolume : CONFIG.AUDIO.bgmVolume;
 }
 function applyBgmGain() {
-  if (!bgmPlayer) return;
-  try { bgmPlayer.volume = Math.max(0, Math.min(1, bgmTarget())); } catch (e) {}
+  /* 先掐掉在跑的淡变：duck / 开关是"立刻要生效"的操作，不能被淡变的旧目标覆盖 */
+  if (bgmFadeTimer) { clearInterval(bgmFadeTimer); bgmFadeTimer = 0; }
+  var v = bgmTarget();
+  if (bgmPlayer) { try { bgmPlayer.volume = Math.max(0, Math.min(1, v)); } catch (e) {} }
+  if (bgmGain && AC) {
+    /* 直接赋值：和弦每个音自带慢包络，总线不再叠二层；也避免
+     * setTargetAtTime 在无声卡/后台时不推进、.value 恒为 0 的假象。 */
+    try {
+      if (bgmGain.gain.cancelScheduledValues) bgmGain.gain.cancelScheduledValues(AC.currentTime);
+      bgmGain.gain.value = v;
+    } catch (e) {}
+  }
 }
 function bgmFadeTo(to, cb) {
   if (bgmFadeTimer) { clearInterval(bgmFadeTimer); bgmFadeTimer = 0; }
@@ -233,7 +301,13 @@ function bgmFadeTo(to, cb) {
 }
 function bgmPlay(key) {
   var file = bgmFile(key);
-  if (!file) return;
+  if (!file) {                                  // 主页/关卡列表：合成和弦
+    if (bgmPlayer) { try { bgmPlayer.pause(); bgmPlaying = false; } catch (e) {} }
+    bgmFileNow = '';
+    padStart();
+    return;
+  }
+  padStop();                                    // 进关卡：和弦让位给 mp3
   if (!bgmPlayer) {
     try {
       bgmPlayer = wx.createInnerAudioContext();
@@ -330,7 +404,7 @@ var audio = {
   },
   setEnabled: function (sfx, bgm) {
     enabled.sfx = sfx; enabled.bgm = bgm;
-    if (!bgm) bgmStop();
+    if (!bgm) { bgmStop(); padStop(); }
     else if (unlocked) bgmPlay(bgmScene);
     applyBgmGain();
   },
@@ -338,7 +412,7 @@ var audio = {
   setScene: function (k) { bgmSetScene(k); },   // v0.5：主页 / 关卡多场景 BGM
   setVisible: function (v) {
     if (!v) {
-      bgmStop();
+      bgmStop(); padStop();                     // 切后台别继续排程，iOS 会积压
     } else if (unlocked && enabled.bgm) {
       bgmPlay(bgmScene);
     }

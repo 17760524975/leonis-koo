@@ -143,7 +143,7 @@ WS = CFG.LAYOUT.BOARD.size / 1000;
 
 console.log('v0.11 验收：提示可见性 + 真人 BGM + 云环境');
 section('1. 版本与云环境');
-check('版本号 v0.11', CFG.version === 'v0.11', CFG.version);
+check('版本号 v0.11+', /^v0\.(1[1-9]|[2-9]\d)$/.test(CFG.version), CFG.version);
 check('云环境 ID 已填', CFG.CLOUD.envId === 'cloud1-d4g6rm6duad5ba0aa', CFG.CLOUD.envId);
 
 section('2. BGM 换曲规则：每 5 关一首，按文件名数字顺序');
@@ -167,19 +167,21 @@ section('3. mp3 资源与包体');
 const assets = ['preview/assets/audio', 'miniprogram/assets/audio'];
 for (const dir of assets) {
   const d = path.join(ROOT, dir);
-  const want = ['bgm_home.mp3', 'bgm_lv1.mp3', 'bgm_lv2.mp3', 'bgm_lv3.mp3', 'bgm_lv4.mp3'];
-  check(`${dir} 五首曲齐`, want.every(f => fs.existsSync(path.join(d, f))), want.join(','));
-  check(`${dir} 已删旧 bgm_main`, !fs.existsSync(path.join(d, 'bgm_main.mp3')));
+  /* v0.12：主页换成合成和弦，assets 里只留 4 首关卡曲 */
+  const want = ['bgm_lv1.mp3', 'bgm_lv2.mp3', 'bgm_lv3.mp3', 'bgm_lv4.mp3'];
+  check(`${dir} 四首关卡曲齐`, want.every(f => fs.existsSync(path.join(d, f))), want.join(','));
+  check(`${dir} 已删旧 bgm_main / bgm_home`,
+    !fs.existsSync(path.join(d, 'bgm_main.mp3')) && !fs.existsSync(path.join(d, 'bgm_home.mp3')));
   const sizes = want.map(f => fs.existsSync(path.join(d, f)) ? fs.statSync(path.join(d, f)).size : 0);
   check(`${dir} 单曲 < 700KB`, sizes.every(s => s > 0 && s <= 700 * 1024), sizes.map(s => Math.round(s / 1024) + 'KB').join(' / '));
   const sum = sizes.reduce((a, b) => a + b, 0);
-  check(`${dir} BGM 合计 < 3MB`, sum < 3 * 1024 * 1024, (sum / 1024 / 1024).toFixed(2) + 'MB');
+  check(`${dir} 关卡 BGM 合计 < 2.5MB`, sum < 2.5 * 1024 * 1024, (sum / 1024 / 1024).toFixed(2) + 'MB');
 }
 const pkg = walkSize(path.join(ROOT, 'miniprogram'));
 check('小游戏主包 < 4MB（微信硬限制）', pkg < 4 * 1024 * 1024, (pkg / 1024 / 1024).toFixed(2) + 'MB');
-check('配置里的曲名与文件一致',
-  CFG.AUDIO.bgm.lv.every(f => fs.existsSync(path.join(ROOT, 'miniprogram/assets/audio', f))) &&
-  fs.existsSync(path.join(ROOT, 'miniprogram/assets/audio', CFG.AUDIO.bgm.home)));
+check('配置里的关卡曲名与文件一致',
+  CFG.AUDIO.bgm.lv.every(f => fs.existsSync(path.join(ROOT, 'miniprogram/assets/audio', f))));
+check('主页不再引用任何音频文件', CFG.AUDIO.bgm.home === '', "'" + CFG.AUDIO.bgm.home + "'");
 
 section('4. 提示选块：先挑没上板的，再挑上板没放对的');
 playAt(0);

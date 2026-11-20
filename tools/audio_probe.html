@@ -34,6 +34,10 @@
 <script src="../preview/js/ad.js"></script>
 <script src="../preview/js/game.js"></script>
 <script>
+/* v0.12 探针：真实浏览器里跑预览端，验两套链路
+ *   主页 = 合成和弦（pad=true，走 bgmGain 总线，没有 <audio> 元素）
+ *   关卡 = mp3（pad=false，<audio> 在放，volume=bgmVolume）
+ * 关键点：切场景时两者必须互斥（不会同时在响）。 */
 (function () {
   var out = [];
   function log(k, v) { out.push(k + '=' + v); }
@@ -47,27 +51,39 @@
       if (!A) { flush('NO_AUDIO'); return; }
       A.unlock();
       var s1 = A.bgmInfo();
-      log('home.src', s1 ? s1.src.split('/').pop() : 'null');
-      log('home.loop', s1 ? s1.loop : 'null');
-      log('home.paused', s1 ? s1.paused : 'null');
-      log('home.vol', s1 ? s1.volume.toFixed(2) : 'null');
+      log('home.pad', s1.pad);
+      log('home.file', (s1.file || '(none)'));
+      log('home.gain', s1.gain === null ? 'null' : s1.gain.toFixed(2));
+      log('home.paused', s1.paused === undefined ? '(no element)' : s1.paused);
       A.setScene('lv2');
       setTimeout(function () {
         var s2 = A.bgmInfo();
-        log('lv2.src', s2 ? s2.src.split('/').pop() : 'null');
-        log('lv2.vol', s2 ? s2.volume.toFixed(2) : 'null');
+        log('lv2.pad', s2.pad);
+        log('lv2.file', s2.file || '(none)');
+        log('lv2.vol', s2.volume === undefined ? '(none)' : s2.volume.toFixed(2));
         A.duck(true);
         setTimeout(function () {
-          log('duck.vol', A.bgmInfo().volume.toFixed(2));
+          var s3 = A.bgmInfo();
+          log('duck.vol', s3.volume === undefined ? '(none)' : s3.volume.toFixed(2));
           A.duck(false);
-          A.setEnabled(true, false);
-          log('off.paused', A.bgmInfo().paused);
-          A.setEnabled(true, true);
+          A.setScene('home');
           setTimeout(function () {
-            log('on.paused', A.bgmInfo().paused);
-            log('on.src', A.bgmInfo().src.split('/').pop());
-            flush('DONE');
-          }, 200);
+            var s4 = A.bgmInfo();
+            log('back.pad', s4.pad);
+            log('back.mp3paused', s4.paused === undefined ? '(no element)' : s4.paused);
+            A.setEnabled(true, false);
+            log('off.pad', A.bgmInfo().pad);
+            log('off.gain', A.bgmInfo().gain === null ? 'null' : A.bgmInfo().gain.toFixed(2));
+            A.setEnabled(true, true);
+            setTimeout(function () {
+              var s5 = A.bgmInfo();
+              log('on.pad', s5.pad);
+              /* 总线增益是 setTargetAtTime 渐进上去的，要等一会儿才读得到真实值；
+               * 刚 unlock 时读必然是 0.00，不能拿那个数当结论。 */
+              log('on.gain', s5.gain === null ? 'null' : s5.gain.toFixed(2));
+              flush('DONE');
+            }, 400);
+          }, 400);
         }, 420);
       }, 420);
     } catch (e) {

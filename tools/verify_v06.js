@@ -115,7 +115,10 @@ check('网页标题已改', /方寸巧拼/.test(fs.readFileSync(path.join(ROOT, 
 
 /* ---------- 2. BGM 链路（v0.11 起改为真人 mp3，不再走合成） ---------- */
 section('2. BGM：真人 mp3 与音量');
-check('主页曲已配', /^bgm_.*\.mp3$/.test(CFG.AUDIO.bgm.home), CFG.AUDIO.bgm.home);
+/* v0.12：主页改回合成和弦（配置里 home 留空、pad 有和弦表），不再用 mp3 */
+check('主页走合成和弦（不配 mp3）', CFG.AUDIO.bgm.home === '', "'" + CFG.AUDIO.bgm.home + "'");
+check('主页和弦表已配（4 个和弦）', (CFG.AUDIO.pad.chords || []).length === 4,
+  'chords=' + (CFG.AUDIO.pad.chords || []).length);
 check('关卡轮换曲 4 首（按文件名数字顺序）',
   CFG.BGM.scenes.length === 4 && CFG.AUDIO.bgm.lv.length === 4, CFG.BGM.scenes.join(','));
 check('每 5 关换一首', CFG.BGM.levelsPerTrack === 5, 'levelsPerTrack=' + CFG.BGM.levelsPerTrack);
