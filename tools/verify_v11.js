@@ -126,8 +126,12 @@ function misplacePiece(i) {
 }
 function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'); }
 function walkSize(dir) {
+  /* 微信主包 = miniprogram 根 - cloudfunctionRoot；云函数的 node_modules
+   * 既不进包体也不该入库（部署时云端安装依赖），这里一并跳过。 */
+  const SKIP = ['cloudfunctions', 'node_modules', '.cloudbase'];
   let total = 0;
   for (const f of fs.readdirSync(dir)) {
+    if (SKIP.indexOf(f) >= 0) continue;
     const p = path.join(dir, f);
     const st = fs.statSync(p);
     if (st.isDirectory()) total += walkSize(p); else total += st.size;
@@ -255,7 +259,8 @@ section('7. 源码约束');
 for (const f of ['preview/js/game.js', 'miniprogram/game.js']) {
   const t = fs.readFileSync(path.join(ROOT, f), 'utf8');
   check(`${f} 用循环播 mp3`, /\.loop\s*=\s*true/.test(t));
-  check(`${f} 有换曲淡变`, /bgmFadeTo/.test(t));
+  check(`${f} 切曲不靠淡变（同步生效）`, !/bgmFadeTo/.test(t));
+  check(`${f} 关卡曲预载`, /preloadBgm/.test(t));
   check(`${f} 无合成 BGM 残留`, !/BGM_DEF|bgmStartSeq/.test(t));
 }
 check('提示绘制在板件循环之后', coreSrc.indexOf('drawBoardPiece(p);') < coreSrc.indexOf('drawHintGuide(lv)'),

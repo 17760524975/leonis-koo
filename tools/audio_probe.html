@@ -51,41 +51,46 @@
       if (!A) { flush('NO_AUDIO'); return; }
       A.unlock();
       var s1 = A.bgmInfo();
-      log('home.pad', s1.pad);
-      log('home.file', (s1.file || '(none)'));
+      log('home.on', s1.home);
+      log('home.gate', s1.gate === null ? 'null' : s1.gate.toFixed(2));
       log('home.gain', s1.gain === null ? 'null' : s1.gain.toFixed(2));
-      log('home.paused', s1.paused === undefined ? '(no element)' : s1.paused);
+      log('home.preloaded', s1.preloaded);
+      log('home.playingMp3', s1.playing);
+
+      /* 关键：切场景必须"同步生效"——调用返回后立刻读状态，不等定时器 */
       A.setScene('lv2');
+      var s2 = A.bgmInfo();
+      log('lv2.home', s2.home);
+      log('lv2.file', s2.file || '(none)');
+      log('lv2.pausedNow', s2.paused);
+      log('lv2.readyNow', s2.ready === undefined ? '(none)' : s2.ready);
       setTimeout(function () {
-        var s2 = A.bgmInfo();
-        log('lv2.pad', s2.pad);
-        log('lv2.file', s2.file || '(none)');
-        log('lv2.vol', s2.volume === undefined ? '(none)' : s2.volume.toFixed(2));
+        var s2b = A.bgmInfo();
+        log('lv2.vol', s2b.volume === undefined ? '(none)' : s2b.volume.toFixed(2));
+        log('lv2.readyLater', s2b.ready === undefined ? '(none)' : s2b.ready);
         A.duck(true);
         setTimeout(function () {
-          var s3 = A.bgmInfo();
-          log('duck.vol', s3.volume === undefined ? '(none)' : s3.volume.toFixed(2));
+          log('duck.vol', A.bgmInfo().volume.toFixed(2));
           A.duck(false);
           A.setScene('home');
+          var s4 = A.bgmInfo();                 // 同步读：回主页那一刻
+          log('back.home', s4.home);
+          log('back.playingMp3', s4.playing);
+          log('back.gate', s4.gate === null ? 'null' : s4.gate.toFixed(2));
           setTimeout(function () {
-            var s4 = A.bgmInfo();
-            log('back.pad', s4.pad);
-            log('back.mp3paused', s4.paused === undefined ? '(no element)' : s4.paused);
             A.setEnabled(true, false);
-            log('off.pad', A.bgmInfo().pad);
+            log('off.home', A.bgmInfo().home);
             log('off.gain', A.bgmInfo().gain === null ? 'null' : A.bgmInfo().gain.toFixed(2));
             A.setEnabled(true, true);
             setTimeout(function () {
               var s5 = A.bgmInfo();
-              log('on.pad', s5.pad);
-              /* 总线增益是 setTargetAtTime 渐进上去的，要等一会儿才读得到真实值；
-               * 刚 unlock 时读必然是 0.00，不能拿那个数当结论。 */
+              log('on.home', s5.home);
               log('on.gain', s5.gain === null ? 'null' : s5.gain.toFixed(2));
               flush('DONE');
-            }, 400);
+            }, 300);
           }, 400);
-        }, 420);
-      }, 420);
+        }, 300);
+      }, 400);
     } catch (e) {
       log('ERR', (e && e.message) || e);
       flush('ERR');

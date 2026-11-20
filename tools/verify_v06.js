@@ -117,8 +117,11 @@ check('网页标题已改', /方寸巧拼/.test(fs.readFileSync(path.join(ROOT, 
 section('2. BGM：真人 mp3 与音量');
 /* v0.12：主页改回合成和弦（配置里 home 留空、pad 有和弦表），不再用 mp3 */
 check('主页走合成和弦（不配 mp3）', CFG.AUDIO.bgm.home === '', "'" + CFG.AUDIO.bgm.home + "'");
-check('主页和弦表已配（4 个和弦）', (CFG.AUDIO.pad.chords || []).length === 4,
-  'chords=' + (CFG.AUDIO.pad.chords || []).length);
+/* v0.13：主页换成 8 小节轻音乐（四声部），谱表在 AUDIO.home */
+check('主页谱表已配（8 小节和声）', (CFG.AUDIO.home.prog || []).length === 8,
+  'prog=' + (CFG.AUDIO.home.prog || []).length);
+check('主页旋律 32 个音', (CFG.AUDIO.home.melody || []).length === 32,
+  'melody=' + (CFG.AUDIO.home.melody || []).length);
 check('关卡轮换曲 4 首（按文件名数字顺序）',
   CFG.BGM.scenes.length === 4 && CFG.AUDIO.bgm.lv.length === 4, CFG.BGM.scenes.join(','));
 check('每 5 关换一首', CFG.BGM.levelsPerTrack === 5, 'levelsPerTrack=' + CFG.BGM.levelsPerTrack);
@@ -135,7 +138,9 @@ for (const [file, re] of [
   const t = fs.readFileSync(path.join(ROOT, file), 'utf8');
   check(`${file} 用元素/InnerAudio 播 mp3`, re.test(t));
   check(`${file} 循环播放`, /\.loop\s*=\s*true/.test(t));
-  check(`${file} 换曲有淡入淡出`, /bgmFadeTo/.test(t));
+  /* v0.13：切曲改同步生效（预载 + 直接置音量），不再用淡变——
+   * 淡变会让"点开始"到出声多等几十毫秒，用户感知就是卡一下。 */
+  check(`${file} 切曲同步、不靠淡变`, !/bgmFadeTo/.test(t));
   check(`${file} 已删除合成 BGM`, !/BGM_DEF/.test(t) && !/bgmStartSeq/.test(t));
 }
 

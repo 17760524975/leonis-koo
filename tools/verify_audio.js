@@ -47,7 +47,8 @@ function mkPlayer() {
   const a = {
     src: '', loop: false, volume: 1, playbackRate: 1, obeyMuteSwitch: true, paused: true,
     _onErr: null,
-    play() { this.paused = false; }, pause() { this.paused = true; },
+    plays: 0,
+    play() { this.paused = false; this.plays++; }, pause() { this.paused = true; },
     stop() { this.paused = true; }, destroy() {}, seek() {},
     onPlay() {}, onPause() {}, onStop() {}, onEnded() {},
     onError(cb) { this._onErr = cb; }, onCanplay() {}
@@ -85,6 +86,7 @@ function mkAC() {
       return o;
     },
     createBiquadFilter: () => ({ type: 'lowpass', frequency: mkParam(1000), Q: mkParam(1), connect() {}, disconnect() {} }),
+    createDelay: () => ({ delayTime: mkParam(0), connect() {}, disconnect() {} }),
     createBuffer: (ch, len) => ({ getChannelData: () => new Float32Array(len) }),
     createBufferSource: () => ({
       buffer: null, loop: false, playbackRate: mkParam(1),
@@ -137,81 +139,107 @@ const CFG = require(path.join(ROOT, 'miniprogram/js/config.js'));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 setImmediate(async function () {
-  console.log('v0.12 音频验收：主页合成和弦 + 关卡 mp3');
+  console.log('v0.13 音频验收：主页轻音乐 + 关卡 mp3，切场景零延迟');
   const audio = global.__audio;
   const game = global.__game;
   if (!audio || !game) { console.log('  [XX] 启动失败：__audio/__game 未创建'); process.exit(1); }
 
-  console.log('\n== 1. 主页 = 合成和弦（无 mp3） ==');
+  console.log('\n== 1. 主页 = 合成轻音乐（零文件） ==');
   audio.unlock();
-  await sleep(60);
-  const padN = oscillators.length;
-  check('解锁后主页起了振荡器（和弦）', padN > 0, 'osc=' + padN);
-  check('主页不创建 InnerAudioContext（不走 mp3）', players.length === 0, 'players=' + players.length);
-  check('和弦音全部是正弦（柔和、无敲击感）', oscillators.every(o => o.type === 'sine'),
-    [...new Set(oscillators.map(o => o.type))].join(','));
-  /* 一小节 = 1 个和弦 = (1 根音 + 3 和弦音) × 2 路失谐 = 8 个振荡器；
-   * 首次 tick 会预排 2 小节（lookahead），所以是 16 个。 */
-  check('每小节 8 个振荡器、首排 2 小节共 16 个', padN === 16, 'osc=' + padN);
-  const durs = oscillators.map(o => +(o.stoppedAt - o.startedAt).toFixed(2));
-  check('每个音都撑满约一小节（4.3~4.5s）', durs.every(d => d > 4.3 && d < 4.6),
-    'min=' + Math.min(...durs) + ' max=' + Math.max(...durs));
-  check('和弦文件不从 assets 读（配置里 home 为空）', CFG.AUDIO.bgm.home === '', "'" + CFG.AUDIO.bgm.home + "'");
+  const i1 = audio.bgmInfo();
+  check('解锁后主页曲在放', i1.home === true);
+  check('闸门已打开（gate=1）', Math.abs(i1.gate - 1) < 0.01, 'gate=' + i1.gate);
+  const trim = CFG.AUDIO.trim || {};
+  check('总线音量 = bgmVolume × trim.home',
+    Math.abs(i1.gain - CFG.AUDIO.bgmVolume * trim.home) < 0.01,
+    'gain=' + i1.gain.toFixed(2) + ' 期望=' + (CFG.AUDIO.bgmVolume * trim.home).toFixed(2));
+  check('响度对齐表覆盖主页 + 4 首关卡',
+    typeof trim.home === 'number' && CFG.AUDIO.bgm.lv.every(f => typeof trim[f.replace(/\.mp3$/, '')] === 'number'),
+    JSON.stringify(trim));
+  check('4 首关卡曲已在解锁时预载', i1.ctxs === 4, 'ctxs=' + i1.ctxs);
+  check('预载不留声（没有 mp3 在播）', i1.playing === 0, 'playing=' + i1.playing);
+  const nHome = oscillators.length;
+  check('主页排出了音符（振荡器 > 20）', nHome > 20, 'osc=' + nHome);
+  const types = [...new Set(oscillators.map(o => o.type))].sort().join(',');
+  check('两条音色齐：木琴 sine + 低音/和弦 triangle', types === 'sine,triangle', types);
+  const freqs = oscillators.map(o => o.frequency.value);
+  check('音域铺开（最低 < 200Hz，最高 > 600Hz）',
+    Math.min(...freqs) < 200 && Math.max(...freqs) > 600,
+    'min=' + Math.min(...freqs).toFixed(1) + ' max=' + Math.max(...freqs).toFixed(1));
+  check('主页不再引用任何音频文件', CFG.AUDIO.bgm.home === '', "'" + CFG.AUDIO.bgm.home + "'");
 
-  console.log('\n== 2. 进关卡 → 换成真人 mp3 ==');
+  console.log('\n== 2. 进关卡：同步切、不再等 ==');
   audio.setScene('lv1');
+  const i2 = audio.bgmInfo();                     // 调用返回后立刻读，不等任何定时器
+  check('主页曲立刻停（home=false）', i2.home === false);
+  check('mp3 立刻处于播放态', i2.paused === false && i2.file === 'bgm_lv1.mp3',
+    i2.file + ' paused=' + i2.paused);
+  check('mp3 音量已乘本条 trim',
+    Math.abs(i2.volume - Math.min(1, CFG.AUDIO.bgmVolume * trim.bgm_lv1)) < 0.01,
+    'vol=' + i2.volume.toFixed(2));
+  check('同时只有 1 首在播', i2.playing === 1, 'playing=' + i2.playing);
   await sleep(120);
-  const padAfterLv = oscillators.length;
-  check('第 1 关 → bgm_lv1', players.length > 0 && players[players.length - 1].src === 'assets/audio/bgm_lv1.mp3',
-    players.length ? players[players.length - 1].src : 'no player');
-  check('进关卡后和弦停止排程（不再新增振荡器）', padAfterLv === padN, padN + '→' + padAfterLv);
-  check('关卡 mp3 循环播放', players[players.length - 1].loop === true);
-  const before = players.length;
-  audio.setScene('lv3');
-  await sleep(200);
-  check('切到第 3 首', players[players.length - 1].src === 'assets/audio/bgm_lv3.mp3', players[players.length - 1].src);
-  check('复用同一个播放器（不新建实例）', players.length === before, 'players=' + players.length);
+  check('闸门已归零（残留音不会继续响）', Math.abs(audio.bgmInfo().gate) < 0.01,
+    'gate=' + audio.bgmInfo().gate);
+  check('切曲不新建实例（复用预载的 4 个）', audio.bgmInfo().ctxs === 4, 'ctxs=' + audio.bgmInfo().ctxs);
+
+  console.log('\n== 3. 回主页：mp3 同步停 ==');
+  audio.setScene('home');
+  const i3 = audio.bgmInfo();
+  check('主页曲立刻起（home=true）', i3.home === true);
+  check('mp3 立刻停止（playing=0）', i3.playing === 0, 'playing=' + i3.playing);
+  check('回主页重新打开闸门', Math.abs(i3.gate - 1) < 0.01, 'gate=' + i3.gate);
+
+  console.log('\n== 4. 关卡换曲 ==');
   audio.setScene('lv3');
   await sleep(60);
-  check('重复设同一场景不重播', players[players.length - 1].src === 'assets/audio/bgm_lv3.mp3');
-  audio.setScene('home');
-  await sleep(80);
-  const padBack = oscillators.length;
-  check('回主页重新起和弦', padBack > padAfterLv, padAfterLv + '→' + padBack);
-  check('回主页暂停了 mp3（不会两首同时响）', players[players.length - 1].paused === true);
+  check('第 3 首 → bgm_lv3', audio.bgmInfo().file === 'bgm_lv3.mp3', audio.bgmInfo().file);
+  const before = audio.bgmInfo().ctxs;
+  audio.setScene('lv4');
+  await sleep(60);
+  check('第 4 首 → bgm_lv4', audio.bgmInfo().file === 'bgm_lv4.mp3', audio.bgmInfo().file);
+  check('仍复用预载实例', audio.bgmInfo().ctxs === before, 'ctxs=' + audio.bgmInfo().ctxs);
+  check('换曲后只剩 1 首在播', audio.bgmInfo().playing === 1, 'playing=' + audio.bgmInfo().playing);
+  /* 同一首重复设场景（1~5 关都是 lv1 的情形）不该从头放 */
+  const cur = players.filter(p => !p.paused);
+  const nPlay = cur.length ? cur[0].plays : -1;
+  audio.setScene('lv4');
+  await sleep(60);
+  const cur2 = players.filter(p => !p.paused);
+  check('同一首不重头开始（plays 不增加）', cur2.length === 1 && cur2[0].plays === nPlay,
+    'plays ' + nPlay + '→' + (cur2.length ? cur2[0].plays : 'none'));
 
-  console.log('\n== 3. 压低 / 开关（在关卡 mp3 上验） ==');
-  audio.setScene('lv3');
-  await sleep(400);
+  console.log('\n== 5. 压低 / 开关 / 前后台 ==');
   audio.duck(true);
-  await sleep(400);
-  check('弹窗时压低到 duck 音量', Math.abs(players[players.length - 1].volume - CFG.AUDIO.bgmDuckVolume) < 0.02,
-    'volume=' + players[players.length - 1].volume.toFixed(2));
+  const curFile = audio.bgmInfo().file;
+  check('弹窗压到 duck × trim', Math.abs(audio.bgmInfo().volume - CFG.AUDIO.bgmDuckVolume * trim[String(curFile || '').replace(/\.mp3$/, '')]) < 0.01,
+    'vol=' + audio.bgmInfo().volume.toFixed(2));
   audio.duck(false);
-  await sleep(400);
-  check('关掉弹窗回到正常音量', Math.abs(players[players.length - 1].volume - CFG.AUDIO.bgmVolume) < 0.02,
-    'volume=' + players[players.length - 1].volume.toFixed(2));
-
+  check('恢复 bgmVolume × trim',
+    Math.abs(audio.bgmInfo().volume - Math.min(1, CFG.AUDIO.bgmVolume * trim[String(curFile || '').replace(/\.mp3$/, '')])) < 0.01,
+    'vol=' + audio.bgmInfo().volume.toFixed(2));
   audio.setEnabled(true, false);
-  check('关闭 BGM 会暂停', players[players.length - 1].paused === true);
+  check('关 BGM：mp3 停 + 主页曲停', audio.bgmInfo().playing === 0 && audio.bgmInfo().home === false);
+  check('关 BGM：总线归零', Math.abs(audio.bgmInfo().gain) < 0.01, 'gain=' + audio.bgmInfo().gain);
   audio.setEnabled(true, true);
   await sleep(60);
-  check('重新开启会继续播（同一首）', players[players.length - 1].paused === false &&
-    players[players.length - 1].src.indexOf('bgm_lv3') >= 0, players[players.length - 1].src);
-
-  console.log('\n== 4. 切后台 / 回前台 ==');
+  check('重开 BGM 恢复播放', audio.bgmInfo().playing === 1, 'playing=' + audio.bgmInfo().playing);
   audio.setVisible(false);
-  check('切后台暂停', players[players.length - 1].paused === true);
+  check('切后台全部停止', audio.bgmInfo().playing === 0 && audio.bgmInfo().home === false);
   audio.setVisible(true);
   await sleep(60);
-  check('回前台恢复', players[players.length - 1].paused === false);
+  check('回前台恢复', audio.bgmInfo().playing === 1 || audio.bgmInfo().home === true,
+    'playing=' + audio.bgmInfo().playing + ' home=' + audio.bgmInfo().home);
 
-  console.log('\n== 5. 四首关卡曲资源齐（主页已不用文件） ==');
+  console.log('\n== 6. 四首关卡曲资源齐（主页已不用文件） ==');
   for (const f of CFG.AUDIO.bgm.lv) {
     const fp = path.join(ROOT, 'miniprogram', 'assets/audio', f);
     check(f, fs.existsSync(fp) && fs.statSync(fp).size > 100 * 1024,
       fs.existsSync(fp) ? Math.round(fs.statSync(fp).size / 1024) + 'KB' : '缺失');
   }
+  check('主页谱表完整（8 小节 / 32 个旋律音）',
+    (CFG.AUDIO.home.prog || []).length === 8 && (CFG.AUDIO.home.melody || []).length === 32,
+    'prog=' + (CFG.AUDIO.home.prog || []).length + ' melody=' + (CFG.AUDIO.home.melody || []).length);
 
   console.log('\n' + (fail === 0 ? '音频验收全部通过' : `!! ${fail} 项未通过`));
   process.exit(fail === 0 ? 0 : 1);

@@ -42,13 +42,13 @@
    *   → <audio> 元素池（file:// 双击打开时 fetch 被浏览器禁掉，只能走这条）
    *   → Web Audio 合成（素材缺失时兜底，保证「有声音」而不是静音）
    */
-  var AC = null, masterGain = null, bgmGain = null, bgmSrc = null, bgmEl = null;
+  var AC = null, masterGain = null, bgmGain = null, bgmSrc = null;
   var buf = {}, pool = {}, poolIdx = {};
   var enabled = { sfx: true, bgm: true };
   var ducked = false, snapVoices = 0, lastTapAt = 0;
   var unlocked = false, buffersReady = false, loadedOk = 0, elementMode = false;
   var bgmStarted = false;
-  var bgmScene = 'home', bgmFade = 0;
+  var bgmScene = 'home';
 
   function initAudio() {
     if (AC) return;
@@ -170,69 +170,139 @@
     });
   }
 
-  /* ---- v0.12 主页柔和和弦（合成，零音频文件） ----
-   * 走 WebAudio 振荡器而不是 mp3：铺底和弦不需要"素材感"，合成反而能做得更柔
-   * （慢起慢落 + 微失谐拍频），也不占主包体积。
-   * 调度沿用"提前 1 小节排程"的老做法，setInterval 抖一点也不会吞音。
-   * 音符不接 masterGain 而接 bgmGain：这样主页和弦和关卡 mp3 共用一套
-   * 音量总线，弹窗压低（duck）对两者同时生效。 */
-  var padSeq = null;
-  function padNote(freq, at, dur, gain) {
-    if (!AC || !bgmGain) return;
-    var P = (C.AUDIO && C.AUDIO.pad) || {};
-    var det = (P.detune || 0.003);
-    for (var v = 0; v < 2; v++) {                 // 两路微失谐叠一层，声音更暖
-      try {
-        var o = AC.createOscillator(), g = AC.createGain();
-        o.type = 'sine';
-        o.frequency.value = freq * (v ? 1 + det : 1);
-        var peak = gain / 2;
-        g.gain.setValueAtTime(0.0001, at);
-        g.gain.linearRampToValueAtTime(peak, at + (P.attack || 1.1));
-        g.gain.setValueAtTime(peak, Math.max(at + (P.attack || 1.1), at + dur - (P.release || 1.8)));
-        g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
-        o.connect(g); g.connect(bgmGain);
-        o.start(at); o.stop(at + dur + 0.2);
-      } catch (e) { return; }
+  /* ---- v0.13 主页轻音乐（合成，零音频文件） ----
+   * 四个声部按 8 小节谱排程：低音 / 和弦轻扫 / 八分琶音 / 主旋律，
+   * 谱在 config 的 AUDIO.home（MIDI 记谱），改曲子只动配置不动代码。
+   *
+   * 为什么中间要多一个闸门（homeGate）：振荡器是提前一小节排进时间轴的，
+   * 只 clearInterval 拦不住已经排好的音——切到关卡后还会再响一整小节（2.4s），
+   * 听起来就是"主页音乐切不过去"。闸门 30ms 拉到 0、随后硬停振荡器。 */
+  var HOME_OSC = [], homeGate = null, homeLead = null, homeSeq = null;
+
+  function homeInit() {
+    if (!AC || homeGate) return;
+    try {
+      homeGate = AC.createGain();
+      homeGate.gain.value = 0;
+      homeGate.connect(bgmGain);
+      var E = (C.AUDIO.home && C.AUDIO.home.echo) || {};
+      /* 主旋律单独一路：干声 + 短回声（不支持 DelayNode 的环境直接跳过） */
+      homeLead = AC.createGain();
+      homeLead.gain.value = 1;
+      homeLead.connect(homeGate);
+      if (AC.createDelay && E.delay) {
+        var d = AC.createDelay(1.0), fb = AC.createGain(), wet = AC.createGain();
+        d.delayTime.value = E.delay;
+        fb.gain.value = E.feedback || 0.24;
+        wet.gain.value = E.wet || 0.22;
+        homeLead.connect(d);
+        d.connect(fb); fb.connect(d);
+        d.connect(wet); wet.connect(homeGate);
+      }
+    } catch (e) { homeGate = null; homeLead = null; }
+  }
+
+  function mtof(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+
+  /* 单个泛音：线性起音 + 指数衰减 —— 木琴/音盒的"颗粒"就来自这个包络 */
+  function homePartial(freq, at, dur, peak, type, attack, dest) {
+    var o = AC.createOscillator(), g = AC.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    var a = Math.max(0.003, attack || 0.006);
+    var d = Math.max(dur, a + 0.03);
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.linearRampToValueAtTime(peak, at + a);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + d);
+    o.connect(g); g.connect(dest || homeGate);
+    o.start(at); o.stop(at + d + 0.05);
+    HOME_OSC.push(o);
+  }
+  /* 木琴音：基音 + 很弱的 4 倍频泛音（给一点"木"的亮度，不是钟声） */
+  function homeMallet(freq, at, dur, peak, dest) {
+    homePartial(freq, at, dur, peak, 'sine', 0.006, dest);
+    homePartial(freq * 4.02, at, dur * 0.26, peak * 0.14, 'sine', 0.004, dest);
+  }
+  /* 力度/时间抖动：确定性哈希，同一遍听感稳定，但每个音不完全一样 */
+  function hJit(i) { var x = Math.sin(i * 12.9898) * 43758.5453; return x - Math.floor(x); }
+
+  function homeBar(bar, t0, beat) {
+    var H = C.AUDIO.home, P = H.prog, i = bar % P.length;
+    var ch = P[i], g = H.gain || {};
+    /* 低音：1、3 拍各一下，三角波，1.7 拍收 */
+    homePartial(mtof(ch.b), t0, beat * 1.7, g.bass || 0.17, 'triangle', 0.012);
+    homePartial(mtof(ch.b), t0 + beat * 2, beat * 1.5, (g.bass || 0.17) * 0.82, 'triangle', 0.012);
+    /* 和弦轻扫：第一拍把三个和弦音错开 20ms 扫下来，音量很低，只做和声垫 */
+    for (var c = 0; c < ch.ch.length; c++) {
+      homePartial(mtof(ch.ch[c]), t0 + c * 0.02, beat * 1.6, g.chord || 0.05, 'triangle', 0.02);
+    }
+    /* 八分琶音 */
+    var arp = H.arp || [0, 1, 2, 1];
+    for (var k = 0; k < 8; k++) {
+      var idx = arp[k % arp.length];
+      var m = idx === 3 ? ch.ch[0] + 12 : ch.ch[idx];
+      var v = (g.arp || 0.085) * (0.85 + 0.3 * hJit(bar * 8 + k));
+      homeMallet(mtof(m), t0 + k * beat / 2 + hJit(bar * 8 + k + 99) * 0.006, beat * 0.55, v);
+    }
+    /* 主旋律 */
+    var mel = H.melody || [], mb = bar % P.length;
+    for (var q = 0; q < mel.length; q++) {
+      var n = mel[q];
+      if (n[0] !== mb) continue;
+      homeMallet(mtof(n[2]), t0 + n[1] * beat, n[3] * beat * 1.15, g.lead || 0.125, homeLead);
     }
   }
-  function padStop() {
-    if (padSeq && padSeq.timer) clearInterval(padSeq.timer);
-    padSeq = null;
-  }
-  function padStart() {
-    if (!AC || !bgmGain || !enabled.bgm) return;
-    if (padSeq) { applyBgmGain(); return; }        // 已在放，只更新音量
-    var P = (C.AUDIO && C.AUDIO.pad) || null;
-    if (!P || !P.chords || !P.chords.length) return;
-    var beat = 60 / (P.bpm || 54), bar = beat * 4;
-    var G = P.noteGain || { root: 0.18, chord: 0.11 };
-    padSeq = { idx: 0, nextT: AC.currentTime + 0.12, timer: 0 };
+
+  function homeStart() {
+    if (!AC || !enabled.bgm) return;
+    homeInit();
+    if (!homeGate) return;
+    if (homeSeq) { applyBgmGain(); return; }          // 已在放
+    var H = C.AUDIO.home;
+    if (!H || !H.prog) return;
+    var beat = 60 / (H.bpm || 100), bar = beat * 4;
+    /* 闸门直接置 1：每个音自带 5~20ms 起音，闸门不需要再淡入；
+     * 用 ramp 反而要看音频时钟推进，页面在后台时会停在 0 → 误判"没声音"。 */
+    try {
+      if (homeGate.gain.cancelScheduledValues) homeGate.gain.cancelScheduledValues(AC.currentTime);
+      homeGate.gain.value = 1;
+    } catch (e) {}
+    homeSeq = { bar: 0, nextT: AC.currentTime + 0.04, timer: 0 };
     var tick = function () {
-      if (!padSeq || !AC) return;
-      var horizon = AC.currentTime + bar + 0.4, guard = 0;
-      while (padSeq.nextT < horizon && guard++ < 4) {
-        var ch = P.chords[padSeq.idx % P.chords.length];
-        /* 一个和弦撑满一小节：起音错开 0.18s，听起来像"缓缓铺开"而不是同时砸下 */
-        padNote(ch.root, padSeq.nextT, bar * 0.98, G.root || 0.18);
-        for (var k = 0; k < ch.notes.length; k++) {
-          padNote(ch.notes[k], padSeq.nextT + k * 0.18, bar * 0.96, G.chord || 0.11);
-        }
-        padSeq.nextT += bar;
-        padSeq.idx++;
+      if (!homeSeq || !AC) return;
+      var horizon = AC.currentTime + bar + 0.6, guard = 0;
+      while (homeSeq.nextT < horizon && guard++ < 4) {
+        homeBar(homeSeq.bar, homeSeq.nextT, beat);
+        homeSeq.nextT += bar; homeSeq.bar++;
       }
     };
     tick();
-    padSeq.timer = setInterval(tick, 300);
+    homeSeq.timer = setInterval(tick, 400);           // 提前一小节排程，定时器抖动不影响发音
     applyBgmGain();
   }
 
-  /* ---- v0.11 真人 BGM（mp3，90s 循环） ----
-   * 用 <audio> 元素而不是 WebAudio buffer：长音频 decodeAudioData 在低端机上
-   * 要几十 MB 内存，元素播放省内存、file:// 双击也能用。
-   * 换曲：直接换 src + 淡入，听不到"咔"的断点。
-   * 选哪首由 core.js 决定（bgmSceneKey），这里只负责按键取文件。
-   * home 取不到文件（配置里留空）→ 走上面的合成和弦。 */
+  function homeStop() {
+    if (homeSeq && homeSeq.timer) clearInterval(homeSeq.timer);
+    homeSeq = null;
+    if (homeGate && AC) {
+      try {
+        homeGate.gain.cancelScheduledValues(AC.currentTime);
+        homeGate.gain.setValueAtTime(homeGate.gain.value, AC.currentTime);
+        homeGate.gain.linearRampToValueAtTime(0, AC.currentTime + 0.03);
+      } catch (e) { try { homeGate.gain.value = 0; } catch (e2) {} }
+    }
+    /* 闸门归零后再硬停振荡器，避免已经排进时间轴的音继续响 */
+    var dead = HOME_OSC; HOME_OSC = [];
+    setTimeout(function () {
+      for (var i = 0; i < dead.length; i++) { try { dead[i].stop(); } catch (e) {} }
+    }, 60);
+  }
+
+  /* ---- 关卡 mp3：每首一个 <audio>，开局预载 ----
+   * 切曲 = 暂停旧的 + 播新的，两步同步完成；预载把"点开始后等几百毫秒才响"
+   * 这段等待吃掉了。音量 0→目标用 60ms 抬起，避免爆音。 */
+  var EL = {}, curEl = null, bgmFileNow = '';
+
   function bgmFile(key) {
     var A = C.AUDIO, m = A.bgm || {};
     if (key === 'home') return m.home || '';
@@ -241,64 +311,75 @@
     var i = parseInt(String(key).replace(/^lv/, ''), 10);
     return arr[((isFinite(i) && i > 0 ? i - 1 : 0) % arr.length)];
   }
+  function elFor(file) {
+    if (EL[file]) return EL[file];
+    var el = new Audio();
+    el.loop = true;
+    el.preload = 'auto';
+    el.volume = 0;
+    try { el.src = C.AUDIO.base + file; } catch (e) {}
+    EL[file] = el;
+    return el;
+  }
+  function preloadBgm() {
+    var lv = (C.AUDIO.bgm && C.AUDIO.bgm.lv) || [];
+    for (var i = 0; i < lv.length; i++) elFor(lv[i]);
+  }
+  function pauseAll(except) {
+    for (var k in EL) {
+      if (!Object.prototype.hasOwnProperty.call(EL, k)) continue;
+      var el = EL[k];
+      if (el === except) continue;
+      if (!el.paused) { try { el.pause(); } catch (e) {} }
+      try { el.volume = 0; } catch (e) {}
+    }
+  }
   function bgmTarget() {
     if (!enabled.bgm) return 0;
     return ducked ? C.AUDIO.bgmDuckVolume : C.AUDIO.bgmVolume;
   }
+  /* v0.13 响度对齐：每首乘自己的 trim 系数（见 config 注释），
+   * 不然四首关卡曲之间会差 10dB。 */
+  function trimOf(key) {
+    /* 传进来的可能是文件名（bgm_lv1.mp3），也可能只是键（home），统一去掉扩展名 */
+    var k = String(key || '').replace(/\.mp3$/i, '');
+    var t = (C.AUDIO.trim || {})[k];
+    return (typeof t === 'number' && t > 0) ? t : 1;
+  }
   function applyBgmGain() {
-    /* 先掐掉在跑的淡变：duck / 开关是"立刻要生效"的操作，不能被淡变的旧目标覆盖
-     * （否则弹窗出来时音量会被淡变的 0.55 拉回去，压低形同虚设）。 */
-    if (bgmFade) { clearInterval(bgmFade); bgmFade = 0; }
     var v = bgmTarget();
-    /* 两条链路各自生效：mp3 用元素 volume；和弦用 bgmGain 总线。 */
-    if (bgmEl) { try { bgmEl.volume = Math.max(0, Math.min(1, v)); } catch (e) {} }
+    if (curEl) { try { curEl.volume = Math.max(0, Math.min(1, v * trimOf(bgmFileNow))); } catch (e) {} }
     if (bgmGain && AC) {
-      /* 直接赋值，不走 setTargetAtTime：和弦本身每个音都有 1.1s 渐入，
-       * 总线再叠一层 80ms 的指数逼近属于重复包络；而且 setTargetAtTime
-       * 依赖音频渲染在推进，页面在后台/无音频设备时 .value 会一直读回 0，
-       * 「为什么没声音」这类问题会被掩盖。 */
       try {
         if (bgmGain.gain.cancelScheduledValues) bgmGain.gain.cancelScheduledValues(AC.currentTime);
-        bgmGain.gain.value = v;
+        bgmGain.gain.value = v * trimOf('home');
       } catch (e) {}
     }
   }
-  function bgmFadeTo(to, cb) {
-    if (bgmFade) { clearInterval(bgmFade); bgmFade = 0; }
-    if (!bgmEl) { if (cb) cb(); return; }
-    var from = bgmEl.volume || 0, steps = 6, i = 0;
-    var gap = Math.max(24, Math.round((C.BGM.fadeMs || 320) / steps));
-    bgmFade = setInterval(function () {
-      i++;
-      try { bgmEl.volume = Math.max(0, Math.min(1, from + (to - from) * i / steps)); } catch (e) {}
-      if (i >= steps) { clearInterval(bgmFade); bgmFade = 0; if (cb) cb(); }
-    }, gap);
-  }
-  var bgmFileNow = '';
   function bgmPlay(key) {
     var file = bgmFile(key);
-    if (!file) {                                 // 主页/关卡列表：合成和弦
-      if (bgmEl) { try { bgmEl.pause(); } catch (e) {} }
-      bgmFileNow = '';
-      padStart();
+    if (!file) {                                  // 主页/关卡列表：合成轻音乐
+      pauseAll(null);
+      curEl = null; bgmFileNow = '';
+      homeStart();
       return;
     }
-    padStop();                                   // 进关卡：和弦让位给 mp3
-    if (!bgmEl) {
-      bgmEl = new Audio();
-      bgmEl.loop = true;               // 一首播完直接回到开头，一关之内不断
-      bgmEl.preload = 'auto';
-      bgmEl.volume = 0;
+    homeStop();                                   // 进关卡：主页曲立刻收声
+    preloadBgm();
+    var el = elFor(file);
+    /* 同一首已经在放就别重头开始——1~5 关都是 lv1，换关不该把音乐倒回去 */
+    if (el === curEl && !el.paused) {
+      try { el.volume = Math.min(1, bgmTarget() * trimOf(file)); } catch (e) {}
+      return;
     }
-    if (file === bgmFileNow && !bgmEl.paused) { applyBgmGain(); return; }
-    /* 立刻换 src——不先等淡出。单元素做不了交叉淡变，等 300ms 再换只多一段静音，
-     * 还会被后台节流/定时器暂停卡住；直接换 + 淡入更稳。 */
-    try { bgmEl.src = C.AUDIO.base + file; bgmEl.currentTime = 0; } catch (e) {}
-    bgmFileNow = file;
-    var p = bgmEl.play();
+    pauseAll(el);
+    curEl = el; bgmFileNow = file;
+    try { el.currentTime = 0; } catch (e) {}
+    /* 音量直接给到位：曲目本身从静音开始，不存在爆音；
+     * 淡入只会让"点开始"到出声多等几十毫秒。 */
+    try { el.volume = Math.min(1, bgmTarget() * trimOf(file)); } catch (e) {}
+    var p = el.play();
     if (p && p.catch) p.catch(function () {});
-    bgmEl.volume = 0;
-    bgmFadeTo(bgmTarget());
   }
   function bgmSetScene(key) {
     if (!key || key === bgmScene) { if (unlocked && enabled.bgm) bgmPlay(bgmScene); return; }
@@ -309,6 +390,7 @@
   /* 第一次用户手势（解锁音频）后进入：主页直接起播 */
   function startBgm() {
     if (!unlocked || !enabled.bgm) { applyBgmGain(); return; }
+    preloadBgm();
     bgmPlay(bgmScene);
   }
 
@@ -369,8 +451,8 @@
     setEnabled: function (sfx, bgm) {
       enabled.sfx = sfx; enabled.bgm = bgm;
       if (!bgm) {
-        if (bgmEl) { try { bgmEl.pause(); } catch (e) {} }
-        padStop();                                // v0.12：主和弦也要停，否则只是听不见却还在排程
+        pauseAll(null); curEl = null;             // 关卡 mp3
+        homeStop();                               // 主页轻音乐（同时清掉已排程的音）
       } else if (unlocked) bgmPlay(bgmScene);
       applyBgmGain();
     },
@@ -378,8 +460,7 @@
     setScene: function (k) { bgmSetScene(k); },   // v0.5：主页 / 关卡多场景 BGM
     setVisible: function (v) {                    // 切后台：停调度并静音；回前台恢复
       if (!v) {
-        if (bgmEl) { try { bgmEl.pause(); } catch (e) {} }
-        padStop();                                // 切后台别继续排程，iOS 会积压
+        pauseAll(null); homeStop();               // 切后台：两边都停，别继续排程
       } else if (unlocked && enabled.bgm) {
         bgmPlay(bgmScene);
       }
@@ -393,11 +474,15 @@
   /* 调试/验收钩子：tools/audio_probe.html 用它直接驱动 BGM 并读回状态 */
   audio.bgmInfo = function () {
     var info = {
-      scene: bgmScene, pad: !!padSeq, gain: (bgmGain && bgmGain.gain) ? bgmGain.gain.value : null
+      scene: bgmScene, home: !!homeSeq, gain: (bgmGain && bgmGain.gain) ? bgmGain.gain.value : null,
+      gate: (homeGate && homeGate.gain) ? homeGate.gain.value : null,
+      preloaded: Object.keys(EL).length,
+      playing: (function () { var n = 0; for (var k in EL) if (EL[k] && !EL[k].paused) n++; return n; })()
     };
-    if (bgmEl) {
-      info.src = bgmEl.src; info.file = bgmFileNow;
-      info.volume = bgmEl.volume; info.paused = bgmEl.paused; info.loop = bgmEl.loop;
+    if (curEl) {
+      info.src = curEl.src; info.file = bgmFileNow;
+      info.volume = curEl.volume; info.paused = curEl.paused; info.loop = curEl.loop;
+      info.ready = curEl.readyState;                 // 4 = 预载完成，切过来能立刻响
     }
     return info;
   };
