@@ -269,7 +269,9 @@ check('回到关卡列表', S.page === 'levels');
 tap(70, CFG.SAFE.top + 38);       // 关卡列表的返回箭头
 for (let k = 0; k < 6; k++) step(16);
 check('回到主界面', S.page === 'home', 'page=' + S.page);
-tap(CFG.DESIGN.w - 70, CFG.SAFE.top + 40);
+// v0.7：设置已从右上角挪到右列底部（与「任务」同排），坐标读配置
+const HH = CFG.LAYOUT.HOME;
+tap(CFG.DESIGN.w - HH.entryX, HH.entryY0 + HH.entryGap * 3);
 for (let k = 0; k < 6; k++) step(16);
 check('打开设置面板', S.overlay === 'settings', 'overlay=' + S.overlay);
 tap(480 + 54, CFG.DESIGN.h / 2 - 120);

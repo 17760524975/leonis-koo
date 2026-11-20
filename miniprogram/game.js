@@ -82,7 +82,22 @@ function initAudio() {
       masterGain.connect(AC.destination);
       bgmGain = AC.createGain();
       bgmGain.gain.value = 0;
-      bgmGain.connect(masterGain);
+    /* v0.7：合成 BGM 音符振幅提高后挂一道软限幅兜住瞬态，避免破音；
+     * 没有 createDynamicsCompressor 时静默回退直连。 */
+    var bgmBus = masterGain;
+    try {
+      if (AC.createDynamicsCompressor) {
+        var lim = AC.createDynamicsCompressor();
+        lim.threshold.value = -7;
+        lim.knee.value = 8;
+        lim.ratio.value = 6;
+        lim.attack.value = 0.005;
+        lim.release.value = 0.28;
+        lim.connect(masterGain);
+        bgmBus = lim;
+      }
+    } catch (e) { bgmBus = masterGain; }
+    bgmGain.connect(bgmBus);
     }
   } catch (e) { AC = null; }
 }

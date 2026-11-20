@@ -294,7 +294,7 @@
       var got = s.energy - was;
       if (why) toast(got > 0 ? (why + ' +' + got + ' 体力') : '体力已满');
     }
-    /* 进关扣 1 点体力；不足返回 false（由调用方弹「体力不足」） */
+    /* 进关扣 energyCostLevel 点体力（v0.7 起为 2）；不足返回 false（由调用方弹「体力不足」） */
     function spendEnergy() {
       var E = C.ECON, s = state.save;
       syncEnergy(true);
@@ -1878,17 +1878,52 @@
         ctx.restore();
       }
 
-      /* ================= HUD：巧币 + 体力（左上） ================= */
-      var hy = view.safeTop + 58;
-      drawIcon('coin', 84, hy, COL.gold, 1.0);
-      text(String(state.save.coin || 0), 114, hy, 32, COL.text, 'left', '700');
-      var ey = hy + 58;
-      drawIcon('energy', 84, ey, '#3DBEF0', 0.9);
-      text((state.save.energy || 0) + '/' + state.save.energyMax, 114, ey, 26, COL.text, 'left', '600');
-      ctx.beginPath(); ctx.arc(262, ey, 20, 0, Math.PI * 2);
-      ctx.fillStyle = COL.progressA; ctx.fill();
-      drawIcon('plus', 262, ey, '#FFFFFF', 0.42);
-      addHit(262, ey, 64, 64, 'hud_energy');
+      /* ================= HUD：巧币 + 体力（左上，v0.7 胶囊底框） =================
+       * 对齐用户参考图：图标压在胶囊左端外侧、数字统一 30px/700 白字、
+       * 胶囊半透明深底 + 亮描边。整体比 v0.6 上移 20px（贴近安全区顶部）。
+       * 几何全部取自 config.LAYOUT.HUD，验收脚本读同一组数据。 */
+      var HU = C.LAYOUT.HUD;
+      var hy = view.safeTop + HU.y0;
+      var ey = hy + HU.rowGap;
+      function hudPill(iconName, iconColor, iconScale, label, rowY, padRight) {
+        ctx.font = font(HU.fontSize, HU.fontWeight);
+        var tw = ctx.measureText(label).width;
+        var px = HU.iconX + HU.pillDx;
+        var pw = HU.padL + tw + (padRight || HU.padR);
+        var ph = HU.pillH;
+        ctx.save();
+        shadow(10, 4, 'rgba(44,58,75,0.22)');
+        rr(px, rowY - ph / 2, pw, ph, ph / 2);
+        ctx.fillStyle = HU.pillFill;
+        ctx.fill();
+        noShadow();
+        ctx.lineWidth = HU.border;
+        ctx.strokeStyle = HU.pillStroke;
+        ctx.stroke();
+        ctx.restore();
+        drawIcon(iconName, HU.iconX, rowY, iconColor, iconScale);
+        text(label, px + HU.padL, rowY + 1, HU.fontSize, HU.textColor, 'left', HU.fontWeight);
+        return px + pw;
+      }
+      hudPill('coin', COL.gold, HU.coinScale, String(state.save.coin || 0), hy);
+      /* 体力行右侧多留 HU.plusPad，给「+」圆钮腾位置，避免压住分母 */
+      var energyRight = hudPill('energy', '#3DBEF0', HU.energyScale,
+        (state.save.energy || 0) + '/' + state.save.energyMax, ey, HU.plusPad);
+
+      /* 体力「+」：骑在胶囊右端（参考图同位置），点开免费体力面板 */
+      var pcx = energyRight - HU.plusInset, pcy = ey, pr = HU.plusR;
+      ctx.save();
+      shadow(8, 3, 'rgba(38,150,86,0.38)');
+      ctx.beginPath(); ctx.arc(pcx, pcy, pr, 0, Math.PI * 2);
+      ctx.fillStyle = HU.plusFill;
+      ctx.fill();
+      noShadow();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.stroke();
+      ctx.restore();
+      drawIcon('plus', pcx, pcy, '#FFFFFF', 0.5);
+      addHit(pcx, pcy, HU.plusHit, HU.plusHit, 'hud_energy');
 
       /* 主页入口：图标 + 下方小字。
        * v0.6 修「图标与标签重叠」：图标 96→88、标签偏移 76→68、行距 130→142，
@@ -1957,10 +1992,9 @@
       setEntry('set_t4', 'tangram4', '四巧板', H.set4Y);
       setEntry('set_t7', 'tangram7', '七巧板', H.set7Y);
 
-      var gy = view.safeTop + 40;
-      var gb = { id: 'settings', x: C.DESIGN.w - 70, y: gy, w: 76, h: 76, variant: 'tool', icon: 'gear' };
-      addHit(gb.x, gb.y, gb.w, gb.h, 'settings');
-      drawButton(gb);
+      /* v0.7：设置从右上角挪到右列底部，与左列「任务」同排（页面中段），
+       * 样式与其它入口统一成「图标 + 下方小字」，不再孤零零贴在屏幕角上。 */
+      homeEntry('settings', 'gear', '设置', rx, e0 + eg * 3);
 
       text('已获得 ' + totalStars() + '/' + (LEVELS.length * 3) + ' 星', C.DESIGN.w / 2, 1360, 24, COL.textSub, 'center');
     }

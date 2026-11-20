@@ -60,7 +60,23 @@
       masterGain.connect(AC.destination);
       bgmGain = AC.createGain();
       bgmGain.gain.value = 0;
-      bgmGain.connect(masterGain);
+      /* v0.7：合成 BGM 音符振幅提到 0.115/0.19/0.14 后，多音叠加峰值接近 0.45，
+       * 这里挂一道软限幅（阈值 -8dB / 6:1）兜住瞬态，避免手机外放破音。
+       * 老基础库或音频实现没有 createDynamicsCompressor 时静默回退直连，不影响发声。 */
+      var bgmBus = masterGain;
+      try {
+        if (AC.createDynamicsCompressor) {
+          var lim = AC.createDynamicsCompressor();
+          lim.threshold.value = -7;
+          lim.knee.value = 8;
+          lim.ratio.value = 6;
+          lim.attack.value = 0.005;
+          lim.release.value = 0.28;
+          lim.connect(masterGain);
+          bgmBus = lim;
+        }
+      } catch (e) { bgmBus = masterGain; }
+      bgmGain.connect(bgmBus);
     } catch (e) { AC = null; }
   }
   function resumeAudio() {

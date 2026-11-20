@@ -9,7 +9,7 @@
   'use strict';
 
   return {
-    version: 'v0.6',
+    version: 'v0.7',
 
     /* ---------- 品牌（v0.6 改名「方寸巧拼」） ----------
      * 游戏名只在这里定义一次：主页标题、分享文案、工程名都从这里取，
@@ -85,6 +85,23 @@
         entryX: 104, entryW: 88, entryY0: 430, entryGap: 142,
         labelDy: 68, labelSize: 20,
         startY: 1010, set4Y: 1150, set7Y: 1250
+      },
+      /* v0.7 HUD：巧币 / 体力做成带描边的胶囊（参考用户给的截图）。
+       * 图标压在胶囊左端外侧，数字统一 fontSize/700 白字，两行间距 rowGap。
+       * 验收脚本读这组数据算净空，不再抄魔数。 */
+      HUD: {
+        iconX: 96,                        // 图标中心 x
+        y0: 38,                           // 巧币行中心距安全区顶（v0.6=58，上移 20）
+        rowGap: 66,                       // 两行中心间距
+        pillH: 56, pillDx: 6,             // 胶囊高 / 左端相对图标中心的偏移
+        padL: 34, padR: 26,               // 胶囊内左右留白（左侧要容下压在端头的图标）
+        fontSize: 30, fontWeight: '700',  // 两行同字号同字重（v0.6 是 32 与 26）
+        textColor: '#FFFFFF',
+        pillFill: 'rgba(30,40,52,0.72)',  // 深底（换肤后仍压在浅色底上）：白字对比度约 7:1
+        pillStroke: 'rgba(255,255,255,0.62)',
+        border: 2.5,
+        plusR: 24, plusInset: 6, plusHit: 76, plusFill: '#46C46B', plusPad: 34,
+        coinScale: 1.45, energyScale: 1.32   // 图标直径 ≈ 胶囊高的 0.7~0.75，才压得住整条胶囊
       }
     },
 
@@ -277,7 +294,7 @@
       energyMax: 16,          // 体力上限
       energyInit: 16,         // 初始体力
       energyRecoverSec: 300,  // 每 5 分钟恢复 1 点（离线和在线都算）
-      energyCostLevel: 1,     // 进入一关消耗
+      energyCostLevel: 2,     // 进入一关消耗（v0.7：1 → 2，用户要求）
       freeEnergyPerDay: 3,    // 每日免费体力次数上限
       freeEnergyShare: 2,     // 「分享获得」+2
       freeEnergyAdMul: 4,     // 「4 倍获得」= 2×4 = 8
@@ -377,7 +394,10 @@
       bgmVolume: 1.0,           // 合成 BGM 总线（常态）
       bgmDuckVolume: 0.55,      // 结算/弹窗出现时压低（v0.5=0.18，已听不清）
       bgmLegacyVolume: 0.30,    // mp3 / element 回退路径的音量上限
-      bgmNote: { root: 0.052, lead: 0.078, other: 0.058 },
+      /* v0.7 二次提音量：v0.6 的 0.052/0.078/0.058 实测峰值仍只有 0.13（≈-17.7dBFS），
+       * 手机外放仍偏小。现在提到 0.15/0.26/0.19，主旋律+根音峰值 0.41（≈-7.7dBFS），
+       * 约为 v0.6 的 +10dB；总线保持 1.0，靠 bgmLimit 软限幅兜住叠加峰值。 */
+      bgmNote: { root: 0.15, lead: 0.26, other: 0.19 },
       /* v0.6：换真人做的 BGM 只需两步——把音频放进 assets/audio/、把这里改成 false。
        * true=用代码合成的 5 首场景曲（零音频文件）；false=走 bgm_main.mp3 精确循环。 */
       useSynthBgm: true,

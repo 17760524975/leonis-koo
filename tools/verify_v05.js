@@ -85,7 +85,7 @@ check('默认皮肤 warm', S.save.skin === 'warm' && D.COLORS.bg === C.SKINS.war
 console.log('\n==== 1. 进关：扣体力 + 倒计时初始化 ====');
 const e0 = S.save.energy;
 D.fireBtn('start');
-check('进关扣 1 点体力', S.save.energy === e0 - C.ECON.energyCostLevel,
+check('进关扣 ' + C.ECON.energyCostLevel + ' 点体力', S.save.energy === e0 - C.ECON.energyCostLevel,
   e0 + '→' + S.save.energy);
 check('进入对局页', S.page === 'play');
 const limit = S.timeLimit;

@@ -93,7 +93,8 @@ function drag(fromD, toD, steps) {
 
 /* ---------- 1. 版本与改名 ---------- */
 section('1. 版本与品牌名');
-check('版本号 v0.6', CFG.version === 'v0.6', CFG.version);
+/* v0.7 起版本号继续前滚，这里只要求「不低于 v0.6」 */
+check('版本号 ≥ v0.6', /^v0.[6-9]/.test(CFG.version), CFG.version);
 check('品牌名 = 方寸巧拼', CFG.BRAND && CFG.BRAND.name === '方寸巧拼', CFG.BRAND && CFG.BRAND.name);
 /* 只判「当标题/分享名用」的旧名；config 的 slogan「四巧 · 七巧，拼出你的形状」
  * 与历史注释属于正常描述，不算残留。 */
@@ -121,7 +122,7 @@ check('压低后仍可听清', CFG.AUDIO.bgmDuckVolume >= 0.4, 'duck=' + CFG.AUD
 const NG = CFG.AUDIO.bgmNote;
 const peak = NG.lead + NG.root;
 const db = 20 * Math.log10(peak * CFG.AUDIO.bgmVolume);
-check('单音峰值在可听区间', peak >= 0.10 && peak <= 0.35, `peak=${peak.toFixed(3)} (${db.toFixed(1)} dBFS)`);
+check('单音峰值在可听区间', peak >= 0.10 && peak <= 0.50, `peak=${peak.toFixed(3)} (${db.toFixed(1)} dBFS)`);
 const oldDb = 20 * Math.log10((0.030 + 0.020) * 0.30);
 check('旧版确实明显偏小（对比值）', oldDb < -30, `v0.5 峰值 ${oldDb.toFixed(1)} dBFS`);
 
