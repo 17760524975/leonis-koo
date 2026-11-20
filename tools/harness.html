@@ -16,6 +16,8 @@
 <script src="../preview/js/judge.js"></script>
 <script src="../preview/js/levels.js"></script>
 <script src="../preview/js/core.js"></script>
+<script src="../preview/js/cloud.js"></script>
+<script src="../preview/js/ad.js"></script>
 <script>
 /* 版式验收 harness（浏览器截图用，不开真实交互、不放音频）
  * 参数：
@@ -90,6 +92,8 @@
       audio: { unlock: function () {}, setEnabled: function () {}, play: function () {}, duck: function () {} },
       vibrate: function () {},
       images: images,
+      ad: window.TANGRAM_AD.createAd(),          // v0.9：截图里画出广告位占位框
+      cloud: window.TANGRAM_CLOUD.createCloud(), // 浏览器无云：榜单走降级分支
       onHide: function () {},
       onShow: function () {}
     });
@@ -165,7 +169,19 @@
       S.save.streak = 7;
       var rtab = +(q.match(/tab=(\d+)/) || [])[1];
       if (!isNaN(rtab)) S.rankTab = rtab;
+      /* v0.9：ranklive=1 注入「云端已返回的一组真实形状」数据，
+       * 因为浏览器预览没有云环境，默认会显示"未开启云同步" */
+      if (/ranklive=1/.test(q)) {
+        S.rankList = { list: [
+          { nick: '巧手0001', v: 26, me: false }, { nick: '巧手3308', v: 21, me: false },
+          { nick: '巧手7752', v: 18, me: false }, { nick: '巧手0921', v: 12, me: true },
+          { nick: '巧手4417', v: 9, me: false }, { nick: '巧手6620', v: 6, me: false }
+        ], me: { nick: '巧手0921', v: 12, rank: 4 } };
+        S.net = { on: true, ready: true, nick: '巧手0921', syncing: false, ts: 1, err: '' };
+      }
+      if (/net=1/.test(q)) S.net = { on: true, ready: true, nick: '巧手0921', syncing: false, ts: 1, err: '' };
     } else if (screen === 'settings') {
+      if (/net=1/.test(q)) S.net = { on: true, ready: true, nick: '巧手0921', syncing: false, ts: 1, err: '' };
       S.page = 'home'; S.fade = 1; S.overlay = 'settings';
     } else if (screen === 'energy' || screen === 'tasks' || screen === 'invite' ||
                screen === 'desktop' || screen === 'skin') {

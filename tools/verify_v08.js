@@ -194,6 +194,10 @@ check('第 6 连胜不再发奖（按 5 的倍数）', S.save.streak === 6 && S.
 
 /* ---------- 5. 排行榜 ---------- */
 section('5. 排行榜');
+/* v0.9：榜单默认走云开发；这里验的是「7 行榜单 + 榜尾自己」的版式，
+ * 所以临时打开示例数据（useMock），云榜另由 verify_v09 覆盖。 */
+CFG.RANK.useMock = true;
+S.rankList = null;
 S.overlay = 'rank'; S.rankT = 999; S.rankTab = 0;
 S.save.starOf = { 1: 3, 2: 2, 3: 1 };
 clearRec();
@@ -217,6 +221,7 @@ clearRec();
 tap(CFG.DESIGN.w / 2 + 186, 495);
 step(16);
 check('点「好友榜」切页签', S.rankTab === 2, 'tab=' + S.rankTab);
+CFG.RANK.useMock = false;   // 复原，避免污染后续用例
 
 /* 从主页进入 → 关闭应回主页，不误回结算页 */
 S.overlay = null; S.page = 'home';

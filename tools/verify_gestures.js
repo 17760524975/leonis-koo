@@ -16,6 +16,7 @@ require('../js/levels.js');
 const G = require('../js/geom.js');
 const J = require('../js/judge.js');
 const C = require('../js/config.js');
+const CFG = C;   // v0.9：读版式常量用（工具栏 y 不再写死）
 const CORE = require('../js/core.js');
 const S7 = globalThis.TANGRAM_SETS.tangram7;
 
@@ -370,7 +371,7 @@ console.log('\n==== v0.3.2 B1 新手柄位置 / 质心拖拽 / 命中优先 ====
   const p = put('P', 500, 500);
   tapD(w2d(500,500)[0], w2d(500,500)[1]); S.lastTap = null;
   const was = p.flipped;
-  tapD(375, 1470);   // flip 按钮：第 3 个工具，中心 x=375 y=1470
+  tapD(375, CFG.LAYOUT.TOOLBAR.y + CFG.LAYOUT.TOOLBAR.h / 2);   // flip 按钮：第 3 个工具，y 读配置（v0.9 下移）
   check('B1 用例8f：底部翻转按钮仍正常',
     !!p.flip || p.flipped !== was, 'flip=' + JSON.stringify(p.flip) + ' flipped=' + p.flipped);
 }
@@ -478,7 +479,7 @@ console.log('\n==== V4 提示三档手动降级 / hint_used 星级封顶（A3）
 {
   reset(0);
   const seq = [S.hintTier];
-  for (let i = 0; i < 4; i++) { tapD(511, 1470); seq.push(S.hintTier); }
+  for (let i = 0; i < 4; i++) { tapD(511, CFG.LAYOUT.TOOLBAR.y + CFG.LAYOUT.TOOLBAR.h / 2); seq.push(S.hintTier); }
   check('V4 提示手动降级 1→2→3 单向、本关内不回升',
     JSON.stringify(seq) === JSON.stringify([1, 1, 2, 3, 3]) && S.hintUsed === true,
     'hintTier 序列=' + seq.join('→') + '（第 1 次为启用提示+高亮）');

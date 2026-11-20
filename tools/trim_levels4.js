@@ -62,6 +62,10 @@ const scored = OLD.map((lv, i) => {
 /* 最简单的两关：原 1、2（ds 最低，形状最规整） */
 const easy = [scored[0], scored[1]];
 
+/* v0.9：必须保留的关卡（原 id）——玩家点名要 T 字型（原 120 关，最像实物的一个）。
+ * pin 的关不受「视觉复杂度」排序与指纹去重影响，位置仍按原 id 排序（T 落在最后一关）。 */
+const PINNED = [120];
+
 /* 复杂候选：排除前两关，按 score 降序 */
 const pool = scored.slice(2).sort((a, b) => b.score - a.score);
 const seen = new Set();
@@ -71,8 +75,16 @@ function sig(s) {
 }
 
 const chosen = easy.slice();
+/* 先放 pin 的关：占位后其余按分数补满，总数为 30 */
+const pinned = PINNED.map(id => scored[id - 1]).filter(Boolean);
+for (const c of pinned) {
+  if (chosen.indexOf(c) >= 0) continue;
+  seen.add(sig(c));
+  chosen.push(c);
+}
 for (const c of pool) {
   if (chosen.length >= 30) break;
+  if (chosen.indexOf(c) >= 0) continue;
   if (seen.has(sig(c))) continue;         // 同款形状跳过
   seen.add(sig(c));
   chosen.push(c);

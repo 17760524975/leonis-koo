@@ -1,0 +1,9 @@
+{
+  "name": "player",
+  "version": "1.0.0",
+  "description": "方寸巧拼 · 登录 / 云存档 / 排行榜",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}

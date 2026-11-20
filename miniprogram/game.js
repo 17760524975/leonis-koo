@@ -9,6 +9,8 @@ var geom = require('./js/geom.js');
 var judge = require('./js/judge.js');
 var data = require('./js/levels.js');
 var core = require('./js/core.js');
+var cloudLib = require('./js/cloud.js');     // v0.9：微信登录 + 云存档 + 真实榜单
+var adLib = require('./js/ad.js');           // v0.9：banner / 激励视频 / 插屏
 
 /* ---------------- 画布 ---------------- */
 var canvas = wx.createCanvas();
@@ -476,6 +478,8 @@ function boot() {
     audio: audio,
     vibrate: vibrate,
     images: images,
+    cloud: cloudLib.createCloud(),           // 没配 CLOUD.envId 时 enabled() 返回 false
+    ad: adLib.createAd(),                    // 没配 unitId 时 banner 空操作、rewarded 不存在
     share: function (opt) {                   // v0.5 邀请有礼 / v0.8 分享成品图案
       opt = opt || {};
       var title = opt.title || '方寸巧拼 · 一起来拼图！';

@@ -1,5 +1,5 @@
 {
-  "description": "方寸巧拼 v0.6（四巧板 120 关 + 七巧板 60 关）",
+  "description": "方寸巧拼 v0.9（四巧板 30 关 + 七巧板 60 关 + 云开发）",
   "appid": "wxde70724064c8f819",
   "projectname": "fangcun-qiaopin",
   "compileType": "game",
@@ -39,5 +39,6 @@
   "condition": {},
   "simulatorPluginLibVersion": {},
   "isGameTourist": false,
-  "editorSetting": {}
+  "editorSetting": {},
+  "cloudfunctionRoot": "cloudfunctions/"
 }

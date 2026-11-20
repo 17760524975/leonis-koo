@@ -220,19 +220,35 @@ step(16);
 const S = game.state;
 check('首屏是主界面、默认四巧板', S.page === 'home' && S.setKey === 'tangram4' && game._debug.LEVELS.length === 30);
 
-// 托盘：7 块共用 scale=1，且落在带内、不压工具栏
+// 托盘 v0.9：不再是 2×2 槽位网格，改成「散放」，这里验散放的三条硬约束
 {
   const b = game._debug.buildSet('tangram7');
-  const fit = b.fit, TRAY = S7.tray;
-  const inside = b.SLOT_POS.every(s =>
-    s.y - s.h / 2 >= TRAY.top - 0.01 && s.y + s.h / 2 <= TRAY.bottom + 0.01 &&
-    s.x - s.w / 2 >= C.LAYOUT.BOARD.x - 0.01 &&
-    s.x + s.w / 2 <= C.LAYOUT.BOARD.x + C.LAYOUT.BOARD.size + 0.01);
-  check('托盘 7 格完整可见、不裁切（2 列 × 4 行）', fit.cols === 2 && fit.rows === 4 && fit.totalW <= C.LAYOUT.BOARD.size && fit.totalH <= fit.band && inside,
-    `${fit.cols}列×${fit.rows}行 宽 ${fit.totalW.toFixed(1)}/${C.LAYOUT.BOARD.size} 高 ${fit.totalH.toFixed(1)}/${fit.band}`);
+  const TRAY = Object.assign({}, C.LAYOUT.TRAY, (C.LAYOUT.TRAY_OVERRIDE || {}).tangram7 || {});
+  const bbOf = id => b.TRAY_BB[id];
+  /* 落点对的是「质心」，不是 bbox 中心：算外框要加上 (bbox 中心 - 质心) 的偏移 */
+  const inside = b.SLOT_POS.every((s, i) => {
+    const bb = bbOf(b.ds.pieceOrder[i]);
+    const dx = bb.cx - bb.ccx, dy = bb.cy - bb.ccy;
+    const top = s.y + dy - bb.h / 2, bot = s.y + dy + bb.h / 2;
+    const lf = s.x + dx - bb.w / 2, rt = s.x + dx + bb.w / 2;
+    return top >= TRAY.top - 0.01 && bot <= TRAY.bottom + 0.01 &&
+      lf >= C.LAYOUT.BOARD.x - 0.01 &&
+      rt <= C.LAYOUT.BOARD.x + C.LAYOUT.BOARD.size + 0.01;
+  });
+  const minVis = Math.min.apply(null, b.SLOT_POS.map(s => s.vis));
+  check('散放的 7 块都在带内、不越界', inside &&
+    b.SLOT_POS.length === 7, `slots=${b.SLOT_POS.length}`);
+  check('每块可见面积 ≥ minVisible（点得到、看得清）',
+    minVis >= C.LAYOUT.PILE.minVisible - 0.001, `最小可见 ${(minVis * 100).toFixed(0)}%`);
+  /* 质心互不重合：否则点质心会选错块（命中规则取最上层） */
+  let minD = 1e9;
+  for (let i = 0; i < b.SLOT_POS.length; i++) for (let j = i + 1; j < b.SLOT_POS.length; j++) {
+    minD = Math.min(minD, Math.hypot(b.SLOT_POS[i].x - b.SLOT_POS[j].x, b.SLOT_POS[i].y - b.SLOT_POS[j].y));
+  }
+  check('两两质心间距 ≥ 40（点质心必定选中自己）', minD >= 40, '最小间距 ' + minD.toFixed(1));
   check('不压进度条 / 工具栏 / 底部安全区',
-    TRAY.top >= C.LAYOUT.PROGRESS.y + C.LAYOUT.PROGRESS.h &&
-    TRAY.bottom <= C.LAYOUT.TOOLBAR.y - 10 && TRAY.bottom <= C.DESIGN.h - C.SAFE.bottom,
+    TRAY.top >= C.LAYOUT.PROGRESS.y + C.LAYOUT.PROGRESS.h + 8 &&
+    TRAY.bottom <= C.LAYOUT.TOOLBAR.y - 8 && TRAY.bottom <= C.DESIGN.h - C.SAFE.bottom,
     `tray ${TRAY.top}~${TRAY.bottom}  progress=${C.LAYOUT.PROGRESS.y} toolbar.y=${C.LAYOUT.TOOLBAR.y}`);
   check('7 块共用一个 uniform scale（trayTransform.s 恒为 1）',
     S7.dataset.pieceOrder.length === 7 && U === S7.dataset.unitScale);

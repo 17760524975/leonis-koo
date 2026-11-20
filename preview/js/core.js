@@ -39,6 +39,121 @@
   var DEFAULT_SET = D.defaultSet || 'tangram4';
   var FALLBACK_CHAP = ['启蒙', '熟悉', '转折', '嵌套', '交错', '硬骨头'];
 
+  /* ==================================================================== */
+  /* v0.9 托盘「散放打包」
+   * 旧版是 2×2 槽位网格：槽宽 = 板宽 + pad，再被 minW/minH 抬高下限，
+   * 四块板就要 700×410，加整排浅底框，半个屏都是工具区。
+   * 新版把板件按 1:1 随手摊在一条带子里，允许部分重叠，约束三条：
+   *   ① 每块可见面积 ≥ PILE.minVisible（保证点得到）；
+   *   ② 质心不被别的板压住（点质心必定命中它自己）；
+   *   ③ 完整落在 band 内（不压进度条/工具栏）。
+   * 做法：按面积从大到小贪心；候选质心在 12px 网格上搜，代价 =
+   *   覆盖率×100 + 质心被占×60 + 抖动 + 离带中心的距离（保持成团不贴边）。
+   * 纯计算、无随机数（抖动是坐标哈希），同一份数据每次结果一致 —— 这样才能截图对账。
+   */
+  function pilePack(order, TRAY, LOCAL, TRAY_BB, WS) {
+    var PL = C.LAYOUT.PILE;
+    var cell = PL.cell || 8, step = PL.step || 12;
+    var pad = PL.pad || TRAY.pad || 10;
+    var bx0 = LAY.BOARD.x + pad, bx1 = LAY.BOARD.x + LAY.BOARD.size - pad;
+    var by0 = TRAY.top, by1 = TRAY.bottom;
+    var items = order.map(function (id, i) {
+      var poly = LOCAL[id].map(function (v) { return [v[0] * WS, v[1] * WS]; });
+      var bb = G.bbox([poly]);
+      var ce = G.centroid(poly);
+      var cells = [], x, y;
+      for (x = bb[0]; x < bb[2]; x += cell) {
+        for (y = bb[1]; y < bb[3]; y += cell) {
+          var px = x + cell / 2, py = y + cell / 2;
+          if (G.pointInPoly([px, py], poly)) cells.push([px - ce[0], py - ce[1]]);
+        }
+      }
+      return {
+        id: id, slotIdx: i, poly: poly,
+        cx: ce[0], cy: ce[1],
+        minX: bb[0] - ce[0], maxX: bb[2] - ce[0],
+        minY: bb[1] - ce[1], maxY: bb[3] - ce[1],
+        w: bb[2] - bb[0], h: bb[3] - bb[1],
+        area: Math.abs(G.area(poly)), cells: cells
+      };
+    });
+    /* 大块先放：小块能钻进大块让出的空隙，整体更紧 */
+    var queue = items.slice().sort(function (a, b) { return b.area - a.area; });
+    /* 格子用整数键（ix*4096+iy）：字符串拼键在 7 块板的搜索里要花 200ms+，
+     * 整数键能把打包从 ~300ms 压到 ~40ms（手机上开机卡顿肉眼可见）。 */
+    var occ = {}, near = {}, keys = 0;      // cellKey → [占这个格子的 slotIdx...]
+    function cellKey(x, y) { return Math.round(x / cell) * 4096 + Math.round(y / cell); }
+    function occAt(x, y) {
+      var a = occ[cellKey(x, y)];
+      return !!(a && a.length);
+    }
+    function mark(x, y, slotIdx) {
+      var k = cellKey(x, y);
+      if (!occ[k]) { occ[k] = []; keys++; }
+      occ[k].push(slotIdx);
+      /* 八邻域记成"贴边"：只用来算一点间距代价，让相邻两块之间留一条缝，
+       * 否则散放的板会连成一整块色斑，看不出有几块。 */
+      var ix = Math.round(x / cell), iy = Math.round(y / cell);
+      for (var dx = -1; dx <= 1; dx++) for (var dy = -1; dy <= 1; dy++) near[(ix + dx) * 4096 + (iy + dy)] = 1;
+    }
+    var midX = (bx0 + bx1) / 2, midY = (by0 + by1) / 2;
+    for (var qi = 0; qi < queue.length; qi++) {
+      var it = queue[qi], best = null;
+      var loX = bx0 - it.minX, hiX = bx1 - it.maxX;
+      var loY = by0 - it.minY, hiY = by1 - it.maxY;
+      for (var gx = loX; gx <= hiX + 0.01; gx += step) {
+        for (var gy = loY; gy <= hiY + 0.01; gy += step) {
+          var cov = 0, c;
+          for (c = 0; c < it.cells.length; c++) {
+            if (occAt(gx + it.cells[c][0], gy + it.cells[c][1])) cov++;
+          }
+          var covR = cov / Math.max(1, it.cells.length);
+          var nearHit = 0;
+          for (c = 0; c < it.cells.length; c++) {
+            if (near[cellKey(gx + it.cells[c][0], gy + it.cells[c][1])]) nearHit++;
+          }
+          /* 坐标哈希抖动：±1 个 step 的"随手摊开"感，且完全可复现 */
+          var h = Math.sin(gx * 12.9898 + gy * 78.233 + qi * 37.719) * 43758.5453;
+          var jit = (h - Math.floor(h)) * (PL.jitter || 0);
+          var cost = covR * 100
+            + nearHit / Math.max(1, it.cells.length) * 34
+            + (occAt(gx, gy) ? 60 : 0)
+            + jit
+            + Math.abs(gx - midX) * 0.012
+            + Math.abs(gy - midY) * 0.010;
+          if (!best || cost < best.cost) best = { x: gx, y: gy, cost: cost, cov: covR };
+        }
+      }
+      if (!best) best = { x: midX, y: midY, cost: 0, cov: 1 };   // 带子放不下时的兜底
+      it.x = best.x; it.y = best.y; it.cov = best.cov;
+      for (var m = 0; m < it.cells.length; m++) mark(it.x + it.cells[m][0], it.y + it.cells[m][1], it.slotIdx);
+    }
+    /* 回收：按 pieceOrder 还原顺序，并把可见率回填（验收脚本要读） */
+    var slots = [], minVis = 1, ux0 = 1e9, ux1 = -1e9, uy0 = 1e9, uy1 = -1e9;
+    for (var i2 = 0; i2 < items.length; i2++) {
+      var a = items[i2];
+      var hidden = 0;
+      for (var n = 0; n < a.cells.length; n++) {
+        var xx = a.x + a.cells[n][0], yy = a.y + a.cells[n][1];
+        var k2 = cellKey(xx, yy);
+        /* 绘制顺序就是 pieceOrder（slotIdx 大的盖在上面）：
+         * 这个格子上若有一块 slotIdx 更大的板，本块的这一格就被压住了。 */
+        var arr = occ[k2] || [];
+        for (var z = 0; z < arr.length; z++) if (arr[z] > a.slotIdx) { hidden++; break; }
+        if (xx < ux0) ux0 = xx; if (xx > ux1) ux1 = xx;
+        if (yy < uy0) uy0 = yy; if (yy > uy1) uy1 = yy;
+      }
+      a.vis = 1 - hidden / Math.max(1, a.cells.length);
+      if (a.vis < minVis) minVis = a.vis;
+      slots[a.slotIdx] = { x: a.x, y: a.y, w: a.w, h: a.h, vis: a.vis, cover: a.cov };
+    }
+    return {
+      slots: slots,
+      fit: { w: ux1 - ux0, h: uy1 - uy0 },
+      info: { minVisible: minVis, cells: keys, band: [by0, by1], pad: pad }
+    };
+  }
+
   function buildSet(key) {
     var meta = (SETS && SETS[key]) || {};
     var ds = (key === DEFAULT_SET) ? D.dataset : meta.dataset;
@@ -48,20 +163,21 @@
     for (id in ds.pieces) {
       LOCAL[id] = G.makeLocal(ds.pieces[id].base).map(function (v) { return [v[0] * UNIT, v[1] * UNIT]; });
     }
-    /* 每块板的 bbox 中心与尺寸（设计像素）。1:1 摆放时用 bbox 中心对齐槽位中心，
-     * 不能用质心——质心在板内部偏一侧，直接对齐会让视觉重心偏移。 */
+    /* 每块板的 bbox 与质心（设计像素）。1:1 摆放时把「质心」对齐槽位中心：
+     * 质心一定落在板内部，玩家点槽位中心必然点到这块（旧版对齐 bbox 中心，
+     * 直角三角形的 bbox 中心在斜边外侧，只能靠 44px 圆形热区兜底）。 */
     for (id in LOCAL) {
       var bb = G.bbox([LOCAL[id]]);
+      var ce = G.centroid(LOCAL[id]);
       TRAY_BB[id] = {
         cx: (bb[0] + bb[2]) / 2 * WS, cy: (bb[1] + bb[3]) / 2 * WS,
+        ccx: ce[0] * WS, ccy: ce[1] * WS,
         w: (bb[2] - bb[0]) * WS, h: (bb[3] - bb[1]) * WS
       };
     }
-    /* 托盘槽位：按 DS.pieceOrder 自适应行列；七巧板 7 块用独立 tray 参数，
-     * 全部槽位共用 scale=1（严禁逐块 fit-to-slot），拿起后尺寸不突变。 */
+    /* 托盘：v0.9 起不再是 2×2 槽位网格，改成「散放打包」（允许部分重叠）。
+     * 参数在 config.LAYOUT.PILE / TRAY，七巧板带子加高走 TRAY_OVERRIDE。 */
     var TRAY = meta.tray || C.LAYOUT.TRAY;
-    /* v0.3.4 A1：只覆盖「槽位绘制间距」，不改数据集、不改判定。
-     * 覆盖值放 config.LAYOUT.TRAY_OVERRIDE，策划改数只改配置表。 */
     var ovr = C.LAYOUT.TRAY_OVERRIDE && C.LAYOUT.TRAY_OVERRIDE[key];
     if (ovr) {
       var merged = {}, tk;
@@ -69,41 +185,17 @@
       for (tk in ovr) merged[tk] = ovr[tk];
       TRAY = merged;
     }
-    var order = ds.pieceOrder, n = order.length, cols = TRAY.cols, rows = Math.ceil(n / cols);
-    var w = [], h = [], i;
-    for (i = 0; i < n; i++) {
-      var b = TRAY_BB[order[i]];
-      w[i] = Math.max(TRAY.minW, b.w + TRAY.padX * 2);
-      h[i] = Math.max(TRAY.minH, b.h + TRAY.padY * 2);
-    }
-    var colW = [], rowH = [];
-    for (i = 0; i < cols; i++) colW[i] = 0;
-    for (i = 0; i < rows; i++) rowH[i] = 0;
-    for (i = 0; i < n; i++) {
-      colW[i % cols] = Math.max(colW[i % cols], w[i]);
-      rowH[Math.floor(i / cols)] = Math.max(rowH[Math.floor(i / cols)], h[i]);
-    }
-    var totalW = (cols - 1) * TRAY.gapX, totalH = (rows - 1) * TRAY.gapY;
-    for (i = 0; i < cols; i++) totalW += colW[i];
-    for (i = 0; i < rows; i++) totalH += rowH[i];
-    var x0 = LAY.BOARD.x + (LAY.BOARD.size - totalW) / 2;
+    var PACK = pilePack(ds.pieceOrder, TRAY, LOCAL, TRAY_BB, WS);
+    var SLOT_POS = PACK.slots;
+    var totalW = PACK.fit.w, totalH = PACK.fit.h;
     var band = TRAY.bottom - TRAY.top;
-    var y0 = TRAY.top + Math.max(0, (band - totalH) / 2);
-    var cx = [], cy = [];
-    cx[0] = x0; for (i = 1; i < cols; i++) cx[i] = cx[i - 1] + colW[i - 1] + TRAY.gapX;
-    cy[0] = y0; for (i = 1; i < rows; i++) cy[i] = cy[i - 1] + rowH[i - 1] + TRAY.gapY;
-    var SLOT_POS = [];
-    for (i = 0; i < n; i++) {
-      var c = i % cols, r = Math.floor(i / cols);
-      SLOT_POS.push({ x: cx[c] + colW[c] / 2, y: cy[r] + rowH[r] / 2, w: colW[c], h: rowH[r] });
-    }
     return {
       ds: ds, levels: levels, LOCAL: LOCAL, TRAY_BB: TRAY_BB, SLOT_POS: SLOT_POS,
       chapPer: meta.chapPer || 20, chapNames: meta.chapNames || FALLBACK_CHAP,
       chapTitles: meta.chapTitles || null,
       completeTitle: meta.completeTitle || '', completeSub: meta.completeSub || '',
       saveKey: meta.saveKey || C.SAVE_KEY, snapGrid: meta.snapGrid || null,
-      fit: { totalW: totalW, totalH: totalH, band: band, cols: cols, rows: rows }
+      fit: { totalW: totalW, totalH: totalH, band: band, pile: PACK.info }
     };
   }
 
@@ -177,6 +269,12 @@
       rankTab: 0,             // v0.8 排行榜当前页签
       rankBack: null,         // v0.8 打开排行榜前的浮层（结算页 → 'result'，主页 → null）
       rankT: 0,               // v0.8 排行榜入场动画时钟
+      /* v0.9 云端：登录态 / 榜单缓存 / 同步状态。没有云环境时全部保持默认，
+       * 界面自动降级成「未开启云同步」，不影响本地玩。 */
+      net: { on: false, ready: false, nick: '', syncing: false, ts: 0, err: '' },
+      rankList: null,         // null=未拉取；{list,me}=云榜结果
+      rankErr: '',
+      rankLoading: false,
       bgmDuck: false,
       /* ---- v0.5：倒计时 / 经济 / 浮层 ---- */
       timeLimit: 0,         // 本关总时限（秒）
@@ -184,7 +282,8 @@
       hearts: 3,            // 由 timeLeft 映射的 3/2/1 心
       reviveUsed: 0,        // 本关已复活次数
       toast: null,          // { text, t } 轻提示
-      adSim: null           // { kind, t } 模拟广告进度
+      adSim: null,          // { kind, t } 模拟广告进度（无广告位时的兜底演示）
+      adWait: null          // v0.9 正在拉激励视频：存 kind，回调里发奖
     };
 
     var hits = [];        // 每帧重建的可点区域
@@ -205,7 +304,8 @@
         inviteCount: 0, inviteDay: '',
         skin: 'warm',
         bgmIdx: 0,
-        streak: 0
+        streak: 0,
+        updatedAt: Date.now()        // v0.9：云端合并按这份时间戳判新旧
       };
     }
     function loadSave() {
@@ -251,8 +351,162 @@
       }
       return s;
     }
-    function persist() {
+    function writeLocal() {
+      state.save.updatedAt = Date.now();
       try { env.storage.set(SAVE_KEY, JSON.stringify(state.save)); } catch (e) { /* 隐私模式静默降级 */ }
+    }
+    function persist() {
+      writeLocal();
+      cloudPush(false);
+    }
+
+    /* ==================== v0.9 云开发：登录 / 存档 / 排行榜 ====================
+     * 平台差异（wx.cloud、云函数名、错误码）全在 env.cloud 里，core 只认这四个方法：
+     *   enabled()            有没有可用的云能力
+     *   init(cb)             登录（wx.cloud.init + 云函数取 openid）
+     *   load(cb)             拉云端存档 → cb(err, {sets:{saveKey:save}})
+     *   save(payload, cb)    上行存档 + 顺便拿回我的名次
+     *   rank(tab, cb)        拉榜单 → cb(err, {list:[{nick,v,me}], me:{nick,v,rank}})
+     * 没有 env.cloud（Node 测试 / 浏览器预览）时这些分支全部不执行，行为与 v0.8 一致。 */
+    var CLOUD = env.cloud || null;
+
+    function cloudOn() { return !!(CLOUD && CLOUD.enabled && CLOUD.enabled()); }
+    function saveKeys() {
+      var ks = [C.SAVE_KEY];
+      if (SETS && SETS.tangram7 && SETS.tangram7.saveKey && SETS.tangram7.saveKey !== C.SAVE_KEY) {
+        ks.push(SETS.tangram7.saveKey);
+      }
+      return ks;
+    }
+    function readSaveByKey(k) {
+      try {
+        var raw = env.storage.get(k);
+        if (!raw) return null;
+        var o = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return (o && typeof o === 'object') ? o : null;
+      } catch (e) { return null; }
+    }
+    function writeSaveByKey(k, o) {
+      try { env.storage.set(k, JSON.stringify(o)); } catch (e) {}
+    }
+    function starsOfSave(o) {
+      var n = 0;
+      for (var k in (o.starOf || {})) n += o.starOf[k] || 0;
+      return n;
+    }
+
+    /* 合并两份存档：进度类取 max（换设备不丢星），会消耗的货币/体力取较新那份 */
+    function mergeSave(a, b) {
+      if (!a) return b;
+      if (!b) return a;
+      var newer = ((b.updatedAt || 0) > (a.updatedAt || 0)) ? b : a;
+      var out = {}, k;
+      for (k in a) out[k] = a[k];
+      for (k in b) out[k] = b[k];
+      out.coin = newer.coin;
+      out.energy = newer.energy;
+      out.energyTs = newer.energyTs;
+      out.settings = newer.settings || out.settings;
+      out.skin = newer.skin || out.skin;
+      out.starOf = {};
+      var lv;
+      for (lv in (a.starOf || {})) out.starOf[lv] = a.starOf[lv] || 0;
+      for (lv in (b.starOf || {})) out.starOf[lv] = Math.max(out.starOf[lv] || 0, b.starOf[lv] || 0);
+      out.unlockedMax = Math.max(a.unlockedMax || 1, b.unlockedMax || 1);
+      out.streak = Math.max(a.streak || 0, b.streak || 0);
+      out.updatedAt = Math.max(a.updatedAt || 0, b.updatedAt || 0);
+      return out;
+    }
+
+    function collectCloud() {
+      writeLocal();
+      var sets = {}, ks = saveKeys(), i;
+      for (i = 0; i < ks.length; i++) {
+        var o = readSaveByKey(ks[i]);
+        if (o) sets[ks[i]] = o;
+      }
+      var stars = 0, cleared = 0, sk, lv;
+      for (sk in sets) {
+        for (lv in (sets[sk].starOf || {})) {
+          var v = sets[sk].starOf[lv] || 0;
+          if (v > 0) { cleared++; stars += v; }
+        }
+      }
+      return {
+        sets: sets,
+        stats: { stars: stars, cleared: cleared, streak: state.save.streak || 0 }
+      };
+    }
+
+    var pushTimer = null, pushing = false;
+    function cloudPush(immediate) {
+      if (!cloudOn() || !state.net.ready) return;
+      if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; }
+      if (immediate) { doCloudPush(); return; }
+      pushTimer = setTimeout(doCloudPush, C.CLOUD.pushDebounceMs || 3500);
+    }
+    function doCloudPush() {
+      if (!cloudOn() || pushing || !state.net.ready) return;
+      pushing = true;
+      state.net.syncing = true;
+      CLOUD.save(collectCloud(), function (err, res) {
+        pushing = false;
+        state.net.syncing = false;
+        if (err) { state.net.err = String((err && err.msg) || err); return; }
+        state.net.err = '';
+        state.net.ts = Date.now();
+        if (res && res.me) state.rankMe = res.me;
+      });
+    }
+    function cloudPull() {
+      if (!cloudOn()) return;
+      CLOUD.load(function (err, remote) {
+        state.net.ready = true;
+        if (err || !remote || !remote.sets) return;
+        var changed = false, k;
+        for (k in remote.sets) {
+          var l = readSaveByKey(k), m = mergeSave(l, remote.sets[k]);
+          if (!l || (m.updatedAt || 0) > (l.updatedAt || 0) ||
+            (m.unlockedMax || 0) > (l.unlockedMax || 0) ||
+            starsOfSave(m) > starsOfSave(l)) {
+            writeSaveByKey(k, m);
+            changed = true;
+          }
+        }
+        if (changed) {
+          state.save = loadSave();          // 当前数据集重新读盘（星星/进度立刻生效）
+          initSkin();
+          applyAudio();
+        }
+        /* 合并结果回写一次云端：首次登录时把本地存档"认领"到账号下，
+         * 之后两端不一致也会在这一步收敛（幂等，一次调用）。 */
+        cloudPush(true);
+      });
+    }
+    function cloudRank(tab) {
+      if (!cloudOn()) { state.rankLoading = false; return; }
+      state.rankLoading = true;
+      state.rankErr = '';
+      CLOUD.rank(tab, function (err, res) {
+        state.rankLoading = false;
+        if (err) {
+          state.rankErr = (err && err.msg) || '网络异常';
+          state.rankList = null;
+          return;
+        }
+        state.rankList = res || { list: [], me: null };
+      });
+    }
+
+    /* 云同步状态一句话（设置页显示） */
+    function netText() {
+      /* 已登录优先：云端临时抖动时不要显示成"未开启"，那会让玩家以为存档丢了 */
+      if (state.net.ready && state.net.nick) {
+        return state.net.syncing ? '同步中…' : ('已同步 · ' + state.net.nick);
+      }
+      if (!cloudOn()) return '未开启（纯本地）';
+      if (state.net.err) return '同步失败：' + state.net.err;
+      return state.net.ready ? '已登录' : '正在登录…';
     }
 
     /* ================= v0.5 经济 / 体力 / 倒计时 ================= */
@@ -400,17 +654,54 @@
     }
 
     /* ---- 模拟广告（个人主体无流量主：adSimMs 进度条后发奖） ---- */
+    /* 激励视频：有真实广告位就走 wx 的激励视频（看完才发奖），
+     * 没有（预览端 / 未开流量主 / 广告拉取失败）再退回原来的模拟播放。
+     * 注意：真广告「没看完」不发奖，这是流量主结算的前提，不能作弊友好。 */
     function adStart(kind) {
-      if (state.adSim) return;
-      state.adSim = { kind: kind, t: 0 };
+      if (state.adSim || state.adWait) return;
       env.audio.play('sfx_tap');
+      if (adAvailable()) {
+        state.adWait = kind;
+        env.ad.rewarded(kind, function (ok, msg) {
+          state.adWait = null;
+          if (ok) adFinishKind(kind);
+          else toast(msg || '广告暂时不可用，试试用巧币复活');
+        });
+        return;
+      }
+      state.adSim = { kind: kind, t: 0 };
     }
     function adFinish() {
       var kind = state.adSim && state.adSim.kind;
       state.adSim = null;
+      adFinishKind(kind);
+    }
+    function adFinishKind(kind) {
       if (kind === 'energy') grantFreeEnergy(true);
       else if (kind === 'revive') doRevive(true);
       else if (kind === 'invite') doInviteShare();
+    }
+
+    /* ---------------- v0.9 广告位 ---------------- */
+    /* 设计坐标 → CSS 坐标（原生 banner 只认屏幕 px，不认画布变换） */
+    function adRect() {
+      var A = LAY.AD;
+      return {
+        x: view.ox + A.x * view.scale,
+        y: view.oy + A.y * view.scale,
+        w: A.w * view.scale,
+        h: A.h * view.scale
+      };
+    }
+    var bannerOn = false;
+    function syncBanner(show, force) {
+      if (!env.ad || !env.ad.banner) return;
+      if (show === bannerOn && !force) return;
+      bannerOn = show;
+      try { env.ad.banner(show, show ? adRect() : null); } catch (e) {}
+    }
+    function adAvailable() {
+      return !!(env.ad && env.ad.rewarded);
     }
 
     /* ---- 失败 / 复活 ---- */
@@ -495,6 +786,7 @@
         else if (page === 'play') env.audio.setScene(C.BGM.scenes[(state.save.bgmIdx || 0) % C.BGM.scenes.length]);
       }
       if (page !== 'play') { state.running = false; }
+      syncBanner(page === 'play');       // v0.9：只在拼图页挂 banner
       /* v0.6：离开对局页就收掉通关鲜花/结算态，避免下次进来还在飘 */
       if (page !== 'play') { state.win = null; state.flower = null; }
       // 进关卡页时跳到「当前进度所在章」，关卡再多也不该每次都从第 1 章翻起
@@ -554,9 +846,10 @@
     function piecePolyDesign(p) {
       return piecePoly(p).map(function (v) { return [w2d(v[0]), h2d(v[1])]; });
     }
-    /* 托盘 1:1：s 恒为 1，只做居中平移。
+    /* 托盘 1:1：s 恒为 1，只做平移，把「质心」对到散放落点。
      * 旧实现 s = min((slot-2*pad)/w, (slot-2*pad)/h)，每块板各自缩放，
-     * 于是 A(2.5u²) 和 B(0.5u²) 在托盘里看起来差不多大 —— 这就是「空间误差」。 */
+     * 于是 A(2.5u²) 和 B(0.5u²) 在托盘里看起来差不多大 —— 这就是「空间误差」。
+     * v0.9：对齐点从 bbox 中心改成质心，重叠加叠时点落点也不会点空。 */
     function trayTransform(p) {
       var bb = TRAY_BB[p.id];
       var sp = SLOT_POS[p.slot];
@@ -564,8 +857,8 @@
         cx: sp.x,
         cy: sp.y,
         s: 1,
-        lcx: bb.cx,
-        lcy: bb.cy
+        lcx: bb.ccx !== undefined ? bb.ccx : bb.cx,
+        lcy: bb.ccy !== undefined ? bb.ccy : bb.cy
       };
     }
     function trayPoly(p) {
@@ -657,6 +950,14 @@
       /* v0.6：通关立刻切到「欢庆」循环曲（不是 0.8s 的一次性 sting）。
        * bgmIdx 已经 +1，下一关进对局时播放的是新的关卡曲。 */
       if (env.audio.setScene) env.audio.setScene('win');
+      /* v0.9 插屏：每攒够 N 关弹一次（N 在 config.ADS.interstitial）。
+       * 放在拿到结算之后，不打断拼图；没配广告位时 ad.js 里直接 no-op。 */
+      var iv = (C.ADS && C.ADS.interstitial) || null;
+      if (iv && iv.unitId && env.ad && env.ad.interstitial) {
+        var clearedAll = 0, sk;
+        for (sk in state.save.starOf) if (state.save.starOf[sk] > 0) clearedAll++;
+        if (clearedAll > 0 && clearedAll % (iv.everyLevels || 3) === 0) env.ad.interstitial();
+      }
     }
 
     function nextLevel() {
@@ -1065,9 +1366,9 @@
         /* v0.8：结算页分享成品 / 查看榜单 / 切页签 */
         case 'share_pattern': sharePattern(); break;
         case 'open_rank': openRank('result'); break;
-        case 'rank_t0': state.rankTab = 0; break;
-        case 'rank_t1': state.rankTab = 1; break;
-        case 'rank_t2': state.rankTab = 2; break;
+        case 'rank_t0': state.rankTab = 0; cloudRank(0); break;
+        case 'rank_t1': state.rankTab = 1; cloudRank(1); break;
+        case 'rank_t2': state.rankTab = 2; cloudRank(2); break;
         case 'close_rank':
           /* 从结算页进来的退回结算页，从主页进来的直接关掉（不能读 state.result：
            * 通关后 result 一直留着，从主页进榜单会被误判成结算页） */
@@ -1197,19 +1498,31 @@
           }
         }
       }
-      // 找板：取质心最近的一块
+      /* 找板 v0.9：托盘改成散放后板件会互相压住，命中规则必须与绘制顺序一致 ——
+       * 循环顺序 = 绘制顺序 = 后画在上层，所以「最后一个命中的」就是玩家看见的那块。
+       * 旧版取「质心最近」，重叠时会选中被压住的下层板，是这次改动引入的新坑。 */
       var best = null;
       for (var i = 0; i < state.pieces.length; i++) {
         var p = state.pieces[i];
         var poly = p.onBoard ? piecePolyDesign(p) : trayPoly(p);
-        var sp = p.onBoard ? null : SLOT_POS[p.slot];
-        var cx = p.onBoard ? w2d(p.x) : sp.x;
-        var cy = p.onBoard ? h2d(p.y) : sp.y;
-        // 托盘 1:1 后小三角只有 91px 宽，纯多边形命中太窄，槽位内兜一层圆形热区
-        var nearSlot = !p.onBoard && Math.hypot(x - cx, y - cy) <= C.LAYOUT.MIN_HIT / 2;
-        if (!G.pointInPoly([x, y], poly) && !nearSlot) continue;
-        var d = Math.hypot(x - cx, y - cy);
-        if (!best || d < best.d) best = { p: p, d: d, sp: sp, cx: cx, cy: cy };
+        if (!G.pointInPoly([x, y], poly)) continue;
+        var sp0 = p.onBoard ? null : SLOT_POS[p.slot];
+        var cx0 = p.onBoard ? w2d(p.x) : sp0.x;
+        var cy0 = p.onBoard ? h2d(p.y) : sp0.y;
+        best = { p: p, d: 0, sp: sp0, cx: cx0, cy: cy0 };
+      }
+      if (!best) {
+        /* 兜底：细长/尖角块纯多边形命中太窄（小三角只有 91px 宽），
+         * 托盘再给「质心 44px 内」一层圆形热区；已上板的板不参与（避免误选远处板）。 */
+        for (var i2 = 0; i2 < state.pieces.length; i2++) {
+          var p2 = state.pieces[i2];
+          if (p2.onBoard) continue;
+          var sp2 = SLOT_POS[p2.slot];
+          var d2 = Math.hypot(x - sp2.x, y - sp2.y);
+          if (d2 <= C.LAYOUT.MIN_HIT / 2 && (!best || d2 < best.d)) {
+            best = { p: p2, d: d2, sp: sp2, cx: sp2.x, cy: sp2.y };
+          }
+        }
       }
       if (!best) { state.selId = null; return; }
       var pc = best.p;
@@ -2170,50 +2483,83 @@
       var lv = LEVELS[state.levelIdx];
       drawBg(false);
 
-      /* 顶栏 */
+      /* 顶栏 v0.9：关号靠左（关名放第二行），倒计时胶囊**居中**。
+       * 旧版倒计时贴在右上角，和返回/关号同一水平线，玩家专注拼图时根本注意不到
+       * （用户反馈「很容易忽略」）。居中后它成了这一行唯一的视觉重心。 */
       var by = view.safeTop + 40;
+      /* 计时胶囊几何先算出来：关名截断要用它算可用宽度（写成 var 会因提升拿到 undefined） */
+      var capW = 240, capH = 56, capCx = C.DESIGN.w / 2, capL = capCx - capW / 2;
       var bb = { id: 'back_levels', x: 70, y: by, w: 76, h: 76, variant: 'tool', icon: 'back' };
       addHit(bb.x, bb.y, bb.w, bb.h, 'back_levels');
       drawButton(bb);
-      // 关卡名可以为空（只有少数形状真的像某个物件），空名只显示关号。
-      // 名字过长会压住右侧计时器（长关名实测溢出），量一下宽度，放不下就只留关号。
+      // 关名可以为空（只有少数形状真的像某个物件）：没名字时关号单行居中于按钮
       var head = '第 ' + (state.levelIdx + 1) + ' 关';
-      var full = lv.name ? head + ' · ' + lv.name : head;
-      var titleTxt = full;
-      if (lv.name && ctx.measureText) {
+      var tx0 = 118;
+      text(head, tx0, lv.name ? by - 13 : by, 30, COL.text, 'left', '600');
+      /* 关名按「到胶囊左沿」的余量截断：长关名（平行四边形、T 字型）在 375 屏上
+       * 只差 30 多 px 就贴到胶囊了，宁可行尾加省略号也不许压上去。 */
+      if (lv.name) {
+        var nameMax = capL - tx0 - 18;
+        var nm = lv.name;
         ctx.save();
-        ctx.font = font(34, '600');
-        /* v0.3.4 A2：时间改 32px/700 + 浅胶囊底，占位比原来宽约 36px，
-         * 阈值同步收紧 450→370，保证长标题降级后仍不与计时胶囊重叠。 */
-        if (ctx.measureText(full).width > C.DESIGN.w - 520) titleTxt = head;   // v0.5：右侧 3 心+倒计时占位变宽
+        ctx.font = font(20, '500');
+        if (ctx.measureText && ctx.measureText(nm).width > nameMax) {
+          while (nm.length > 1 && ctx.measureText(nm + '…').width > nameMax) nm = nm.slice(0, -1);
+          nm = nm + '…';
+        }
         ctx.restore();
+        text(nm, tx0, by + 22, 20, COL.textSub, 'left', '500');
       }
-      text(titleTxt, C.DESIGN.w / 2, by, 34, COL.text, 'center', '600');
-      /* v0.5 A：生命值（3 心，随剩余时间递减）+ 倒计时胶囊。
+
+      /* 生命值（3 心，随剩余时间递减）+ 倒计时胶囊，整条胶囊对齐屏幕中线。
        * 倒计时 ≤warnSec 时数字转红并轻微脉冲，给紧迫感。 */
       var leftS = Math.max(0, Math.ceil(state.timeLeft));
       var mm = Math.floor(leftS / 60), ss = leftS % 60;
       var timeTxt = (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
       var warn = leftS <= C.TIMER.warnSec;
-      var capW = 214, capH = 48, capR = C.DESIGN.w - 42;
       ctx.save();
-      rr(capR - capW, by - capH / 2, capW, capH, capH / 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.74)';
+      rr(capL, by - capH / 2, capW, capH, capH / 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.86)';
       ctx.fill();
       ctx.lineWidth = 2;
-      ctx.strokeStyle = warn ? 'rgba(229,72,77,0.35)' : 'rgba(227,233,242,0.9)';
+      ctx.strokeStyle = warn ? 'rgba(229,72,77,0.55)' : 'rgba(227,233,242,0.95)';
       ctx.stroke();
       ctx.restore();
       var hcnt = C.TIMER.hearts;
       for (var hi = 0; hi < hcnt; hi++) {
-        var hx = capR - capW + 26 + hi * 30;
-        drawIcon('heart', hx, by, hi < state.hearts ? '#FF5A5A' : 'rgba(150,162,180,0.42)', 0.60);
+        var hx = capL + 26 + hi * 26;
+        drawIcon('heart', hx, by, hi < state.hearts ? '#FF5A5A' : 'rgba(150,162,180,0.42)', 0.62);
       }
+      /* 数字按实测宽度定位，脉冲以数字中心为原点缩放（否则会左右抖） */
+      ctx.save();
+      ctx.font = font(34, '700');
+      var timeW = ctx.measureText ? ctx.measureText(timeTxt).width : 90;
+      ctx.restore();
+      var timeCx = capL + capW - 22 - timeW / 2;
       var pl = warn ? (1 + Math.sin(state.time * 0.012) * 0.07) : 1;
       ctx.save();
-      ctx.translate(capR - 16, by);
+      ctx.translate(timeCx, by);
       ctx.scale(pl, pl);
-      text(timeTxt, 0, 0, 30, warn ? '#E5484D' : COL.btnText, 'right', '700');
+      text(timeTxt, 0, 0, 34, warn ? '#E5484D' : COL.btnText, 'center', '700');
+      ctx.restore();
+
+      /* v0.9 顶部广告位（LAY.AD）：真机由原生 banner 盖在这块空白上，
+       * 画布只铺一层浅底把它"托"住；预览端画虚线占位框，方便对位验收。
+       * 不注册任何 hit，避免误点广告。 */
+      var AD = LAY.AD;
+      ctx.save();
+      rr(AD.x, AD.y, AD.w, AD.h, 18);
+      ctx.fillStyle = 'rgba(255,255,255,0.52)';
+      ctx.fill();
+      if (env.ad && env.ad.placeholder) {
+        ctx.setLineDash([10, 8]);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(122,138,156,0.5)';
+        ctx.stroke();
+        ctx.setLineDash([]);
+        text('广告位 · banner', C.DESIGN.w / 2, AD.y + AD.h / 2, 22,
+          'rgba(122,138,156,0.85)', 'center', '500');
+      }
       ctx.restore();
 
       /* 拼图卡纸 */
@@ -2294,29 +2640,10 @@
         drawBoardPiece(p);
       }
 
-      /* 托盘：所有槽位都画底框——有板的槽也要有，否则板看起来是浮在桌面上的。
-       * v0.3.4 A1：改成两遍绘制（先全部槽框、后全部板件）。旧版逐槽「框+板」交替，
-       * 后画的空槽虚线框会压在前一行板件上，行距只有 4px 时就是"绿三角上方横线穿过"。 */
+      /* 托盘 v0.9：不再画整块槽位底框（那是「工具区太大」的主因）。
+       * 板件按散放落点直接摆，互相压一点；绘制顺序 = pieceOrder，
+       * 后画在上层，命中判定也按这个顺序取最上层（见 playHit）。 */
       for (var t = 0; t < state.pieces.length; t++) {
-        var tp = state.pieces[t];
-        var sp2 = SLOT_POS[tp.slot];
-        var sx = sp2.x - sp2.w / 2;
-        var sy = sp2.y - sp2.h / 2;
-        ctx.save();
-        rr(sx, sy, sp2.w, sp2.h, 22);
-        ctx.fillStyle = COL.slotBg;
-        ctx.fill();
-        if (tp.onBoard) {
-          // 空槽再加虚线轮廓，暗示"这块已经上板了"
-          ctx.setLineDash([8, 8]);
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = COL.lineDeep;
-          ctx.stroke();
-          ctx.setLineDash([]);
-        }
-        ctx.restore();
-      }
-      for (t = 0; t < state.pieces.length; t++) {
         if (!state.pieces[t].onBoard) drawTrayPiece(state.pieces[t]);
       }
 
@@ -2339,7 +2666,7 @@
       /* 覆盖率进度条 */
       var P = LAY.PROGRESS;
       text('覆盖', P.x, P.y + P.h / 2, 26, COL.textSub, 'left');
-      var px = P.x + 74, pw = P.w - 74;
+      var px = P.x + 74, pw = P.w - 144;   // v0.9：右侧留 70 给百分比，绿条走满不再穿字
       rr(px, P.y, pw, P.h, P.h / 2);
       ctx.fillStyle = COL.track; ctx.fill();
       var pct = Math.max(0, Math.min(1, state.cov));
@@ -2354,12 +2681,19 @@
       }
       text(Math.round(pct * 100) + '%', C.DESIGN.w - 60, P.y + P.h / 2, 26, COL.text, 'right', '600');
 
-      /* 提示文字 */
+      /* 提示文字（v0.9）：原来画在进度条下方，托盘上移后那里没位置了，
+       * 改成棋盘下沿的轻量 toast（深底白字），压住作品也不碍事，1.5s 自己消失。 */
       if (state.msgT > 0) {
         var alpha = Math.min(1, state.msgT / 400);
         ctx.save();
         ctx.globalAlpha = alpha;
-        text(state.msg, C.DESIGN.w / 2, P.y + 52, 26, COL.textSub, 'center');
+        ctx.font = font(26, '500');
+        var mw = (ctx.measureText ? ctx.measureText(state.msg).width : 200) + 52;
+        var my = LAY.BOARD.y + LAY.BOARD.size - 60;
+        rr(C.DESIGN.w / 2 - mw / 2, my - 27, mw, 54, 27);
+        ctx.fillStyle = 'rgba(44,58,75,0.82)';
+        ctx.fill();
+        text(state.msg, C.DESIGN.w / 2, my, 26, '#FFFFFF', 'center', '500');
         ctx.restore();
       }
 
@@ -2827,19 +3161,36 @@
       for (var k in s.starOf) if ((s.starOf[k] || 0) > 0) n++;
       return n;
     }
+    /* v0.9：榜单数据只认云端。useMock 只在本地调试时给出示例，默认关闭；
+     * 云端没数据时返回空榜，界面显示「还没有人上榜」而不是编造名次。 */
     function rankData() {
-      var tab = state.rankTab;
-      var list = (C.RANK.mock[tab] || []).slice();
-      var mine = { n: '我', v: rankValue(tab), me: true, c: COL.gold };
-      var rank = 1;
-      for (var i = 0; i < list.length; i++) if (list[i].v > mine.v) rank++;
-      var all = list.concat([mine]);
-      all.sort(function (a, b) { return b.v - a.v || (a.me ? 1 : -1); });
-      var top = all.slice(0, 7);
+      var tab = state.rankTab, raw = [];
+      if (C.RANK.useMock) raw = (C.RANK.mock[tab] || []).slice();
+      else if (state.rankList && state.rankList.list) raw = state.rankList.list;
+
+      var list = [];
+      for (var i = 0; i < raw.length; i++) {
+        var r = raw[i];
+        list.push({
+          n: r.n || r.nick || '玩家',
+          v: (r.v !== undefined ? r.v : r.value) || 0,
+          c: r.c || r.color || RANK_COLORS[i % RANK_COLORS.length],
+          me: !!r.me
+        });
+      }
+      var mine = null, rank = 0;
+      for (var j = 0; j < list.length; j++) if (list[j].me) { mine = list[j]; rank = j + 1; }
+      if (!mine) {
+        var mc = state.rankList && state.rankList.me;
+        mine = { n: (mc && mc.nick) || state.net.nick || '我', v: rankValue(tab), me: true, c: COL.gold };
+        rank = (mc && mc.rank) || (list.length + 1);
+      }
+      var top = list.slice(0, 7);
       var inTop = false;
-      for (var j = 0; j < top.length; j++) if (top[j].me) inTop = true;
-      return { top: top, mine: mine, rank: rank, inTop: inTop };
+      for (var k = 0; k < top.length; k++) if (top[k].me) inTop = true;
+      return { top: top, mine: mine, rank: rank, inTop: inTop, empty: list.length === 0 };
     }
+    var RANK_COLORS = ['#FF8A5B', '#4FA8E0', '#63C88B', '#A87BE8', '#D96A9B', '#FFC53D', '#3FB8B0'];
 
     function rankRow(item, y, idx, highlight) {
       var x0 = 92, w = 566, h = 74;
@@ -2899,12 +3250,40 @@
       // 榜单
       var d = rankData();
       var ry = 566 + (y0 - cy), step = 84;
-      for (var j = 0; j < d.top.length; j++) rankRow(d.top[j], ry + j * step, j, false);
-      // 自己不在前 7 → 底部固定一条「我的排名」
-      if (!d.inTop) {
-        rankRow({ n: '我', v: d.mine.v, me: true, c: COL.gold }, ry + d.top.length * step + 6, d.rank - 1, true);
+      if (state.rankTab === 2) {
+        /* 好友榜要开放数据域（openDataContext + wx.getFriendCloudStorage），
+         * 云开发拿不到微信好友关系。这里如实说明，不拿全服数据冒充好友。 */
+        text('好友榜暂未开通', C.DESIGN.w / 2, ry + 96, 26, COL.text, 'center', '600');
+        text('需要开放数据域才能读取微信好友的进度', C.DESIGN.w / 2, ry + 140, 19, COL.textSub, 'center');
+        text('先看「主线榜」和「连胜榜」吧', C.DESIGN.w / 2, ry + 176, 19, COL.textSub, 'center');
+      } else if (state.rankLoading && !d.top.length) {
+        text('正在加载榜单…', C.DESIGN.w / 2, ry + 120, 24, COL.textSub, 'center');
+      } else if (!cloudOn() && !C.RANK.useMock && !state.rankList) {
+        text('未开启云同步', C.DESIGN.w / 2, ry + 96, 26, COL.text, 'center', '600');
+        /* 给玩家看的话，不是给开发看的：只在真机上永远不该出现在这里 */
+        text('当前进度只保存在这台手机上', C.DESIGN.w / 2, ry + 140, 19, COL.textSub, 'center');
+        text('开启后可跨设备同步并与全服玩家比进度', C.DESIGN.w / 2, ry + 172, 19, COL.textSub, 'center');
+      } else if (state.rankErr) {
+        text('榜单加载失败', C.DESIGN.w / 2, ry + 96, 26, COL.text, 'center', '600');
+        text(state.rankErr, C.DESIGN.w / 2, ry + 140, 19, COL.textSub, 'center');
+      } else if (d.empty) {
+        text('还没有人上榜', C.DESIGN.w / 2, ry + 96, 26, COL.text, 'center', '600');
+        text('拼完一关就会出现在这里', C.DESIGN.w / 2, ry + 140, 19, COL.textSub, 'center');
+        /* 空榜时仍把自己那一行画出来，玩家能看到自己的进度 */
+        rankRow(d.mine, ry + 200, Math.max(0, d.rank - 1), true);
+      } else {
+        /* 自己进了前 7 也要高亮（旧版只高亮榜尾那条，自己排第 4 会被当成路人） */
+        for (var j = 0; j < d.top.length; j++) {
+          rankRow(d.top[j], ry + j * step, j, !!d.top[j].me);
+        }
+        // 自己不在前 7 → 底部固定一条「我的排名」
+        if (!d.inTop) {
+          rankRow(d.mine, ry + d.top.length * step + 6, d.rank - 1, true);
+        }
       }
-      text('示例榜单 · 真实好友榜需开启开放数据域', C.DESIGN.w / 2, 1222 + (y0 - cy), 18, COL.textSub, 'center');
+      text(C.RANK.useMock ? '示例榜单 · 仅供本地调试'
+        : ((cloudOn() || state.rankList) ? '全服实时榜 · 数据来自云开发' : '本地预览 · 未连接云端'),
+        C.DESIGN.w / 2, 1222 + (y0 - cy), 18, COL.textSub, 'center');
 
       // 关闭（卡片外的圆形按钮，参考图同位置）
       ctx.beginPath(); ctx.arc(C.DESIGN.w / 2, 1300, 38, 0, Math.PI * 2);
@@ -2919,6 +3298,7 @@
       state.rankBack = from || null;
       state.overlay = 'rank';
       state.rankT = 0;
+      if (!state.rankList) cloudRank(state.rankTab);   // 首次打开才拉，切页签再拉
     }
 
     /* ---------------- v0.8 分享成品图案 ---------------- */
@@ -2941,6 +3321,9 @@
       drawCard(C.DESIGN.w / 2, C.DESIGN.h / 2, 580, 620, 32);
       var cy = C.DESIGN.h / 2;
       text('设置', C.DESIGN.w / 2, cy - 230, 44, COL.text, 'center', '600');
+      /* v0.9：让玩家看得见「我的进度已存到云上」——这是接云开发后的信任基础 */
+      text('云端存档：' + netText(), C.DESIGN.w / 2, cy - 182, 19,
+        state.net.err ? '#E5484D' : COL.textSub, 'center');
 
       var rows = [
         { label: '音效', id: 'toggle_sfx', on: state.settingsFx },
@@ -3230,6 +3613,8 @@
       var si = env.safeInsets ? env.safeInsets() : { top: 0, bottom: 0 };
       view.safeTop = Math.max(C.SAFE.top, (si.top || 0) / view.scale);
       view.safeBottom = Math.max(C.SAFE.bottom, (si.bottom || 0) / view.scale);
+      /* 原生 banner 不跟画布缩放：窗口尺寸/安全区一变就得重新摆一次 */
+      if (typeof bannerOn !== 'undefined' && bannerOn) syncBanner(true, true);
       var cv = ctx.canvas;
       if (cv) {
         cv.width = Math.round(s.w * dpr);
@@ -3281,6 +3666,21 @@
         else if (type === 'up') onUp(d[0], d[1]);
         else { state.activePointer = false; state.drag = null; state.press = null; state.lastTap = null; }
       });
+      /* v0.9：云登录（拿 openid / 建档）→ 拉云端存档做合并。
+       * 任何一步失败只影响「跨设备同步 + 排行榜」，本地存档照常玩。 */
+      if (cloudOn()) {
+        state.net.on = true;
+        CLOUD.init(function (err, info) {
+          if (err) {
+            state.net.err = (err && err.msg) || String(err);
+            state.net.ready = false;
+            return;
+          }
+          state.net.nick = (info && info.nick) || '';
+          state.net.ready = true;
+          if (C.CLOUD.pullOnBoot) cloudPull();
+        });
+      }
       if (env.onHide) env.onHide(function () { state.running = false; });
       if (env.onShow) env.onShow(function () { if (state.page === 'play' && !state.win && !state.overlay) state.running = true; lastT = 0; });
       lastT = 0;
@@ -3298,6 +3698,9 @@
         claimTask: claimTask, applySkin: applySkin, grantFreeEnergy: grantFreeEnergy,
         doRevive: doRevive, taskList: taskList, onlineLeft: onlineLeft,
         timeLimitOf: timeLimitOf, heartsOf: heartsOf, totalStars: totalStars,
+        /* v0.9：云同步 / 广告 / 榜单，供 verify_v09 直接驱动 */
+        cloudPush: cloudPush, cloudPull: cloudPull, cloudRank: cloudRank,
+        openRank: openRank, netText: netText, adRect: adRect, syncBanner: syncBanner, go: go,
         get LEVELS() { return LEVELS; }, get slots() { return SLOT_POS; },
         get dataset() { return DS; }, get setKey() { return state.setKey; },
         get COLORS() { return COL; },

@@ -503,6 +503,10 @@
       audio: audio,
       vibrate: vibrate,
       images: images,
+      /* v0.9：浏览器没有真广告/真云开发，两个适配层都返回「不可用」，
+       * 核心层自动降级（广告走模拟、榜单显示未开启云同步） */
+      ad: window.TANGRAM_AD.createAd(),
+      cloud: window.TANGRAM_CLOUD.createCloud(),
       share: function (opt) {                     // v0.5 邀请有礼 / v0.8 分享成品图案
         opt = opt || {};
         var text = opt.text || '一起来拼图！';

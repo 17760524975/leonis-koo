@@ -156,19 +156,21 @@ check('点托盘板只选中不置板', S.pieces.every(p => !p.onBoard) && S.sel
 // 旋转：连点 8 次应回到原角度
 const pA = S.pieces.find(p => p.id === 'A');
 const a0 = pA.angle;
-for (let i = 0; i < 8; i++) { tap(239, 1470); for (let k = 0; k < 10; k++) step(16); }
+const TOOL_Y = CFG.LAYOUT.TOOLBAR.y + CFG.LAYOUT.TOOLBAR.h / 2;   // v0.9 版式下移，别再写死
+tap(239, TOOL_Y);
+for (let i = 1; i < 8; i++) { tap(239, TOOL_Y); for (let k = 0; k < 10; k++) step(16); }
 check('旋转 8 次回到原角度', Math.abs(((pA.angle - a0) % 360 + 360) % 360) < 0.001, `angle=${pA.angle}`);
 check('旋转动画期间只累计 8 步', S.steps === 8, 'steps=' + S.steps);
 
 // 翻转 D
 tap(SLOTS[3].x, SLOTS[3].y); step(16);
 const pD = S.pieces.find(p => p.id === 'D');
-tap(375, 1470);
+tap(375, TOOL_Y);
 for (let k = 0; k < 16; k++) step(16);
 
 // 连点 8 次（间隔 32ms，动画没播完就点下一次）：逻辑角精确回位，视觉不得反向/多转一圈
 const aBefore2 = pD.angle;
-for (let i = 0; i < 8; i++) { tap(239, 1470); step(16); step(16); }
+for (let i = 0; i < 8; i++) { tap(239, TOOL_Y); step(16); step(16); }
 for (let k = 0; k < 40; k++) step(16);
 check('连点 8 次逻辑角精确回位', Math.abs(((pD.angle - aBefore2) % 360 + 360) % 360) < 1e-6, 'angle=' + pD.angle);
 const devVis = ((pD.dAngle - pD.angle) % 360 + 540) % 360 - 180;
@@ -234,13 +236,13 @@ step(16);
 check('进入第 2 关', S.levelIdx === 1 && S.page === 'play', 'idx=' + S.levelIdx);
 
 // 提示
-tap(511, 1470);
+tap(511, TOOL_Y);
 for (let k = 0; k < 10; k++) step(16);
 check('提示高亮生效', !!S.hint, 'hint=' + (S.hint && S.hint.id));
 check('提示只能一次', S.hintUsed === true);
 
 // 重来
-tap(647, 1470);
+tap(647, TOOL_Y);
 for (let k = 0; k < 10; k++) step(16);
 check('重来清空棋盘', S.pieces.every(p => !p.onBoard));
 

@@ -38,9 +38,9 @@ animation/ art-src/ audio-src/   动效演示、素材源文件
 ## 开发约定
 
 - `js/` 是唯一真源，`preview/js/` 与 `miniprogram/js/` 由 `node tools/sync.js` 同步，**不要手改副本**。
-- 改完必须跑：`node tools/sync.js && node tools/smoke.js && node tools/verify_v08.js`。
+- 改完必须跑：`node tools/sync.js && node tools/smoke.js && node tools/verify_v09.js`。
 - 关卡数据变更需跑 `verify_levels.js` / `verify_tangram7.js` / `verify_tangram7_geometry.js`。
-- 截图验收：`node tools/shot_v08.js`（headless Edge，结算页/榜单/关卡列表）。
+- 截图验收：`node tools/shot_v09.js`（headless Edge，对局页/榜单/设置）。
 - 音频链路：`tools/audio_probe.html` 用桩 AudioContext 验证 BGM 是否真的被调度、增益是否可听。
 
 ## 版本
@@ -56,6 +56,7 @@ animation/ art-src/ audio-src/   动效演示、素材源文件
 | v0.7 | HUD 胶囊底框+统一字号+上移、设置下移到右列、进关体力 2 点、BGM 再提 10dB（含软限幅） |
 | v0.7.1 | 巧币/体力胶囊改为等长（共用 pillW + pillMinW 兜底） |
 | v0.8 | 结算页改成"成品图案+分享+连胜进度"、四巧板 120→30 关、新增排行榜 |
+| v0.9 | 保留 T 字关、倒计时居中、工具区散放压缩、顶部广告位、云开发存档与真实榜单 |
 
 ## 代码存档
 
