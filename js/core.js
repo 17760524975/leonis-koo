@@ -1776,53 +1776,71 @@
       var n = low ? 2 : 3;
       for (var i = 0; i < n; i++) {
         var s = spots[i];
-        var px = C.DESIGN.w * s[0] + Math.sin(t * (0.26 + i * 0.07) + s[3]) * 96;
-        var py = C.DESIGN.h * s[1] + Math.cos(t * (0.21 + i * 0.05) + s[3]) * 74;
+        var px = C.DESIGN.w * s[0] + Math.sin(t * (0.42 + i * 0.10) + s[3]) * 136;
+        var py = C.DESIGN.h * s[1] + Math.cos(t * (0.33 + i * 0.08) + s[3]) * 104;
         var r = C.DESIGN.w * s[2] * (1 + 0.07 * Math.sin(t * 0.55 + i));
         var gr = ctx.createRadialGradient(px, py, r * 0.10, px, py, r);
-        gr.addColorStop(0, 'rgba(255,240,208,0.20)');
-        gr.addColorStop(0.55, 'rgba(255,232,190,0.07)');
+        gr.addColorStop(0, 'rgba(255,244,214,0.34)');
+        gr.addColorStop(0.55, 'rgba(255,232,190,0.12)');
         gr.addColorStop(1, 'rgba(255,232,190,0)');
         ctx.fillStyle = gr;
         ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
       }
+      drawHomeSweep(t);
+    }
+
+    /* v0.6：11 秒一次的柔光扫过（斜向白色渐变带，峰值不透明度仅 0.09）。
+     * 光斑负责「呼吸」，这一道负责「看得见的流动」——手机上静止图与动画一眼能分。 */
+    function drawHomeSweep(t) {
+      var ph = (t / 11) % 1;
+      var sx = (-0.45 + ph * 1.9) * C.DESIGN.w;
+      ctx.save();
+      ctx.translate(sx, 0);
+      ctx.rotate(-0.16);
+      var lg = ctx.createLinearGradient(-260, 0, 260, 0);
+      lg.addColorStop(0, 'rgba(255,255,255,0)');
+      lg.addColorStop(0.5, 'rgba(255,255,255,0.12)');
+      lg.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = lg;
+      ctx.fillRect(-260, -C.DESIGN.h, 520, C.DESIGN.h * 3);
+      ctx.restore();
     }
 
     function drawBg(withArt) {
+      /* v0.6 底纹动效（纯 Canvas，零素材），两条背景路径共用：
+       * 1) 有底图时做 Ken Burns——1.035 倍 + ±10px 极缓平移，静止底图有呼吸感；
+       * 2) 光斑层 drawHomeGlow 单独叠在最后，素材缺失走渐变兜底时同样有流动的光。
+       * reduceMotion 全停，与鲜花动效同一开关；drawBg(false)（关卡页）不加光效。 */
+      var fx = withArt && !state.reduceMotion;
+      var t = state.time / 1000;
       var img = withArt && env.images && env.images.home_bg_desk;
       if (img) {
-        /* v0.6 底纹动效（纯 Canvas，零素材）：
-         * 1) 极缓 Ken Burns——画面 1.035 倍 + ±10px 平移，静止底图有呼吸感；
-         * 2) 3 个暖色光斑按不同相位漂移（drawHomeGlow），制造流动的光。
-         * reduceMotion 时整层静止，与鲜花动效同开关。 */
-        var fx = !state.reduceMotion;
-        var t = state.time / 1000;
-        var sc = Math.max(C.DESIGN.w / (img.width || 1), C.DESIGN.h / (img.height || 1)) * (fx ? 1.035 : 1);
+        var sc = Math.max(C.DESIGN.w / (img.width || 1), C.DESIGN.h / (img.height || 1)) * (fx ? 1.06 : 1);
         var dw = (img.width || 1) * sc, dh = (img.height || 1) * sc;
-        var dx = (C.DESIGN.w - dw) / 2 + (fx ? Math.sin(t * 0.18) * 10 : 0);
-        var dy = (C.DESIGN.h - dh) / 2 + (fx ? Math.cos(t * 0.14) * 8 : 0);
+        var dx = (C.DESIGN.w - dw) / 2 + (fx ? Math.sin(t * 0.26) * 22 : 0);
+        var dy = (C.DESIGN.h - dh) / 2 + (fx ? Math.cos(t * 0.19) * 18 : 0);
         ctx.drawImage(img, dx, dy, dw, dh);
         /* v0.5：皮肤色罩——主界面用固定背景图，不叠罩则换肤几乎看不出 */
         if (COL.tint) { ctx.fillStyle = COL.tint; ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h); }
-        if (fx) drawHomeGlow(t, !!state.lowFps);
-        return;
+      } else {
+        var g = ctx.createLinearGradient(0, 0, 0, C.DESIGN.h);
+        g.addColorStop(0, COL.bgTop || COL.card || '#FBF3E6');   // v0.5：随皮肤变化
+        g.addColorStop(0.45, COL.bg);
+        g.addColorStop(1, COL.bgDeep);
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
+        // 左上柔光
+        var rg = ctx.createRadialGradient(180, 180, 20, 180, 180, 620);
+        rg.addColorStop(0, 'rgba(255,255,255,0.85)');
+        rg.addColorStop(0.55, 'rgba(255,255,255,0.22)');
+        rg.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = rg;
+        ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
+        /* v0.3.1 A1：删除原「极淡木纹」9 条横向贝塞尔线——
+         * 关卡页 drawBg(false) 走渐变分支，这些线在米色底上形成贯穿横条，
+         * 用户反馈「布局错乱」。保留渐变 + 左上柔光即可。 */
       }
-      var g = ctx.createLinearGradient(0, 0, 0, C.DESIGN.h);
-      g.addColorStop(0, COL.bgTop || COL.card || '#FBF3E6');   // v0.5：随皮肤变化
-      g.addColorStop(0.45, COL.bg);
-      g.addColorStop(1, COL.bgDeep);
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
-      // 左上柔光
-      var rg = ctx.createRadialGradient(180, 180, 20, 180, 180, 620);
-      rg.addColorStop(0, 'rgba(255,255,255,0.85)');
-      rg.addColorStop(0.55, 'rgba(255,255,255,0.22)');
-      rg.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = rg;
-      ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
-      /* v0.3.1 A1：删除原「极淡木纹」9 条横向贝塞尔线——
-       * 关卡页 drawBg(false) 走渐变分支，这些线在米色底上形成贯穿横条，
-       * 用户反馈「布局错乱」。保留渐变 + 左上柔光即可。 */
+      if (fx) drawHomeGlow(t, !!state.lowFps);
     }
 
     /* ---------------- 主界面 ---------------- */

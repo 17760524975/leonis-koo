@@ -60,6 +60,14 @@
     this.resume = function () {};
     setInterval(function () { self.currentTime += 0.05; }, 50);
   }
+  /* headless 下 rAF 只跑一帧就停，用 setTimeout 驱动并手动推进时间戳，
+   * 这样底纹动效（依赖 state.time）才能真的跑起来被采样到。 */
+  var __vt = 0;
+  window.requestAnimationFrame = function (cb) {
+    return setTimeout(function () { __vt += 16; cb(__vt); }, 16);
+  };
+  window.cancelAnimationFrame = function (id) { clearTimeout(id); };
+
   window.AudioContext = AC;
   window.webkitAudioContext = AC;
 
@@ -93,16 +101,44 @@
 <script src="../preview/js/game.js"></script>
 <script>
 (function () {
+  /* 在整屏上铺 8×12 网格采样，隔 1.2s 再采一次，统计「变了的格子数」 */
+  function sample() {
+    var cv = document.getElementById('game');
+    var g = cv.getContext('2d');
+    var out = [];
+    for (var gy = 0; gy < 12; gy++) {
+      for (var gx = 0; gx < 8; gx++) {
+        try {
+          var d = g.getImageData(Math.floor(cv.width * (gx + 0.5) / 8), Math.floor(cv.height * (gy + 0.5) / 12), 1, 1).data;
+          out.push([d[0], d[1], d[2]]);
+        } catch (e) { out.push([-1, -1, -1]); }
+      }
+    }
+    return out;
+  }
+  var sampleA = null;
   function finish(tag) {
     var p = window.__probe;
     var peak = 0;
     for (var i = 0; i < p.notes.length; i++) if (p.notes[i].gain > peak) peak = p.notes[i].gain;
+    var sampleB = sample();
+    var delta = 0, changed = 0;
+    if (sampleA) for (var k = 0; k < sampleA.length; k++) {
+      var dd = Math.abs(sampleA[k][0] - sampleB[k][0]) + Math.abs(sampleA[k][1] - sampleB[k][1]) + Math.abs(sampleA[k][2] - sampleB[k][2]);
+      delta += dd;
+      if (dd > 0) changed++;
+    }
     var res = {
       tag: tag,
       notes: p.notes.length,
       peakNoteGain: +peak.toFixed(4),
       bgmGain: window.__bgmGain(),
-      freqs: p.notes.slice(0, 6).map(function (n) { return +n.freq.toFixed(1); })
+      freqs: p.notes.slice(0, 6).map(function (n) { return +n.freq.toFixed(1); }),
+      fxPixelDelta: delta,
+      timeA: (window.__tA || null), timeB: (window.__game && window.__game.state ? +window.__game.state.time.toFixed(1) : null),
+      fxChangedCells: changed,
+      pixelA: sampleA.slice(0, 6),
+      pixelB: sampleB.slice(0, 6)
     };
     document.getElementById('out').textContent = 'PROBE ' + JSON.stringify(res);
     document.title = 'PROBE ' + JSON.stringify(res);
@@ -119,7 +155,8 @@
       }
       fire('pointerdown');
       setTimeout(function () { fire('pointerup'); }, 60);
-      setTimeout(function () { finish('home'); }, 1500);
+      setTimeout(function () { sampleA = sample(); window.__tA = window.__game && window.__game.state ? +window.__game.state.time.toFixed(1) : null; }, 900);
+      setTimeout(function () { finish('home'); }, 2200);
     } else if (waited > 5000) { clearInterval(iv); finish('no-game'); }
   }, 100);
 })();

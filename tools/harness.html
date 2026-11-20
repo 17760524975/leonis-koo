@@ -204,6 +204,14 @@
         });
       }
     }
+    /* v0.6：?t=<ms> 冻结 state.time，用于对比底纹动效在两个时刻的画面 */
+    var fxT = +(q.match(/(?:^|[&?])t=(\d+)/) || [])[1];
+    if (!isNaN(fxT)) {
+      S.time = fxT;
+      Object.defineProperty(S, 'time', {
+        get: function () { return fxT; }, set: function () {}, configurable: true
+      });
+    }
     /* v0.5：?skin=warm|mint|night 预览皮肤 */
     var skinKey = (q.match(/skin=(\w+)/) || [])[1];
     if (skinKey && C.SKINS[skinKey]) { game._debug.applySkin(skinKey); S.toast = null; }

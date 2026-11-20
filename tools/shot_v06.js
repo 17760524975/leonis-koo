@@ -15,6 +15,8 @@ const SHOTS = [
   { name: 'v06_home_750', w: 750, q: 'screen=home&w=750&notoast=1' },
   { name: 'v06_home_375', w: 375, q: 'screen=home&w=375&notoast=1' },
   { name: 'v06_home_t7_750', w: 750, q: 'screen=home&w=750&set=tangram7&notoast=1' },
+  { name: 'v06_fx_t0', w: 750, q: 'screen=home&w=750&notoast=1&t=0' },
+  { name: 'v06_fx_t3000', w: 750, q: 'screen=home&w=750&notoast=1&t=3000' },
   { name: 'v06_play_750', w: 750, q: 'screen=play&w=750&level=0&placed=2&sel=0' },
   { name: 'v06_burst_700', w: 750, q: 'screen=play&w=750&level=0&placed=4&flower=700&full=1' },
   { name: 'v06_result_1200', w: 750, q: 'screen=play&w=750&level=0&placed=4&flower=1200&full=1' },

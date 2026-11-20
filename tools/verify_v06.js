@@ -244,8 +244,9 @@ check('首波时长已延长', CFG.FLOWER.total >= 1400 && CFG.FLOWER.overlayAt 
 section('7. 主页底纹动效');
 const coreTxt = fs.readFileSync(path.join(ROOT, 'js/core.js'), 'utf8');
 check('有光斑动效函数', /function drawHomeGlow/.test(coreTxt));
-check('底图有 Ken Burns 缓动', /1\.035/.test(coreTxt));
-check('reduceMotion 可关闭动效', /var fx = !state\.reduceMotion/.test(coreTxt));
+check('底图有 Ken Burns 缓动', /1\.06/.test(coreTxt));
+check('reduceMotion 可关闭动效', /var fx = withArt && !state\.reduceMotion/.test(coreTxt));
+ check('有柔光扫过层', /function drawHomeSweep/.test(coreTxt));
 
 console.log('\n' + (fail === 0 ? '全部通过（v0.6）' : `!! ${fail} 项未通过`));
 process.exit(fail === 0 ? 0 : 1);
