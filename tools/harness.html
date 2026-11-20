@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>版式验收 harness</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#EFDFC6;}
+  #game{display:block;width:100vw;height:100vh;touch-action:none;}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script src="../preview/js/config.js"></script>
+<script src="../preview/js/geom.js"></script>
+<script src="../preview/js/judge.js"></script>
+<script src="../preview/js/levels.js"></script>
+<script src="../preview/js/core.js"></script>
+<script>
+/* 版式验收 harness（浏览器截图用，不开真实交互、不放音频）
+ * 参数：
+ *   ?screen=home|levels|play|hint|result|settings
+ *   &w=375              画布宽度（默认 750）
+ *   &fake=120           把关卡数据复制成 N 关（验证 120 关版式，不改真实文件）
+ *   &placed=2           对局页预先放上几块板
+ *   &tier=1/2/3         强制提示档（v0.3.1 A2 三档截图）
+ *   &sel=0              把第 N 块板设为选中并放到棋盘（v0.3.1 A3 旋转手柄截图）
+ *   &mark=1             叠加标记：红十字=质心，蓝圈=新手柄圆心（v0.3.2 B1 截图）
+ *   &dragcenter=1       模拟「已选中板件再次按质心并拖动」→ 截图验证不旋转（v0.3.2 B1）
+ *   &traysel=1          选中托盘里第一块板（v0.3.2 B2 托盘高亮截图）
+ */
+(function () {
+  var C = window.TANGRAM_CONFIG;
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var q = location.search;
+
+  // fake=N：复制关卡数据，用于验证 120 关版式
+  var fakeN = +(q.match(/fake=(\d+)/) || [])[1] || 0;
+  if (fakeN) {
+    var D = window.TANGRAM_DATA, base = D.levels, out = [];
+    for (var i = 0; i < fakeN; i++) {
+      var s = base[i % base.length];
+      out.push({ id: i + 1, name: s.name, tip: s.tip, chapter: Math.floor(i / 20) + 1,
+                 outline: s.outline, solution: s.solution });
+    }
+    D.levels = out;
+  }
+
+  var images = {};
+  var loaded = 0, need = Object.keys(C.ART.files).length;
+  var inputFn = null;
+  var gameRef = null;
+
+  /* v0.3.2 验收叠加层：只写在额外 canvas 上，游戏 rAF 只重画 #game，标记不会被冲掉 */
+  function overlayNote(lines, marks) {
+    var oc = document.createElement('canvas');
+    oc.width = canvas.width; oc.height = canvas.height;
+    oc.style.cssText = 'position:fixed;left:0;top:0;z-index:9;pointer-events:none';
+    document.body.appendChild(oc);
+    var o = oc.getContext('2d');
+    var k = canvas.width / C.DESIGN.w;
+    o.font = 'bold ' + Math.round(16 * Math.max(k, 0.8)) + 'px sans-serif';
+    o.textBaseline = 'top';
+    o.fillStyle = '#C62828';
+    for (var i = 0; i < lines.length; i++) o.fillText(lines[i], 14 * k + 8, 14 * k + i * 24 * k);
+    for (var m = 0; m < marks.length; m++) {
+      var mk = marks[m], x = mk.x * k, y = mk.y * k;
+      o.strokeStyle = mk.color; o.lineWidth = Math.max(2, 2 * k);
+      if (mk.type === 'cross') {
+        o.beginPath(); o.moveTo(x - 10 * k, y); o.lineTo(x + 10 * k, y);
+        o.moveTo(x, y - 10 * k); o.lineTo(x, y + 10 * k); o.stroke();
+      } else {
+        o.beginPath(); o.arc(x, y, 12 * k, 0, Math.PI * 2); o.stroke();
+      }
+    }
+  }
+
+  function boot() {
+    var game = window.TANGRAM_CORE({
+      ctx: ctx,
+      size: function () {
+        var m = q.match(/w=(\d+)/);
+        return m ? { w: +m[1], h: 1624 * (+m[1]) / 750 } : { w: 750, h: 1624 };
+      },
+      dpr: function () { return 1; },
+      safeInsets: function () { return { top: 0, bottom: 0 }; },
+      bindInput: function (fn) { inputFn = fn; },
+      storage: { get: function () { return null; }, set: function () {} },
+      audio: { unlock: function () {}, setEnabled: function () {}, play: function () {}, duck: function () {} },
+      vibrate: function () {},
+      images: images,
+      onHide: function () {},
+      onShow: function () {}
+    });
+    game.init();
+    var S = game.state;
+    // v0.3 Phase 0：set=tangram7 切到七巧板数据集（截图验收用）
+    var setKey = (q.match(/set=(\w+)/) || [])[1];
+    if (setKey === 'tangram7') game._debug.useSet('tangram7');
+    var screen = (q.match(/screen=(\w+)/) || [])[1] || 'home';
+    var placed = +(q.match(/placed=(\d+)/) || [])[1];
+    if (isNaN(placed)) placed = 2;
+    var tier = +(q.match(/tier=(\d+)/) || [])[1];       // v0.3 A3：强制提示档 1/2/3（同关三档截图）
+    var last = +(q.match(/last=(\d+)/) || [])[1] || 0;  // v0.3 A7：结算显示「全部完成」文案
+
+    if (screen === 'levels') {
+      var unlocked = +(q.match(/unlocked=(\d+)/) || [])[1];
+      S.save.unlockedMax = isNaN(unlocked) ? 3 : unlocked;
+      S.save.starOf = { 1: 3, 2: 2, 3: 1 };
+      S.page = 'levels'; S.fade = 1; S.pageT = 9999;
+      var pg = +(q.match(/page=(\d+)/) || [])[1];
+      if (!isNaN(pg)) S.lvPage = pg;
+    } else if (screen === 'play' || screen === 'hint' || screen === 'result') {
+      // 用 core 当前数据集的关卡表（切 set 后是 60 关七巧板），不能再用全局 TANGRAM_DATA.levels
+      var LIB = game._debug.LEVELS;
+      var lvIdx = +(q.match(/level=(\d+)/) || [])[1] || 0;
+      if (last) lvIdx = LIB.length - 1;                 // 让 renderResult 走 COMPLETE_TITLE 分支
+      if (lvIdx >= LIB.length) lvIdx = LIB.length - 1;
+      game._debug.setupLevel(lvIdx);
+      S.page = 'play'; S.fade = 1; S.pageT = 9999; S.elapsed = 63.4; S.steps = 7;
+      if (!isNaN(tier) && tier >= 1 && tier <= 3) S.hintTier = tier;
+      var lv = LIB[lvIdx];
+      for (var i = 0; i < placed; i++) {
+        var p = S.pieces[i];
+        var st = lv.solution.filter(function (x) { return x.id === p.id; })[0];
+        if (!st) continue;
+        p.onBoard = true; p.x = st.x; p.y = st.y;
+        p.angle = st.angle; p.dAngle = st.angle;
+        p.flipped = st.flipped; p.dFlipped = st.flipped;
+      }
+      // 覆盖率必须跑真实判定，不能手填（手填会截出「只放两块却 100%」的假象）
+      var jr = game._debug.judgeNow();
+      S.covFrom = jr.coverage; S.covTo = jr.coverage; S.cov = jr.coverage; S.covT = 1;
+      // v0.3.1 A3：sel=N 把第 N 块板放到棋盘中央并选中，用于旋转手柄截图
+      var selArg = +(q.match(/sel=(\d+)/) || [])[1];
+      if (!isNaN(selArg) && S.pieces[selArg]) {
+        var sp2 = S.pieces[selArg];
+        var st2 = lv.solution.filter(function (x) { return x.id === sp2.id; })[0];
+        sp2.onBoard = true;
+        sp2.x = st2 ? st2.x : 500; sp2.y = st2 ? st2.y : 500;
+        sp2.angle = 0; sp2.dAngle = 0;
+        S.selId = sp2.id;
+      } else {
+        S.selId = S.pieces[2] && S.pieces[2].id;
+      }
+      if (screen === 'hint') {
+        S.hint = { id: lv.solution[0] && lv.solution[0].id, until: Date.now() + 1e6 };
+        S.msg = '还差一点点'; S.msgT = 1500;
+      }
+      if (screen === 'result') {
+        S.overlay = 'result'; S.resT = 1000; S.starShown = 3;
+        S.result = { stars: 3, time: 63.4, steps: 9 };
+        S.win = { t: 2000 };
+      }
+    } else if (screen === 'settings') {
+      S.page = 'home'; S.fade = 1; S.overlay = 'settings';
+    } else if (screen === 'energy' || screen === 'tasks' || screen === 'invite' ||
+               screen === 'desktop' || screen === 'skin') {
+      /* v0.5：主页弹窗截图（体力/任务/邀请/桌面/皮肤） */
+      S.page = 'home'; S.fade = 1; S.pageT = 9999; S.overlay = screen;
+      S.save.coin = 168; S.save.energy = 12;
+      if (screen === 'energy') { S.save.freeEnergyDay = ''; S.save.freeEnergyUsed = 0; }
+      if (screen === 'tasks') {
+        var td = new Date();
+        S.save.tasksDay = td.getFullYear() + '-' + (td.getMonth() + 1) + '-' + td.getDate();
+        S.save.taskPlays = 3; S.save.tasksClaimed = {};
+        S.save.starOf = { 1: 3, 2: 2 };
+      }
+      if (screen === 'invite') { S.save.inviteCount = 2; }
+    } else if (screen === 'fail') {
+      /* v0.5：复活弹窗（倒计时归零） */
+      var LIBF = game._debug.LEVELS;
+      game._debug.setupLevel(0);
+      S.page = 'play'; S.fade = 1; S.pageT = 9999;
+      S.timeLimit = game._debug.timeLimitOf(LIBF[0]);
+      S.timeLeft = 0; S.hearts = 0;
+      S.overlay = 'fail'; S.failT = 0;
+      S.save.streak = 1; S.save.coin = 210;
+    }
+    /* v0.3.4 A4a：?flower=<ms> 冻结鲜花在某关键帧，便于 headless 截图逐帧验收。
+     * >660ms 时同时打开结算面板，检查「鲜花不吞结算按钮、面板画在鲜花之上」。 */
+    var flowerMs = +(q.match(/flower=(\d+)/) || [])[1];
+    if (!isNaN(flowerMs) && screen === 'play') {
+      S.win = { t: flowerMs };
+      S.flower = { t: flowerMs };
+      S.running = false;
+      S.result = { stars: 3, time: 63.4, steps: 7 };
+      /* v0.6：结算面板 900ms 进场（FLOWER.overlayAt），阈值同步改 900 */
+      if (flowerMs > 900) { S.overlay = 'result'; S.resT = 300; S.starShown = 3; }
+      var frozenT = flowerMs;
+      Object.defineProperty(S.flower, 't', {
+        get: function () { return frozenT; }, set: function () {}, configurable: true
+      });
+      // win.t 也冻结：否则 headless 等待截图期间会自动跨过 660ms 弹出结算，
+      // 把「绽放峰值」帧意外变成「绽放+结算」帧，截图不可复现。
+      Object.defineProperty(S.win, 't', {
+        get: function () { return frozenT; }, set: function () {}, configurable: true
+      });
+      // full=1：截图时强制关闭低帧率降级，让 6 朵卫星花全部出现以便对照演示页
+      if ((q.match(/full=(\d+)/) || [])[1] === '1') {
+        Object.defineProperty(S, 'lowFps', {
+          get: function () { return false; }, set: function () {}, configurable: true
+        });
+      }
+    }
+    /* v0.5：?skin=warm|mint|night 预览皮肤 */
+    var skinKey = (q.match(/skin=(\w+)/) || [])[1];
+    if (skinKey && C.SKINS[skinKey]) { game._debug.applySkin(skinKey); S.toast = null; }
+    /* v0.5：?toast=1 关闭提示气泡，避免遮挡截图 */
+    if ((q.match(/notoast=(\d+)/) || [])[1] === '1') S.toast = null;
+    gameRef = game;
+    var mark = +(q.match(/mark=(\d+)/) || [])[1] || 0;
+    var dragCenter = +(q.match(/dragcenter=(\d+)/) || [])[1] || 0;
+    var traysel = +(q.match(/traysel=(\d+)/) || [])[1] || 0;
+    if (traysel && screen === 'play') {
+      var tp0 = S.pieces.filter(function (p) { return !p.onBoard; })[0];
+      if (tp0) S.selId = tp0.id;
+    }
+    var marks = [], lines = [];
+    if (screen === 'play' && (mark || dragCenter) && S.selId && inputFn) {
+      var mp = S.pieces.filter(function (p) { return p.id === S.selId; })[0];
+      if (mp) {
+        var k = canvas.width / C.DESIGN.w;
+        var WS = C.LAYOUT.BOARD.size / 1000;
+        var cd = [C.LAYOUT.BOARD.x + mp.x * WS, C.LAYOUT.BOARD.y + mp.y * WS];
+        if (dragCenter) {
+          inputFn('down', cd[0] * k, cd[1] * k);
+          inputFn('move', (cd[0] + 60) * k, cd[1] * k);
+          inputFn('up', (cd[0] + 60) * k, cd[1] * k);
+          cd = [C.LAYOUT.BOARD.x + mp.x * WS, C.LAYOUT.BOARD.y + mp.y * WS];
+          lines.push('质心按下并右拖 60 设计px');
+          lines.push('angle=' + mp.angle + '° dAngle=' + mp.dAngle + '°（均应为 0）');
+        }
+        var hd = game._debug.handleAt(mp);
+        marks.push({ type: 'cross', x: cd[0], y: cd[1], color: '#D32F2F' });
+        marks.push({ type: 'ring', x: hd[0], y: hd[1], color: '#1976D2' });
+        if (!lines.length) lines.push('红十=质心拖拽区  蓝圈=角上手柄');
+      }
+    }
+    if (marks.length) overlayNote(lines, marks);
+    S.fade = 1;              // 截图时强制淡入完成，避免截到页面过渡中间态
+    window.__ready = true;
+  }
+
+  function one() { if (++loaded >= need) boot(); }
+  if (!need) { boot(); } else {
+    Object.keys(C.ART.files).forEach(function (k) {
+      var img = new Image();
+      img.onload = function () { images[k] = img; one(); };
+      img.onerror = function () { one(); };
+      img.src = '../preview/' + C.ART.base.replace(/^\.\//, '') + C.ART.files[k];
+    });
+  }
+})();
+</script>
+</body>
+</html>

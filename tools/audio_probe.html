@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>audio-probe</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:,">
+<script>
+/* 音频探针：在真实平台层之前把 Web Audio 换成一个只记录、不出声的桩，
+ * 用来验证「BGM 到底有没有被调度、音符增益是不是可听量级」。
+ * 用法：msedge --headless=new --dump-dom --virtual-time-budget=6000 tools/audio_probe.html */
+(function () {
+  var notes = [], gains = [];
+  window.__probe = { notes: notes, gains: gains };
+
+  function Param(v) { this.value = v; this._peak = null; }
+  Param.prototype.setValueAtTime = function (x) { this.value = x; return this; };
+  Param.prototype.linearRampToValueAtTime = function (x) { this._peak = x; this.value = x; return this; };
+  Param.prototype.exponentialRampToValueAtTime = function (x) { return this; };
+  Param.prototype.setTargetAtTime = function (x) { this.value = x; return this; };
+  Param.prototype.cancelScheduledValues = function () { return this; };
+
+  function Node(kind) { this.kind = kind; this.gain = new Param(1); }
+  Node.prototype.connect = function (dst) { this._dst = dst; return dst; };
+  Node.prototype.disconnect = function () {};
+  Node.prototype.start = function () {};
+  Node.prototype.stop = function () {};
+
+  function AC() {
+    var self = this;
+    this.currentTime = 0;
+    this.sampleRate = 44100;
+    this.state = 'running';
+    this.destination = new Node('destination');
+    gains.push([]);
+    this.createGain = function () {
+      var g = new Node('gain');
+      gains[gains.length - 1].push(g);
+      return g;
+    };
+    this.createOscillator = function () {
+      var o = new Node('osc');
+      o.type = 'sine';
+      o.frequency = new Param(440);
+      o.connect = function (dst) {
+        notes.push({ freq: o.frequency.value, gain: (dst.gain && dst.gain._peak) || 0, t: self.currentTime });
+        return dst;
+      };
+      return o;
+    };
+    this.createBufferSource = function () {
+      var s = new Node('buf');
+      s.playbackRate = new Param(1);
+      s.buffer = null;
+      return s;
+    };
+    this.createBiquadFilter = function () { var f = new Node('filter'); f.frequency = new Param(1000); f.Q = new Param(1); f.type = 'lowpass'; return f; };
+    this.createBuffer = function (ch, len) { return { getChannelData: function () { return new Float32Array(len); }, length: len }; };
+    this.decodeAudioData = function (ab, ok, bad) { if (bad) bad(new Error('skip')); };
+    this.resume = function () {};
+    setInterval(function () { self.currentTime += 0.05; }, 50);
+  }
+  window.AudioContext = AC;
+  window.webkitAudioContext = AC;
+
+  /* 记录 bgm 总线的最终音量：第 2 个创建的 Gain 就是 bgmGain（第 1 个是 master） */
+  window.__bgmGain = function () {
+    var all = [];
+    for (var i = 0; i < gains.length; i++) for (var j = 0; j < gains[i].length; j++) all.push(gains[i][j]);
+    return all.length >= 2 ? all[1].gain.value : null;
+  };
+})();
+</script>
+<style>
+  html,body{margin:0;height:100%;background:#F6E9D4;overflow:hidden}
+  #wrap{position:fixed;inset:0}
+  canvas{display:block;width:100%;height:100%}
+  #safe-probe{position:fixed;top:0;left:0;width:0;height:0;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+  #out{position:fixed;left:0;top:0;font:12px monospace;color:#000;background:#fff;opacity:.01;pointer-events:none}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+  <div id="safe-probe" aria-hidden="true"></div>
+</div>
+<pre id="out">pending</pre>
+<script src="../preview/js/config.js"></script>
+<script src="../preview/js/geom.js"></script>
+<script src="../preview/js/judge.js"></script>
+<script src="../preview/js/levels.js"></script>
+<script src="../preview/js/core.js"></script>
+<script src="../preview/js/game.js"></script>
+<script>
+(function () {
+  function finish(tag) {
+    var p = window.__probe;
+    var peak = 0;
+    for (var i = 0; i < p.notes.length; i++) if (p.notes[i].gain > peak) peak = p.notes[i].gain;
+    var res = {
+      tag: tag,
+      notes: p.notes.length,
+      peakNoteGain: +peak.toFixed(4),
+      bgmGain: window.__bgmGain(),
+      freqs: p.notes.slice(0, 6).map(function (n) { return +n.freq.toFixed(1); })
+    };
+    document.getElementById('out').textContent = 'PROBE ' + JSON.stringify(res);
+    document.title = 'PROBE ' + JSON.stringify(res);
+  }
+  var waited = 0;
+  var iv = setInterval(function () {
+    waited += 100;
+    if (window.__game) {
+      clearInterval(iv);
+      var cv = document.getElementById('game');
+      function fire(type) {
+        var ev = new PointerEvent(type, { clientX: 200, clientY: 400, pointerId: 1, isPrimary: true, bubbles: true });
+        cv.dispatchEvent(ev);
+      }
+      fire('pointerdown');
+      setTimeout(function () { fire('pointerup'); }, 60);
+      setTimeout(function () { finish('home'); }, 1500);
+    } else if (waited > 5000) { clearInterval(iv); finish('no-game'); }
+  }, 100);
+})();
+</script>
+</body>
+</html>

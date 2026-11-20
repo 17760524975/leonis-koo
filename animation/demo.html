@@ -1,0 +1,1490 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>《方寸巧拼》动效演示 · 白动远</title>
+<style>
+/* ============================================================
+   《方寸巧拼》动效审查工具
+   配色严格照策划文档 v1.1（6.5 / 6.5.1 / 7.1）
+   纯 HTML/CSS/JS，零依赖，双击即开
+   ============================================================ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+:root{
+  --k: 1;                       /* 时间轴倍率：慢放时 = 4 */
+
+  /* 底座四色（6.5） */
+  --wood:   #F6E9D4;            /* 浅木（页面背景） */
+  --paper:  #FFFFFF;            /* 纯白（卡片） */
+  --ink:    #2C3A4B;            /* 深墨蓝（主文字） */
+  --accent: #FFB93D;            /* 暖黄（强调/星级/主按钮） */
+  --ink2:   #7A8A9C;            /* 次要文字 */
+  --line:   #E3E9F2;            /* 边线 */
+  --track:  #E8EEF7;            /* 进度条轨道 / 目标轮廓填充 */
+
+  /* 缓动 Token（见规格 §1） */
+  --E_ENTRY:    cubic-bezier(0.22, 1, 0.36, 1);
+  --E_FEEDBACK: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --E_SETTLE:   cubic-bezier(0.4, 0, 0.6, 1);
+  --E_BREATH:   cubic-bezier(0.37, 0, 0.63, 1);
+  --E_WINBACK:  cubic-bezier(0.34, 1.2, 0.64, 1);
+}
+body.slow { --k: 4; }
+
+html, body { margin:0; padding:0; height:100%; overflow:hidden; }
+body{
+  background:#EAEEF4;
+  color:var(--ink);
+  font:400 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.app{ display:flex; height:100vh; }
+
+/* ---------------- 左：舞台 ---------------- */
+.stageCol{
+  flex:0 0 auto;
+  width: calc((100vh - 132px) * 0.46182 + 26px);   /* 让舞台铺满可用高度，宽高比锁定 750:1624 */
+  max-width: 48vw;
+  display:flex; flex-direction:column;
+  padding:14px 12px 12px 14px; min-width:0; height:100vh;
+}
+.stageWrap{ position:relative; flex:1 1 auto; min-height:0; }
+
+.stage{
+  position:absolute; top:0; left:0;
+  width:750px; height:1624px;
+  transform-origin:0 0;
+  background:var(--wood);
+  border-radius:10px;
+  overflow:hidden;
+  box-shadow:0 10px 44px rgba(44,58,75,.20);
+}
+/* 极淡木纹（对比度 ≤5%，只做氛围，不抢拼图区） */
+.stage::before{
+  content:''; position:absolute; inset:0; z-index:0; pointer-events:none;
+  background:
+    repeating-linear-gradient(93deg, rgba(190,160,120,.075) 0 1.5px, rgba(190,160,120,0) 1.5px 11px),
+    radial-gradient(120% 70% at 22% 0%, rgba(255,255,255,.85), rgba(255,255,255,0) 62%),
+    linear-gradient(168deg, rgba(255,255,255,.35), rgba(206,182,150,.22));
+}
+#scene{ position:absolute; inset:0; z-index:1; display:block; }
+
+/* 板身透视：只留投影＋高亮环，方便逐帧检查投影与环（审查工具，不属交付动效） */
+.stage.xray #pieces > g > g:nth-child(3){ opacity:.18; }
+
+/* ---------------- 舞台内 HTML 覆盖层 ---------------- */
+
+/* 顶栏 */
+.topbar{
+  position:absolute; left:0; top:0; width:750px; height:120px; z-index:3;
+  display:flex; align-items:center;
+}
+.tbBack{
+  position:absolute; left:24px; top:88px; width:88px; height:56px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:40px; color:var(--ink); cursor:pointer;
+  border-radius:16px; transition:transform calc(80ms*var(--k)) var(--E_FEEDBACK);
+}
+.tbBack.locked{ color:#C3CDD9; pointer-events:none; }
+.tbTitle{
+  position:absolute; left:0; right:0; top:88px; height:56px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:30px; font-weight:600; color:var(--ink); letter-spacing:1px;
+}
+.tbTime{
+  position:absolute; right:32px; top:88px; height:56px;
+  display:flex; align-items:center; font-size:26px; color:var(--ink2);
+  font-variant-numeric:tabular-nums;
+}
+
+/* 覆盖率进度条 */
+.cov{
+  position:absolute; left:52px; top:986px; width:646px; height:32px; z-index:3;
+  display:flex; align-items:center; gap:14px;
+}
+.covLabel{ font-size:24px; color:var(--ink2); white-space:nowrap; }
+.covNum{
+  font-size:26px; font-weight:700; color:var(--ink); min-width:74px;
+  font-variant-numeric:tabular-nums; text-align:right;
+}
+.covTrack{
+  flex:1 1 auto; height:14px; border-radius:999px; background:var(--track);
+  overflow:hidden; position:relative;
+}
+/* 填充用 clip-path 揭示：不改 width（不触发 layout），也不压扁渐变。
+   Canvas 版只需画一条带 createLinearGradient 的矩形，天然无此问题。 */
+.covFillWrap{
+  position:absolute; left:0; top:0; height:100%; width:100%;
+}
+.covFill{
+  position:absolute; inset:0; border-radius:999px;
+  background:linear-gradient(90deg,#63C88B,#4FB87A);
+  clip-path: inset(0 100% 0 0);
+}
+
+/* 工具栏 */
+.tool{
+  position:absolute; width:120px; height:100px; z-index:3;
+  display:flex; align-items:center; justify-content:center;
+  background:#fff; border:1.5px solid var(--line); border-radius:24px;
+  color:var(--ink); font-size:38px; line-height:1;
+  box-shadow:0 3px 0 var(--line);
+  cursor:pointer; user-select:none;
+  transition: transform calc(80ms*var(--k)) var(--E_FEEDBACK),
+              box-shadow calc(80ms*var(--k)) var(--E_FEEDBACK),
+              color calc(80ms*var(--k)) var(--E_FEEDBACK);
+}
+.tool.is-down{ transform:translateY(2px); box-shadow:0 1px 0 var(--line); }
+.tool.is-off{ background:#F4F6F9; color:#C3CDD9; pointer-events:none; }
+.tool .lbl{ font-size:24px; font-weight:600; letter-spacing:1px; }
+
+/* 演示主按钮（6.5.1 主按钮规格：渐变 + 白字 + 底部厚边） */
+.demoBtn{
+  position:absolute; left:195px; top:1368px; width:360px; height:96px; z-index:3;
+  display:flex; align-items:center; justify-content:center;
+  border-radius:999px; color:#fff; font-size:32px; font-weight:600; letter-spacing:2px;
+  background:linear-gradient(180deg,#FFB93D,#FF9F1C);
+  box-shadow:0 4px 0 #E08A00;
+  cursor:pointer; user-select:none;
+  transition: transform calc(80ms*var(--k)) var(--E_FEEDBACK),
+              box-shadow calc(80ms*var(--k)) var(--E_FEEDBACK);
+}
+.demoBtn.is-down{ transform:translateY(2px); box-shadow:0 2px 0 #E08A00; }
+
+/* ---------------- 通用浮层 ---------------- */
+.ovl{
+  position:absolute; inset:0; z-index:20;
+  opacity:0; pointer-events:none;
+  transition: opacity calc(200ms*var(--k)) var(--E_FEEDBACK);
+}
+.ovl.on{ opacity:1; }
+.ovl.on.allow{ pointer-events:auto; }
+.ovlBg{ position:absolute; inset:0; background:rgba(44,58,75,.28); }
+
+/* 结算卡片 */
+.resultCard{
+  position:absolute; left:75px; top:492px; width:600px;
+  background:var(--paper); border:1px solid var(--line); border-radius:32px;
+  box-shadow:0 4px 16px rgba(44,58,75,.10);
+  padding:44px 44px 40px;
+  transform:translateY(24px);
+  transition: transform calc(200ms*var(--k)) var(--E_FEEDBACK);
+}
+.ovl.on .resultCard{ transform:translateY(0); }
+.rcTitle{ font-size:40px; font-weight:700; text-align:center; letter-spacing:2px; }
+.rcSub{ margin-top:8px; font-size:24px; color:var(--ink2); text-align:center; }
+.stars{ display:flex; justify-content:center; gap:20px; margin:30px 0 26px; }
+/* 星级：未点亮 = #E3E9F2 实心可见（规格 #12「保持实心，不播动画」） */
+.star{ width:88px; height:88px; color:#E3E9F2; }
+.star svg{ display:block; width:100%; height:100%; }
+.star svg path{ fill:currentColor; }
+@keyframes starPop{
+  0%  { transform:scale(.6);  opacity:0; color:#E3E9F2; animation-timing-function:cubic-bezier(.33,1,.68,1); }
+  55% { transform:scale(1.15); opacity:1; color:#FFB93D; animation-timing-function:cubic-bezier(.4,0,.6,1); }
+  100%{ transform:scale(1);   opacity:1; color:#FFB93D; }
+}
+.star.lit{ animation:starPop 120ms both; }
+.rcStats{
+  display:flex; justify-content:space-around; padding:22px 0 30px;
+  border-top:1px solid var(--line); font-size:28px; color:var(--ink);
+  font-variant-numeric:tabular-nums;
+}
+.rcStats b{ display:block; font-size:22px; color:var(--ink2); font-weight:400; margin-bottom:4px; }
+.btnPrimary{
+  width:100%; height:96px; border:none; border-radius:999px; cursor:pointer;
+  background:linear-gradient(180deg,#FFB93D,#FF9F1C); color:#fff;
+  font-size:34px; font-weight:700; letter-spacing:3px; font-family:inherit;
+  box-shadow:0 4px 0 #E08A00;
+  transition: transform calc(80ms*var(--k)) var(--E_FEEDBACK),
+              box-shadow calc(80ms*var(--k)) var(--E_FEEDBACK);
+}
+.btnPrimary.is-down{ transform:translateY(2px); box-shadow:0 2px 0 #E08A00; }
+.rcRow{ display:flex; gap:20px; margin-top:20px; }
+.btnSec{
+  flex:1 1 0; height:84px; border-radius:20px; cursor:pointer; font-family:inherit;
+  background:#fff; border:1.5px solid var(--line); color:var(--ink);
+  font-size:28px; box-shadow:0 3px 0 var(--line);
+  transition: transform calc(80ms*var(--k)) var(--E_FEEDBACK),
+              box-shadow calc(80ms*var(--k)) var(--E_FEEDBACK);
+}
+.btnSec.is-down{ transform:translateY(2px); box-shadow:0 1px 0 var(--line); }
+.rcBtns.locked{ opacity:.42; pointer-events:none; }
+
+/* 关卡格浮层 */
+#levelOvl{ z-index:18; }
+.levels{
+  position:absolute; inset:0; background:var(--wood);
+  display:flex; flex-wrap:wrap; align-content:center; justify-content:center;
+  gap:40px 40px; padding:0 60px;
+}
+.lvCard{
+  width:290px; height:210px; border-radius:32px;
+  background:var(--paper); border:1px solid var(--line);
+  box-shadow:0 4px 16px rgba(44,58,75,.10);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:14px; opacity:0;
+}
+@keyframes cardIn{
+  from{ opacity:0; transform:translateY(12px); }
+  to  { opacity:1; transform:translateY(0); }
+}
+.lvCard.in{ animation:cardIn 240ms var(--E_FEEDBACK) both; }
+.lvCard .n{ font-size:44px; font-weight:700; font-variant-numeric:tabular-nums; }
+.lvCard .s{ display:flex; gap:8px; }
+.lvCard .s i{ width:26px; height:26px; display:block; border-radius:50%; background:#E3E9F2; }
+.lvCard .s i.on{ background:#FFB93D; }
+.lvCard.lock{ opacity:.55; }
+
+/* 页面转场用的假主界面 */
+#pageOvl{ z-index:19; background:var(--wood); transition:opacity calc(200ms*var(--k)) var(--E_FEEDBACK); }
+.pageMock{
+  position:absolute; inset:0; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:0;
+}
+.pageMock .t1{ font-size:72px; font-weight:700; letter-spacing:10px; }
+.pageMock .t2{ font-size:26px; color:var(--ink2); letter-spacing:6px; margin-top:14px; }
+.pageMock .mb{ margin-top:70px; width:400px; height:104px; border-radius:999px;
+  background:linear-gradient(180deg,#FFB93D,#FF9F1C); box-shadow:0 4px 0 #E08A00;
+  display:flex; align-items:center; justify-content:center;
+  color:#fff; font-size:36px; font-weight:700; letter-spacing:4px; }
+.pageMock .hint{ position:absolute; bottom:90px; font-size:22px; color:var(--ink2); }
+
+/* 舞台内容整体（供 #13 淡入+上移用） */
+.stageContent{
+  position:absolute; inset:0; z-index:1;
+  opacity:1; transform:translateY(0);
+  transition: opacity calc(200ms*var(--k)) var(--E_FEEDBACK),
+              transform calc(200ms*var(--k)) var(--E_FEEDBACK);
+}
+.stageContent.pending{ opacity:0; transform:translateY(16px); transition:none; }
+
+/* ---------------- 右：控制面板 ---------------- */
+.panel{
+  flex:1 1 0; min-width:352px; max-width:520px;
+  background:#fff; border-left:1px solid var(--line);
+  overflow-y:auto; overflow-x:hidden;
+  padding:18px 18px 60px;
+}
+.panel h1{ font-size:19px; margin:0 0 2px; letter-spacing:.5px; }
+.panel .sub{ font-size:12px; color:var(--ink2); margin:0 0 16px; line-height:1.6; }
+.secTitle{
+  font-size:12px; font-weight:700; letter-spacing:2px; color:var(--ink2);
+  margin:22px 0 8px; padding-top:14px; border-top:1px solid var(--line);
+  text-transform:uppercase;
+}
+.secTitle:first-of-type{ border-top:none; padding-top:0; margin-top:8px; }
+
+.rowOpt{ display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
+.opt{
+  flex:1 1 0; min-width:98px; padding:10px 8px; border-radius:12px; cursor:pointer;
+  background:#F7F9FC; border:1.5px solid var(--line); color:var(--ink);
+  font:inherit; font-size:13px; text-align:center;
+  transition:background .12s, border-color .12s, color .12s;
+}
+.opt.on{ background:#FFF6E4; border-color:var(--accent); color:#8A5A00; font-weight:700; }
+
+.ctl{
+  display:flex; align-items:flex-start; gap:10px; width:100%; text-align:left;
+  padding:9px 11px; margin-bottom:5px; border-radius:11px; cursor:pointer;
+  background:#fff; border:1.5px solid var(--line); color:var(--ink);
+  font:inherit; transition:background .1s, border-color .1s, transform .06s;
+}
+.ctl:hover{ background:#F7F9FC; border-color:#CBD6E4; }
+.ctl:active{ transform:scale(.988); }
+.ctl .num{
+  flex:0 0 auto; width:23px; height:23px; border-radius:6px; margin-top:1px;
+  background:var(--track); color:var(--ink2);
+  font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center;
+}
+.ctl .txt{ flex:1 1 auto; min-width:0; font-size:13px; font-weight:600; line-height:1.35; }
+.ctl .txt i{
+  display:block; font-style:normal; font-weight:400; font-size:11px;
+  color:var(--ink2); margin-top:2px; letter-spacing:0;
+}
+.ctl.hot{ background:#FFF6E4; border-color:var(--accent); }
+.ctl.hot .num{ background:var(--accent); color:#fff; }
+
+.btnWide{
+  width:100%; padding:11px; border-radius:11px; cursor:pointer; font:inherit;
+  font-size:13px; font-weight:700; letter-spacing:1px;
+  background:var(--ink); color:#fff; border:none; margin-top:6px;
+}
+.btnWide.ghost{ background:#F7F9FC; color:var(--ink2); border:1.5px solid var(--line); font-weight:600; }
+
+/* ---------------- HUD ---------------- */
+.hud{
+  flex:0 0 auto; margin-top:8px; padding:9px 12px; border-radius:10px;
+  background:#fff; border:1px solid var(--line);
+  font-size:11.5px; line-height:1.7; color:var(--ink2);
+  min-height:58px;
+}
+.hud b{ color:var(--ink); font-size:12.5px; }
+.hud .t{ color:#B4761A; font-weight:700; font-variant-numeric:tabular-nums; }
+.hud .sfx{ color:#2E8B57; }
+
+@media (max-width: 980px){
+  .app{ flex-direction:column; }
+  .stageCol{ height:64vh; width:100%; max-width:none; padding:8px; }
+  .panel{ max-width:none; border-left:none; border-top:1px solid var(--line); flex:1 1 auto; }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ================= 舞台 ================= -->
+  <div class="stageCol">
+    <div class="stageWrap" id="stageWrap">
+      <div class="stage" id="stage">
+
+        <div class="stageContent" id="stageContent">
+
+          <!-- 场景（白卡纸 / 目标轮廓 / 托盘槽位 / 板件） -->
+          <svg id="scene" viewBox="0 0 750 1624" width="750" height="1624" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <filter id="cardShadow" x="-12%" y="-6%" width="124%" height="116%">
+                <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#2C3A4B" flood-opacity="0.10"/>
+              </filter>
+            </defs>
+            <!-- 白卡纸：拼图区 -->
+            <rect x="24" y="120" width="702" height="920" rx="28" fill="#FFFFFF" filter="url(#cardShadow)"/>
+            <!-- 目标轮廓（第 3 关 L 形，示意） -->
+            <polygon id="target"
+                     points="200,200 560,200 560,340 380,340 380,520 200,520"
+                     fill="#E8EEF7" stroke="#B9CBE0" stroke-width="3"
+                     stroke-dasharray="8 6" stroke-linejoin="round"/>
+            <g id="slots"></g>
+            <g id="pieces"></g>
+            <polygon id="overlapPoly" points="" fill="#E05252" fill-opacity="0.16"
+                     stroke="#E05252" stroke-width="3" stroke-linejoin="round" opacity="0"/>
+          </svg>
+
+          <!-- 顶栏 -->
+          <div class="topbar">
+            <div class="tbBack" id="backBtn">←</div>
+            <div class="tbTitle">第 3 关</div>
+            <div class="tbTime">00:38</div>
+          </div>
+
+          <!-- 覆盖率 -->
+          <div class="cov">
+            <span class="covLabel">覆盖</span>
+            <span class="covNum" id="covNum">62%</span>
+            <div class="covTrack">
+              <div class="covFillWrap" id="covWrap"><div class="covFill" id="covFill"></div></div>
+            </div>
+          </div>
+
+          <!-- 工具栏 -->
+          <div class="tool" data-tool="ccw" style="left:43px;  top:1508px;">↺</div>
+          <div class="tool" data-tool="cw"  style="left:179px; top:1508px;">↻</div>
+          <div class="tool" data-tool="flip" style="left:315px; top:1508px;">⇄</div>
+          <div class="tool" data-tool="hint" id="demoTool" style="left:451px; top:1508px;"><span class="lbl">提示</span></div>
+          <div class="tool" data-tool="redo" style="left:587px; top:1508px;"><span class="lbl">重来</span></div>
+
+          <!-- 演示用主按钮（#1 #2 的目标） -->
+          <div class="demoBtn" id="demoBtn">按下试试</div>
+
+        </div><!-- /stageContent -->
+
+        <!-- 关卡格浮层 #14 -->
+        <div class="ovl" id="levelOvl"><div class="levels" id="levels"></div></div>
+
+        <!-- 假主界面浮层 #13 -->
+        <div class="ovl" id="pageOvl">
+          <div class="pageMock">
+            <div class="t1">四巧</div>
+            <div class="t2">Q I Q I A O</div>
+            <div class="mb">开始游戏</div>
+            <div class="hint">#13 页面转场：本页即将直接消失，新页从 +16px 浮上来</div>
+          </div>
+        </div>
+
+        <!-- 结算浮层 #11 #12 -->
+        <div class="ovl" id="resultOvl">
+          <div class="ovlBg" id="resultBg"></div>
+          <div class="resultCard" id="resultCard">
+            <div class="rcTitle">第 3 关 完成</div>
+            <div class="rcSub">拼合 4 / 4 块</div>
+            <div class="stars" id="stars">
+              <div class="star" data-i="0"><svg viewBox="0 0 100 100"><path d="M50 4 63.3 33.9 96 37.9 72 60.5 78.1 92.8 50 77 21.9 92.8 28 60.5 4 37.9 36.7 33.9Z"/></svg></div>
+              <div class="star" data-i="1"><svg viewBox="0 0 100 100"><path d="M50 4 63.3 33.9 96 37.9 72 60.5 78.1 92.8 50 77 21.9 92.8 28 60.5 4 37.9 36.7 33.9Z"/></svg></div>
+              <div class="star" data-i="2"><svg viewBox="0 0 100 100"><path d="M50 4 63.3 33.9 96 37.9 72 60.5 78.1 92.8 50 77 21.9 92.8 28 60.5 4 37.9 36.7 33.9Z"/></svg></div>
+            </div>
+            <div class="rcStats">
+              <div><b>用时</b>00:42</div>
+              <div><b>步数</b>10</div>
+              <div><b>关卡</b>3 / 6</div>
+            </div>
+            <div class="rcBtns locked" id="rcBtns">
+              <button class="btnPrimary" id="btnNext">下一关</button>
+              <div class="rcRow">
+                <button class="btnSec" id="btnReplay">重玩</button>
+                <button class="btnSec" id="btnBack">回列表</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /stage -->
+    </div><!-- /stageWrap -->
+
+    <div class="hud" id="hud">— 点右侧任一按钮播放动效。建议先开「慢放 0.25x」逐帧看。</div>
+  </div>
+
+  <!-- ================= 控制面板 ================= -->
+  <aside class="panel">
+    <h1>动效审查 · v0.1</h1>
+    <p class="sub">
+      舞台 750×1624 等比缩放。每个按钮点一下播一次。<br>
+      规格书：<b>animation/动效规格.md</b>
+    </p>
+
+    <div class="secTitle">审查开关</div>
+    <div class="rowOpt">
+      <button class="opt" id="slowBtn">慢放 0.25x</button>
+      <button class="opt on" id="ringWhite">高亮环 · 白</button>
+      <button class="opt" id="ringGold">高亮环 · 暖黄</button>
+    </div>
+    <div class="rowOpt">
+      <button class="opt" id="shadowBtn">板身透视</button>
+      <button class="opt" id="autoBtn">自动重播 · 关</button>
+    </div>
+
+    <div class="secTitle">7.5 动效清单 · 14 项</div>
+    <div id="ctlList"></div>
+
+    <div class="secTitle">连续操作 · 中断规则验证</div>
+    <div id="chainList"></div>
+
+    <button class="btnWide ghost" id="resetBtn">全部复位</button>
+  </aside>
+
+</div>
+
+<script>
+'use strict';
+(function(){
+
+/* ============================================================
+   1. 缓动（严格对应规格 §1 的 cubic-bezier 数值）
+   ============================================================ */
+function cbz(x1,y1,x2,y2){
+  const cx1=3*x1, bx1=3*(x2-x1)-cx1, ax1=1-cx1-bx1;
+  const cy1=3*y1, by1=3*(y2-y1)-cy1, ay1=1-cy1-by1;
+  const sx=t=>((ax1*t+bx1)*t+cx1)*t;
+  const sy=t=>((ay1*t+by1)*t+cy1)*t;
+  const dx=t=>(3*ax1*t+2*bx1)*t+cx1;
+  return function(x){
+    if (x<=0) return 0;
+    if (x>=1) return 1;
+    let t=x;
+    for (let i=0;i<8;i++){
+      const d=dx(t); if (Math.abs(d)<1e-6) break;
+      const e=sx(t)-x; if (Math.abs(e)<1e-6) break;
+      t-=e/d;
+      if (t<0) t=0; else if (t>1) t=1;
+    }
+    return sy(t);
+  };
+}
+const E = {
+  ENTRY:    cbz(.22,1,.36,1),
+  FEEDBACK: cbz(.25,.46,.45,.94),
+  SETTLE:   cbz(.4,0,.6,1),
+  BREATH:   cbz(.37,0,.63,1),
+  POP:      cbz(.33,1,.68,1),
+  WINBACK:  cbz(.34,1.2,.64,1)
+};
+
+/* ============================================================
+   2. 时间轴：tween 池 + timer 池
+   —— tween 同一 (obj,prop) 只会存在一条，天然实现「重定向」
+   —— 所有 dt 都乘全局 timeScale，慢放走同一条路径（规格 I18）
+   ============================================================ */
+let SLOW = false;
+const ts = () => SLOW ? 0.25 : 1;
+
+const tweens = [];
+function tw(obj, prop, to, dur, ease){
+  for (let i=tweens.length-1;i>=0;i--){
+    if (tweens[i].obj===obj && tweens[i].prop===prop) tweens.splice(i,1);
+  }
+  tweens.push({obj, prop, from:obj[prop], to, dur:Math.max(1,dur), t:0, ease:ease||E.FEEDBACK});
+}
+function tickTweens(dt){
+  for (let i=tweens.length-1;i>=0;i--){
+    const T=tweens[i];
+    T.t+=dt;
+    const k=Math.min(1,T.t/T.dur);
+    T.obj[T.prop]=T.from+(T.to-T.from)*T.ease(k);
+    if (k>=1) tweens.splice(i,1);
+  }
+}
+
+const timers = [];
+function at(ms, fn){ timers.push({t:ms, fn}); }
+function tickTimers(dt){
+  for (let i=timers.length-1;i>=0;i--){
+    timers[i].t-=dt;
+    if (timers[i].t<=0){ const f=timers[i].fn; timers.splice(i,1); f(); }
+  }
+}
+function purge(){ tweens.length=0; timers.length=0; }
+
+/* ============================================================
+   3. 板件几何（5.1 局部坐标 → 质心系）
+   ============================================================ */
+const PPU = 74;                   // 1u = 74 设计像素
+
+const DEF = {
+  A:{ name:'大梯形',   fill:'#FF8A5B', stroke:'#D96A3D', verts:[[3,0],[0,0],[1,1],[3,1]],                        px:240, py:640 },
+  B:{ name:'小三角',   fill:'#4FA8E0', stroke:'#3585BC', verts:[[0,1],[0,0],[1,1]],                               px:330, py:820 },
+  C:{ name:'小梯形',   fill:'#63C88B', stroke:'#46A66D', verts:[[3,0],[4.5,0],[3.5,1],[3,1]],                     px:540, py:620 },
+  D:{ name:'燕尾五边', fill:'#A87BE8', stroke:'#8455CC', verts:[[6.5,1],[3.5,1],[4.5,0],[6,0],[5.75,0.25]],       px:540, py:830 }
+};
+
+function polyCentroid(vs){
+  let a=0,cx=0,cy=0;
+  for (let i=0;i<vs.length;i++){
+    const p=vs[i], q=vs[(i+1)%vs.length];
+    const cr=p[0]*q[1]-q[0]*p[1];
+    a+=cr; cx+=(p[0]+q[0])*cr; cy+=(p[1]+q[1])*cr;
+  }
+  a*=0.5;
+  return [cx/(6*a), cy/(6*a)];
+}
+
+const NS='http://www.w3.org/2000/svg';
+const piecesG = document.getElementById('pieces');
+const pieces = [];
+let RING_COLOR = '#FFFFFF';       // 规格 #3：白色外高亮环
+
+function mk(tag, attrs){
+  const e=document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+function makePiece(id){
+  const d = DEF[id];
+  const c = polyCentroid(d.verts);
+  const base = d.verts.map(v=>[ (v[0]-c[0])*PPU, (v[1]-c[1])*PPU ]);
+  let avgR=0; base.forEach(v=>avgR+=Math.hypot(v[0],v[1]));  avgR/=base.length;
+
+  const root = mk('g', {});
+  const shG   = mk('g', {});
+  const ringG = mk('g', {});
+  const bodyG = mk('g', {});
+
+  const shPoly = mk('polygon', {
+    fill:'#2C3A4B', 'pointer-events':'none',
+    style:'filter:blur(6px);opacity:.14'
+  });
+  const ringOut = mk('polygon', {          // 同色系柔光：白环在纯白卡上唯一能读出来的办法
+    fill:'none', stroke:d.stroke, 'stroke-width':11,
+    'stroke-linejoin':'round', 'stroke-linecap':'round',
+    'pointer-events':'none', style:'opacity:0;filter:blur(2.6px)'
+  });
+  const ringPoly = mk('polygon', {
+    fill:'none', stroke:RING_COLOR, 'stroke-width':3,
+    'stroke-linejoin':'round', 'stroke-linecap':'round',
+    'pointer-events':'none', style:'opacity:0'
+  });
+  const bodyPoly = mk('polygon', {
+    points:'', fill:d.fill, stroke:d.stroke,
+    'stroke-width':2, 'stroke-linejoin':'round', 'pointer-events':'none'
+  });
+  const hl = mk('polyline', {
+    points:'',
+    fill:'none', stroke:'#FFFFFF', 'stroke-width':'2',
+    'stroke-linecap':'round', 'stroke-dasharray':'3 3', style:'opacity:0',
+    'pointer-events':'none'
+  });
+
+  shG.appendChild(shPoly);
+  ringG.appendChild(ringOut);
+  ringG.appendChild(ringPoly);
+  bodyG.appendChild(bodyPoly);
+  bodyG.appendChild(hl);
+  root.appendChild(shG);
+  root.appendChild(ringG);
+  root.appendChild(bodyG);
+  piecesG.appendChild(root);
+
+  const p = {
+    id, name:d.name, fill:d.fill, stroke:d.stroke,
+    cx:d.px, cy:d.py, hx:d.px, hy:d.py,           // hx/hy = 归位位置
+    baseLocal:base, avgR,
+    logicalAngle:0, rotVis:0,
+    flipped:false, flipVis:1,
+    scaleVis:1, liftY:0,
+    shOffY:2, shBlur:6, shAlpha:0.14,
+    ringOff:0, ringW:3, ringAlpha:0,
+    shrink:0,
+    breath:false, breathT:0,
+    el:{ root, sh:shPoly, shG, ring:ringPoly, ringOut, ringG, body:bodyPoly, bodyG, hl }
+  };
+  pieces.push(p);
+  return p;
+}
+
+['A','B','C','D'].forEach(makePiece);
+
+/* ---------- 0.5u 内缩后的顶点（规格 #10：顶点向各自质心内缩 2px） ---------- */
+function localPts(p){
+  const off = p.shrink * 2;
+  if (off <= 0.001) return p.baseLocal;
+  return p.baseLocal.map(v=>{
+    const L = Math.hypot(v[0],v[1]) || 1;
+    const k = Math.max(0, 1 - off/L);
+    return [v[0]*k, v[1]*k];
+  });
+}
+
+/* ---------- 多边形等距外扩（沿每条边的法线偏移，角点取相邻偏移线交点）----------
+   为什么不能直接用 scale 做外扩：这些板极扁（3u×1u），等比缩放 1.02 时
+   长轴外扩 ≈ 4px、短轴只有 ≈1.6px，环会变成"上下几乎没有"。必须做真正的等距偏移。 */
+function offsetPoly(pts, d){
+  const n = pts.length;
+  if (d <= 0.001) return pts;
+  const sg = signedArea(pts) > 0 ? 1 : -1;
+  const L = [];
+  for (let i = 0; i < n; i++){
+    const a = pts[i], b = pts[(i+1) % n];
+    let dx = b[0]-a[0], dy = b[1]-a[1];
+    const len = Math.hypot(dx,dy) || 1;
+    dx /= len; dy /= len;
+    const nx = sg * dy, ny = sg * (-dx);          // 外法线
+    L.push({ px: a[0] + nx*d, py: a[1] + ny*d, dx, dy });
+  }
+  const out = [];
+  const lim = d * 2.5;                            // 斜接限位：锐角处不要甩出长刺
+  for (let i = 0; i < n; i++){
+    const l1 = L[(i-1+n) % n], l2 = L[i];
+    const det = -l1.dx*l2.dy + l2.dx*l1.dy;
+    if (Math.abs(det) < 1e-6){ out.push([l2.px, l2.py]); continue; }
+    const dxp = l2.px - l1.px, dyp = l2.py - l1.py;
+    const t = (-dxp*l2.dy + l2.dx*dyp) / det;
+    let px = l1.px + l1.dx*t, py = l1.py + l1.dy*t;
+    const vx = px - pts[i][0], vy = py - pts[i][1];
+    const L2 = Math.hypot(vx, vy);
+    if (L2 > lim){ px = pts[i][0] + vx/L2*lim; py = pts[i][1] + vy/L2*lim; }
+    out.push([px, py]);
+  }
+  return out;
+}
+
+/* ---------- 世界坐标顶点（供重叠求交用） ---------- */
+function worldPts(p){
+  const a = p.rotVis*Math.PI/180, cs=Math.cos(a), sn=Math.sin(a);
+  const sx = p.flipVis*p.scaleVis, sy = p.scaleVis;
+  return localPts(p).map(v=>{
+    const x=v[0]*sx, y=v[1]*sy;
+    return [ p.cx + x*cs - y*sn, p.cy + p.liftY + x*sn + y*cs ];
+  });
+}
+
+/* ============================================================
+   4. 渲染
+   ============================================================ */
+function renderPiece(p){
+  const pts = localPts(p);
+  let str = '';
+  for (let i=0;i<pts.length;i++) str += pts[i][0].toFixed(2)+','+pts[i][1].toFixed(2)+' ';
+
+  const off = p.liftY;
+  const sx  = p.flipVis * p.scaleVis;
+  const sy  = p.scaleVis;
+
+  // —— 投影：画在环下面，环会把投影「洗开」形成亮晕（规格 #3 C 条）
+  p.el.sh.setAttribute('points', str);
+  p.el.sh.style.opacity = p.shAlpha;
+  p.el.sh.style.filter  = 'blur('+p.shBlur.toFixed(1)+'px)';
+  p.el.shG.setAttribute('transform',
+    'translate('+p.cx.toFixed(2)+','+(p.cy+off+p.shOffY).toFixed(2)+') '+
+    'rotate('+p.rotVis.toFixed(2)+') scale('+sx.toFixed(4)+','+sy.toFixed(4)+')');
+
+  // —— 高亮环：等距外扩（不是 scale），双层 = 白色主环 + 同色系外缘细线
+  //    外层细线是"白环在白卡上能看见"的唯一手段：白环本身贴白纸等于没画。
+  const xf = 'translate('+p.cx.toFixed(2)+','+(p.cy+off).toFixed(2)+') '+
+             'rotate('+p.rotVis.toFixed(2)+') scale('+sx.toFixed(4)+','+sy.toFixed(4)+')';
+  p.el.ringG.setAttribute('transform', xf);
+  if (p.ringAlpha < 0.004){
+    p.el.ring.style.opacity = 0;
+    p.el.ringOut.style.opacity = 0;
+  } else {
+    const rp = offsetPoly(pts, p.ringOff);
+    let rstr = '';
+    for (let i=0;i<rp.length;i++) rstr += rp[i][0].toFixed(2)+','+rp[i][1].toFixed(2)+' ';
+    p.el.ringOut.setAttribute('points', rstr);
+    p.el.ringOut.setAttribute('stroke-width', (p.ringW + 7).toFixed(2));
+    p.el.ringOut.style.opacity = (p.ringAlpha * 0.42).toFixed(3);
+    p.el.ring.setAttribute('points', rstr);
+    p.el.ring.setAttribute('stroke-width', p.ringW.toFixed(2));
+    p.el.ring.setAttribute('stroke', RING_COLOR);
+    p.el.ring.style.opacity = p.ringAlpha;
+  }
+
+  // —— 板身
+  p.el.body.setAttribute('points', str);
+  p.el.bodyG.setAttribute('transform', xf);
+
+  // —— D 板方向标记（7.1：凹口内侧 45° 短虚线，长 14 宽 2）
+  if (p.id==='D'){
+    p.el.hl.setAttribute('points','44.87,-28.5 54.77,-18.6');
+    p.el.hl.style.opacity = Math.min(1, Math.abs(p.flipVis)) * 0.8;
+  }
+}
+
+function renderAll(){ for (let i=0;i<pieces.length;i++) renderPiece(pieces[i]); }
+
+function raise(p){
+  piecesG.appendChild(p.el.root);
+}
+
+/* ============================================================
+   5. 托盘槽位（虚线轮廓，5.2「已放上拼图区的板留空槽」）
+   ============================================================ */
+(function buildSlots(){
+  const g = document.getElementById('slots');
+  const xs = [22,204,386,568], y = 1190, size = 160;
+  pieces.forEach((p,i)=>{
+    const b = p.baseLocal;
+    let minX=1e9,maxX=-1e9,minY=1e9,maxY=-1e9;
+    b.forEach(v=>{ minX=Math.min(minX,v[0]); maxX=Math.max(maxX,v[0]); minY=Math.min(minY,v[1]); maxY=Math.max(maxY,v[1]); });
+    const bw=maxX-minX, bh=maxY-minY;
+    const s=Math.min(122/bw, 122/bh);
+    const ox = xs[i]+size/2, oy = y+size/2;
+    const pts = b.map(v=>[ ox+v[0]*s, oy+v[1]*s ]);
+    g.appendChild(mk('rect',{x:xs[i],y:y,width:size,height:size,rx:24,
+      fill:'#FBFCFE', stroke:'#E3E9F2', 'stroke-width':1.5}));
+    g.appendChild(mk('polygon',{points:pts.map(v=>v[0].toFixed(1)+','+v[1].toFixed(1)).join(' '),
+      fill:'none', stroke:p.stroke, 'stroke-opacity':0.30, 'stroke-width':2,
+      'stroke-dasharray':'6 5', 'stroke-linejoin':'round'}));
+  });
+})();
+
+/* ============================================================
+   6. 重叠求交（Sutherland–Hodgman，clip 必须凸）
+   ============================================================ */
+function signedArea(vs){
+  let a=0;
+  for (let i=0;i<vs.length;i++){
+    const p=vs[i], q=vs[(i+1)%vs.length];
+    a += p[0]*q[1]-q[0]*p[1];
+  }
+  return a*0.5;
+}
+function clipPoly(subject, clip){
+  let C = clip.slice();
+  if (signedArea(C) < 0) C.reverse();
+  let out = subject.slice();
+  for (let i=0;i<C.length && out.length;i++){
+    const a=C[i], b=C[(i+1)%C.length];
+    const side = q => (b[0]-a[0])*(q[1]-a[1]) - (b[1]-a[1])*(q[0]-a[0]);
+    const inp = out; out = [];
+    for (let j=0;j<inp.length;j++){
+      const cur=inp[j], nxt=inp[(j+1)%inp.length];
+      const sc=side(cur), sn=side(nxt);
+      if (sc>=0) out.push(cur);
+      if ((sc>=0)!==(sn>=0)){
+        const t = sc/(sc-sn);
+        out.push([cur[0]+(nxt[0]-cur[0])*t, cur[1]+(nxt[1]-cur[1])*t]);
+      }
+    }
+  }
+  return out;
+}
+
+/* ============================================================
+   7. 舞台等比缩放
+   ============================================================ */
+const stage = document.getElementById('stage');
+const stageWrap = document.getElementById('stageWrap');
+let SCALE = 1;
+function fitStage(){
+  const w = stageWrap.clientWidth, h = stageWrap.clientHeight;
+  SCALE = Math.min(w/750, h/1624);
+  stage.style.transform = 'scale('+SCALE+')';
+  stage.style.left = ((w - 750*SCALE)/2).toFixed(1)+'px';
+  stage.style.top  = ((h - 1624*SCALE)/2).toFixed(1)+'px';
+}
+window.addEventListener('resize', fitStage);
+
+/* ============================================================
+   8. 主循环
+   ============================================================ */
+let lastT = performance.now();
+let hudElapsed = 0;
+const hudEl = document.getElementById('hud');
+
+function setHud(title, meta){
+  hudElapsed = 0;
+  hudEl.innerHTML = title + (meta ? '<br>' + meta : '');
+}
+
+function loop(now){
+  const real = Math.min(60, now - lastT);
+  lastT = now;
+  const dt = real * ts();
+
+  /* —— 呼吸环（#4）：在拖拽/呼吸期间直接算，不另开循环 —— */
+  for (let i=0;i<pieces.length;i++){
+    const p = pieces[i];
+    if (p.breath){
+      p.breathT += dt;
+      p.ringAlpha = 0.15 + 0.60*(0.5 - 0.5*Math.cos(2*Math.PI*p.breathT/600));
+      p.ringW = 3;
+      p.ringOff = 3;
+    }
+  }
+
+  tickTimers(dt);
+  tickTweens(dt);
+  renderAll();
+  if (overlapPair) overlapPair.t += dt;
+  renderOverlap();
+  if (window.__frame) window.__frame(dt);
+  hudElapsed += dt;
+
+  requestAnimationFrame(loop);
+}
+
+/* 重叠叠加层（由 #9 演示驱动） */
+let overlapPair = null;
+function renderOverlap(){
+  const el = document.getElementById('overlapPoly');
+  if (!overlapPair){
+    if (el.style.opacity !== '0'){ el.style.opacity='0'; el.setAttribute('points',''); }
+    return;
+  }
+  const A = overlapPair.a, B = overlapPair.b;
+  const wa = worldPts(A), wb = worldPts(B);
+  const r = clipPoly(wb, wa);
+  if (r.length < 3){ el.style.opacity = '0'; return; }
+  el.setAttribute('points', r.map(v=>v[0].toFixed(1)+','+v[1].toFixed(1)).join(' '));
+  // 2 次闪烁：200ms 一周期，0→100ms 涨，100→200ms 落
+  const t = overlapPair.t % 200;
+  const a = t < 100 ? (t/100) : (1 - (t-100)/100);
+  el.style.opacity = (0.85 * E.BREATH(Math.max(0,Math.min(1,a)))).toFixed(3);
+}
+
+requestAnimationFrame(loop);
+
+/* 暴露给 PART_B */
+window.__T = {
+  E, ts, tw, at, purge, tweens, pieces, DEF, PPU, raise, localPts, worldPts,
+  setHud, fitStage, stage,
+  get hudElapsed(){ return hudElapsed; },
+  get SLOW(){ return SLOW; }, set SLOW(v){ SLOW = v; },
+  get RING_COLOR(){ return RING_COLOR; },
+  set RING_COLOR(v){ RING_COLOR = v; },
+  setOverlapPair(v){ overlapPair = v; }
+};
+
+})();
+
+/* PART_B */
+(function(){
+'use strict';
+
+const T = window.__T;
+const {E, ts, tw, at, purge, pieces, raise, setHud} = T;
+const $ = id => document.getElementById(id);
+const k = () => ts();
+
+const P = {}; pieces.forEach(p => P[p.id] = p);
+
+/* ============================================================
+   0. 世代号 —— 每启动一个新演示就 +1，旧演示的延迟回调自动作废
+   ============================================================ */
+let gen = 0;
+function later(ms, fn){
+  const g = gen;
+  at(ms, () => { if (g === gen) fn(); });
+}
+
+/* ============================================================
+   1. 覆盖率进度条（#8）—— 条与数字同一 tick
+   ============================================================ */
+const cov = { v: 62, from: 62, to: 62, t: 0, dur: 300, active: false };
+const covFill = $('covFill'), covNum = $('covNum');
+function covPaint(){
+  const v = Math.max(0, Math.min(100, cov.v)) / 100;
+  covFill.style.clipPath = 'inset(0 ' + ((1 - v) * 100).toFixed(2) + '% 0 0)';
+  covNum.textContent = Math.round(cov.v) + '%';
+}
+function covSet(v){ cov.active = false; cov.v = v; covPaint(); }
+function covTo(v, dur){ cov.from = cov.v; cov.to = v; cov.t = 0; cov.dur = dur || 300; cov.active = true; }
+
+window.__frame = function(dt){
+  if (!cov.active) return;
+  cov.t += dt;
+  const kk = Math.min(1, cov.t / cov.dur);
+  cov.v = cov.from + (cov.to - cov.from) * E.FEEDBACK(kk);
+  if (kk >= 1){ cov.v = cov.to; cov.active = false; }
+  covPaint();
+};
+covSet(62);
+
+/* ============================================================
+   2. 状态复位
+   ============================================================ */
+function resetPiece(p){
+  p.logicalAngle = 0; p.rotVis = 0;
+  p.flipped = false;  p.flipVis = 1;
+  p.scaleVis = 1;     p.liftY = 0;
+  p.shOffY = 2; p.shBlur = 6; p.shAlpha = 0.14;
+  p.ringOff = 0; p.ringW = 3; p.ringAlpha = 0;
+  p.shrink = 0;  p.breath = false; p.breathT = 0;
+  p.cx = p.hx;   p.cy = p.hy;
+}
+
+/* ============================================================
+   3. 动效原子（每一条对应规格里的一个 #
+   ============================================================ */
+
+/* #3 吸附命中：脉冲 140ms（峰 1.06 @70ms）+ 白环 180ms */
+function pulseSnap(p){
+  raise(p);
+  p.breath = false;
+  tw(p, 'scaleVis', 1.06, 70, E.ENTRY);
+  later(70, () => tw(p, 'scaleVis', 1.0, 70, E.SETTLE));
+
+  p.ringOff = 0; p.ringW = 4;
+  tw(p, 'ringOff',   4,    180, E.FEEDBACK);      // 外扩 0→4px
+  tw(p, 'ringW',     3,    180, x => x);          // 宽 5→3px，线性收细
+  tw(p, 'ringAlpha', 0.95,  40, E.ENTRY);         // 0→40ms 起亮
+  later(40, () => tw(p, 'ringAlpha', 0, 140, E.SETTLE));   // 40→180ms 淡出
+}
+
+/* #4 吸附半径内呼吸环：600ms 循环，α 0.15↔0.75，环偏移固定 3px 不扩散 */
+function breathRun(p, holdMs){
+  raise(p);
+  p.breath = true; p.breathT = 0;
+  p.ringOff = 3; p.ringW = 3; p.ringAlpha = 0.15;
+  later(holdMs, () => {
+    p.breath = false;
+    tw(p, 'ringAlpha', 0, 80, E.FEEDBACK);
+    later(80, () => { p.ringOff = 0; p.ringW = 3; });
+  });
+}
+
+/* #5 旋转 45°：logicalAngle 即时改，rotVis 追赶（I1 追赶式重定向） */
+function devOf(p){
+  return ((p.logicalAngle - p.rotVis) % 360 + 540) % 360 - 180;   // -180..180，最短路径
+}
+function rotateStep(p, dir){
+  raise(p);
+  p.logicalAngle = (p.logicalAngle + dir * 45 + 360) % 360;   // 逻辑角度：当帧生效
+  // 硬不变量：可见角度与逻辑角度偏差永不超过 90°
+  let dev = devOf(p);
+  if (Math.abs(dev) > 90){
+    p.rotVis = p.logicalAngle - Math.sign(dev) * 90;
+    dev = devOf(p);
+  }
+  // 时长按偏差压缩：≤45° 用 45° 的时间，越大越快（封顶 2 倍速）
+  const T = Math.min(120, Math.max(60, Math.abs(dev) / 45 * 120));
+  tw(p, 'rotVis', p.rotVis + dev, T, E.ENTRY);
+}
+/* I2：旋转被拖拽打断 —— 0ms 落到 logicalAngle */
+function snapRot(p){
+  tw(p, 'rotVis', p.logicalAngle, 1, () => 1);
+}
+
+/* #6 翻转：scaleX 1 → 0 → −1 */
+function flipStep(p){
+  raise(p);
+  p.flipped = !p.flipped;
+  const target = p.flipped ? -1 : 1;
+  const d = Math.abs(target - p.flipVis);
+  tw(p, 'flipVis', target, Math.max(60, Math.min(180, d / 2 * 180)), E.BREATH);
+}
+
+/* #7 抓取：上浮 6px + 放大 1.05 + 投影三参数同步加深 */
+function grabAnim(p){
+  raise(p);
+  tw(p, 'liftY',   -6,  100, E.FEEDBACK);
+  tw(p, 'scaleVis', 1.05, 100, E.FEEDBACK);
+  tw(p, 'shOffY',  10,  100, E.FEEDBACK);
+  tw(p, 'shBlur',  22,  100, E.FEEDBACK);
+  tw(p, 'shAlpha', 0.24, 100, E.FEEDBACK);
+}
+function releaseAnim(p){
+  tw(p, 'liftY',    0,    100, E.FEEDBACK);
+  tw(p, 'scaleVis', 1,    100, E.FEEDBACK);
+  tw(p, 'shOffY',   2,    100, E.FEEDBACK);
+  tw(p, 'shBlur',   6,    100, E.FEEDBACK);
+  tw(p, 'shAlpha',  0.14, 100, E.FEEDBACK);
+}
+
+/* #10 成局：顶点向质心内缩 2px 再回弹 + 投影降档 */
+function winAnim(){
+  T.setOverlapPair(null);
+  pieces.forEach(p => {
+    raise(p);
+    tw(p, 'shrink',  1,   130, E.SETTLE);
+    tw(p, 'shOffY',  1,   130, E.SETTLE);
+    tw(p, 'shBlur',  3,   130, E.SETTLE);
+    tw(p, 'shAlpha', 0.06, 130, E.SETTLE);
+  });
+  later(130, () => pieces.forEach(p => tw(p, 'shrink', 0, 130, E.WINBACK)));
+}
+
+/* #9 重叠：把 B 移到与 A 交叠，实时求交后闪 2 次 */
+function overlapAnim(){
+  T.setOverlapPair(null);
+  const A = P.A, B = P.B;
+  tw(B, 'cx', 250, 180, E.FEEDBACK);
+  tw(B, 'cy', 646, 180, E.FEEDBACK);
+  later(180, () => {
+    T.setOverlapPair({ a: A, b: B, t: 0 });
+    later(400, () => {
+      T.setOverlapPair(null);
+      tw(B, 'cx', B.hx, 220, E.FEEDBACK);
+      tw(B, 'cy', B.hy, 220, E.FEEDBACK);
+    });
+  });
+}
+
+/* ============================================================
+   4. 结算浮层（#11 #12）
+   ============================================================ */
+const resultOvl = $('resultOvl'), resultCard = $('resultCard'), rcBtns = $('rcBtns');
+const starEls = Array.prototype.slice.call(document.querySelectorAll('.star'));
+
+function resetStars(){
+  starEls.forEach(s => {
+    s.classList.remove('lit');
+    s.style.animationDelay = '0ms';
+    s.style.animationDuration = '';
+  });
+}
+function playStars(n){
+  resetStars();
+  const d = 120 * k();
+  for (let i = 0; i < n; i++){
+    const s = starEls[i];
+    s.style.animationDuration = d + 'ms';
+    s.style.animationDelay = (i * d) + 'ms';
+    void s.offsetWidth;
+    s.classList.add('lit');
+  }
+}
+function showResult(ms){
+  const dur = ms || 200;
+  resultOvl.style.transitionDuration = (dur * k()) + 'ms';
+  resultCard.style.transitionDuration = (dur * k()) + 'ms';
+  resultOvl.classList.add('on');
+  later(dur, () => resultOvl.classList.add('allow'));      // I12：遮罩 200ms 内不接收点击
+  later(dur + 80, () => rcBtns.classList.remove('locked')); // I12：按钮 +80ms 才启用
+}
+function hardResetPanel(){
+  resultOvl.style.transitionDuration = '0ms';
+  resultCard.style.transitionDuration = '0ms';
+  resultOvl.classList.remove('on', 'allow');
+  rcBtns.classList.add('locked');
+  void resultOvl.offsetWidth;
+}
+function replayPanel(){
+  resetStars();
+  hardResetPanel();
+  later(30, () => showResult(200));
+}
+
+/* ============================================================
+   5. 顶部返回锁（I10 / I11）
+   ============================================================ */
+const backBtn = $('backBtn');
+let backLocked = false;
+function setBackLocked(v){ backLocked = v; backBtn.classList.toggle('locked', v); }
+function tryBack(){ return backLocked ? false : true; }
+
+/* ============================================================
+   6. 页面转场（#13）与关卡格（#14）
+   ============================================================ */
+const pageOvl = $('pageOvl'), stageContent = $('stageContent');
+function pageAnim(){
+  pageOvl.style.transitionDuration = (200 * k()) + 'ms';
+  pageOvl.classList.add('on');
+  later(950, () => {
+    pageOvl.style.transitionDuration = '0ms';
+    pageOvl.classList.remove('on');          // 旧页同一帧消失，绝不交叉淡入
+    stageContent.classList.add('pending');   // 新页从 +16px、opacity 0 起
+    void stageContent.offsetWidth;
+    stageContent.classList.remove('pending');
+    later(200, () => { pageOvl.style.transitionDuration = (200 * k()) + 'ms'; });
+  });
+}
+
+const levelOvl = $('levelOvl'), levelsEl = $('levels');
+function levelAnim(){
+  const data = [[1, 3], [2, 2], [3, 1], [4, 0], [5, 0], [6, 0]];
+  levelsEl.innerHTML = '';
+  data.forEach(d => {
+    const c = document.createElement('div');
+    c.className = 'lvCard';
+    let s = '';
+    for (let i = 0; i < 3; i++) s += '<i class="' + (i < d[1] ? 'on' : '') + '"></i>';
+    c.innerHTML = '<div class="n">第 ' + d[0] + ' 关</div><div class="s">' + s + '</div>';
+    levelsEl.appendChild(c);
+  });
+  levelOvl.classList.add('on', 'allow');
+  const dk = 240 * k();
+  Array.prototype.forEach.call(levelsEl.children, (c, i) => {
+    c.style.animationDuration = dk + 'ms';
+    c.style.animationDelay = (i * 40 * k()) + 'ms';
+    void c.offsetWidth;
+    c.classList.add('in');
+  });
+  later(440 + 800, () => levelOvl.classList.remove('on', 'allow'));
+}
+function hideLevels(){ levelOvl.classList.remove('on', 'allow'); }
+
+/* ============================================================
+   7. #1 #2 按钮按压
+   ============================================================ */
+const demoBtn = $('demoBtn'), demoTool = $('demoTool');
+function pressDown(){ demoBtn.classList.add('is-down'); demoTool.classList.add('is-down'); }
+function pressUp(){ demoBtn.classList.remove('is-down'); demoTool.classList.remove('is-down'); }
+
+[demoBtn, demoTool].forEach(el => {
+  el.addEventListener('pointerdown', () => el.classList.add('is-down'));
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev =>
+    el.addEventListener(ev, () => el.classList.remove('is-down')));
+});
+
+/* ============================================================
+   8. HUD
+   ============================================================ */
+function hud(title, meta){ setHud(title, meta || ''); }
+
+/* ============================================================
+   9. 14 项演示定义
+   ============================================================ */
+const DEMOS = [
+  { n:'1', t:'按钮 · 按下下沉',
+    m:'80ms · translateY 0→2px · E_FEEDBACK · 底部厚边 4→2px 同步',
+    f(){ hud('① 按钮按下', '<b>80ms</b> · translateY 0→2px · cubic-bezier(.25,.46,.45,.94)<br>底部厚边 <b>4→2px</b>（只下沉不变薄 ＝ 整体上挪，不像按压）<br><span class="sfx">sfx_tap @0ms</span>');
+         pressDown(); later(700, pressUp); } },
+
+  { n:'2', t:'按钮 · 抬起回弹',
+    m:'120ms · translateY 2px→0 · E_FEEDBACK · 不加 back 回弹',
+    f(){ hud('② 按钮抬起', '<b>120ms</b> · translateY 2px→0 · cubic-bezier(.25,.46,.45,.94)<br>刻意<b>不加 ease-out-back</b>：7.5 定的是 ease-out，且回弹带 overshoot 会掉进“幼稚”<br>按下+抬起合计 <b>200ms</b>（硬指标边界）');
+         pressDown(); later(50, pressUp); } },
+
+  { n:'3', t:'吸附命中 · 脉冲 + 白环',
+    m:'脉冲 140ms（峰 1.06@70ms）／白环 180ms，外扩 0→4px',
+    f(){ hud('③ 吸附命中', '脉冲 <b>140ms</b>：1.00→<b>1.06</b>(70ms)→1.00 · E_ENTRY／E_SETTLE<br>白环 <b>180ms</b>：外扩 0→<b>4px</b> · 宽 5→3px · α 0.95→0<br>渲染顺序必须是 <b>投影 → 环 → 板</b>（环把投影洗开才在白卡上显影）<br><span class="sfx">sfx_snap @0ms · vibrateShort @0ms</span>');
+         pulseSnap(P.A); } },
+
+  { n:'4', t:'吸附半径内 · 呼吸环',
+    m:'600ms 循环 · α 0.15↔0.75 · 环偏移固定 3px 不扩散',
+    f(){ hud('④ 呼吸环', '<b>600ms</b> 一循环 · α 0.15→0.75→0.15 · easeInOutSine<br>环偏移<b>固定 3px 不扩散</b>：扩散＝“事件”，呼吸＝“状态”<br>α 下限 0.15 不到 0（到 0 就成了“闪”，7.5 明确要呼吸不要闪烁）<br><span class="sfx">不配音效</span>（预备信号，声音留给真正的“咔”）');
+         breathRun(P.A, 2400); } },
+
+  { n:'5', t:'旋转 45°',
+    m:'120ms · cubic-bezier(.22,1,.36,1) · 绕板质心',
+    f(){ hud('⑤ 旋转 45°', '<b>120ms</b> · cubic-bezier(.22,1,.36,1)（easeOutQuint，5.3 指定）<br>绕<b>板质心</b>旋转，不是屏幕中心<br>logicalAngle 点击当帧 +45，rotVis 追赶 —— 连点 8 次必回原位<br><span class="sfx">v0.1 不配音效</span>');
+         rotateStep(P.A, 1); } },
+
+  { n:'6', t:'翻转 · 翻牌',
+    m:'180ms · scaleX 1→0→−1 · 薄片时投影归零',
+    f(){ hud('⑥ 翻转（D 板，有方向标记）', '<b>180ms</b> · scaleX 1→0→−1 · t=90ms 最薄 · E_BREATH<br>亮色方案补丁：<b>|scaleX|&lt;0.25 时投影 α 线性降到 0</b>，否则薄片那 30ms 会留一道脏灰线<br>B 板翻转后与原形重合，视觉零变化 —— 5.4 有意保留的教学点');
+         flipStep(P.D); } },
+
+  { n:'7', t:'抓取 · 上浮（投影同步）',
+    m:'100ms · −6px／1.05／投影 offset 2→10、blur 6→22、α .14→.24',
+    f(){ hud('⑦ 抓取上浮', '<b>100ms</b> · translateY 0→<b>−6px</b> · scale 1→<b>1.05</b><br>投影：offsetY <b>2→10</b> · blur <b>6→22</b> · α <b>.14→.24</b>（光源固定正上方，不横向偏）<br>亮底环境下“浮起来”全靠投影差，位移 4px 读不出来 → 加到 6px<br><span class="sfx">sfx_pick @0ms</span>');
+         grabAnim(P.A); later(900, () => releaseAnim(P.A)); } },
+
+  { n:'8', t:'覆盖率 · 进度条 + 数字',
+    m:'300ms · clip-path 揭示 + 数字同 tick · 绝不动 width',
+    f(){ hud('⑧ 覆盖率滚动', '<b>300ms</b> · E_FEEDBACK · 条与数字<b>同一 tick</b>（分开驱动会错开 1–3 帧）<br>填充用 <b>clip-path: inset()</b> 揭示：不动 width（每帧 layout，低端机掉到 30fps），也不压扁渐变<br>数字 tabular-nums，否则滚动时字宽跳变、数字左右抖');
+         covSet(62); later(60, () => covTo(78, 300)); later(600, () => covTo(100, 300)); } },
+
+  { n:'9', t:'重叠 · 轮廓闪 2 次',
+    m:'400ms（2×200ms）· #E05252 · α 峰 0.85 · 不阻塞操作',
+    f(){ hud('⑨ 重叠闪红', '<b>400ms</b> = 2 × 200ms（0→100ms 涨到 .85，100→200ms 落回 0）<br>颜色 <b>#E05252</b>：原 #B03A2E 在纯白上显暗褐不够提示，纯红撞 6.5 禁忌<br>只描<b>两块板的交集多边形</b>，不是整块板（否则会被误读成选中态）<br><span class="sfx">明确不做错误音</span>（目标用户极度反感被惩罚）');
+         overlapAnim(); } },
+
+  { n:'10', t:'成局 · 收缩回弹 + 投影降档',
+    m:'260ms · 顶点向各自质心内缩 2px · 投影降到 blur 3／α .06',
+    f(){ hud('⑩ 成局收缩', '<b>260ms</b>：0→130ms 顶点向<b>各自质心</b>内缩 <b>2px</b>，130→260ms 回弹（E_WIN_BACK，全片唯一 back）<br>不用 scale 近似：小三角缩 2px=0.955、大梯形=0.985，统一 scale 会让小三角缩过头<br>投影同步降到 <b>blur 3／α .06</b>：4 块贴边拼合时常态投影会在每条接缝叠出深色线<br><span class="sfx">sfx_win @0ms（1.2s，覆盖整条结算链）</span>');
+         winAnim(); } },
+
+  { n:'11', t:'结算面板 · 淡入上移',
+    m:'延迟 400ms 后 200ms 淡入 + 上移 24px · 遮罩仅 .28',
+    f(){ hud('⑪ 结算面板淡入', '成局 260ms + 空窗 <b>400ms</b> → 面板 <b>200ms</b> · opacity 0→1 + translateY <b>+24px→0</b><br>面板用 24px、页面用 16px：<b>刻意不同</b>，浮层沉降要更有分量<br>遮罩 <b>rgba(44,58,75,.28)</b> 轻遮罩（黑色 .7 会毁掉明亮感）<br>I12：淡入 200ms 内遮罩 pointer-events:none，按钮 +80ms 才启用');
+         replayPanel(); } },
+
+  { n:'12', t:'星级 · 逐颗点亮',
+    m:'3×120ms，间隔 120ms · scale 0.6→1.15→1.0',
+    f(){ hud('⑫ 星级点亮', '每颗 <b>120ms</b>，起点间隔 <b>120ms</b>，总长 <b>360ms</b><br>关键帧 0.6 →（55%，66ms）<b>1.15</b> → 1.0；两段缓动 E_POP / E_SETTLE<br>未获得的星保持 <b>#E3E9F2 实心</b>，<b>不做“点亮再灰掉”</b>（那是在说“你差点拿到”）<br><span class="sfx">v0.1 不配音效</span>');
+         if (!resultOvl.classList.contains('on')){
+           resultOvl.style.transitionDuration = '0ms'; resultCard.style.transitionDuration = '0ms';
+           resultOvl.classList.add('on', 'allow'); void resultOvl.offsetWidth;
+         }
+         later(60, () => playStars(3)); } },
+
+  { n:'13', t:'页面转场',
+    m:'200ms 淡入 + 内容从 +16px 上移 · 旧页同帧消失',
+    f(){ hud('⑬ 页面转场', '新页 <b>200ms</b> · opacity 0→1 + translateY <b>+16px→0</b><br><b>不交叉淡入</b>：旧页同一帧消失，否则中间约 100ms 会有“两页叠着”的糊帧<br>5 个页面是平级导航，统一“从下方浮起”，<b>不做左右推挤</b>（会暗示假的层级）<br>I14：200ms 内导航 pointer-events:none，忽略不排队');
+         pageAnim(); } },
+
+  { n:'14', t:'关卡格 · 错峰淡入',
+    m:'240ms，每格延迟 40ms，全列 440ms（P2 可砍）',
+    f(){ hud('⑭ 关卡格错峰', '每格 <b>240ms</b> · 延迟 <b>i×40ms</b>（最后一格 200ms，全列 <b>440ms</b>）<br>与页面淡入<b>同时启动，不等待</b>：等 200ms 再起，最后一格要 640ms 才出来<br>每格在自己的动画完成后就可点（第 1 格 240ms），不做整段等待<br><b>P2 优先级：集成时间紧可整条砍掉</b>');
+         levelAnim(); } }
+];
+
+/* ============================================================
+   10. 连续操作（中断规则验证）
+   ============================================================ */
+const CHAINS = [
+  { n:'C1', t:'旋转连点 ×3', m:'I1 追赶式重定向：不排队、不丢输入',
+    f(){
+      hud('C1 旋转连点 ×3（间隔 80ms）',
+        'I1 · <b>logicalAngle 当帧即时 +45</b>，rotVis 连续追赶，不排队不丢输入<br>' +
+        '若照 5.3 字面“忽略新输入”，120ms 动画期间人会丢掉 30–50% 的点击，按钮像失灵');
+      [0, 80, 160].forEach(t => later(t, () => rotateStep(P.A, 1)));
+      later(700, () => hud('C1 结果',
+        'logicalAngle = <b>' + P.A.logicalAngle + '°</b>（应 135°）· rotVis = <b>' + Math.round(P.A.rotVis) + '°</b><br>' +
+        (P.A.logicalAngle === 135 ? '<span class="sfx">✔ 三次点击全部生效</span>' : '<span class="t">✘ 有输入被吞</span>')));
+    } },
+
+  { n:'C2', t:'旋转连点 ×8（回原位）', m:'I1 · 验收 12.3：连点 8 次回到原角度',
+    f(){
+      hud('C2 旋转连点 ×8（间隔 70ms）', 'I1 · 验收 12.3「旋转连点 8 次回到原角度，形状无畸变」');
+      for (let i = 0; i < 8; i++) later(i * 70, () => rotateStep(P.A, 1));
+      later(1000, () => hud('C2 结果',
+        'logicalAngle = <b>' + P.A.logicalAngle + '°</b>（应为 0）· rotVis = <b>' + Math.round(P.A.rotVis) + '°</b><br>' +
+        (P.A.logicalAngle === 0 ? '<span class="sfx">✔ 8 次点击全部生效，精确回到原位</span>' : '<span class="t">✘ 未回到原位</span>')));
+    } },
+
+  { n:'C3', t:'旋转中按住拖拽', m:'I2 · 立即落到 logicalAngle，转 #7 抓取',
+    f(){
+      hud('C3 旋转中拖拽（第 40ms 开始拖）',
+        'I2 · 5.3 允许拖拽打断：旋转动画<b>立即结束并落到目标角度</b><br>' +
+        '跳变被抓取的 100ms 缩放 + 投影加深掩盖 · 位置<b>当帧跟手</b>，不为播动画延迟');
+      rotateStep(P.A, 1);
+      later(40, () => {
+        snapRot(P.A);
+        grabAnim(P.A);
+        tw(P.A, 'cx', P.A.hx + 46, 240, E.FEEDBACK);
+        tw(P.A, 'cy', P.A.hy + 26, 240, E.FEEDBACK);
+      });
+      later(620, () => releaseAnim(P.A));
+      later(780, () => { tw(P.A, 'cx', P.A.hx, 220, E.FEEDBACK); tw(P.A, 'cy', P.A.hy, 220, E.FEEDBACK); });
+    } },
+
+  { n:'C4', t:'翻转中旋转', m:'I3 · 两分量正交，允许并行不互斥',
+    f(){
+      hud('C4 翻转中旋转（第 60ms 点旋转）',
+        'I3 · rotation 与 scaleX 是正交分量，<b>允许并行</b>，不互斥<br>' +
+        '强行互斥会让「转 + 翻」连招变迟钝；薄片时刻旋转是翻牌的自然视觉');
+      flipStep(P.D);
+      later(60, () => rotateStep(P.D, 1));
+      later(460, () => rotateStep(P.D, -1));
+    } },
+
+  { n:'C5', t:'吸附脉冲中拖走', m:'I6 · 脉冲重定向为抓取；白环播完不打断',
+    f(){
+      hud('C5 吸附脉冲中拖走（第 50ms 抓起）',
+        'I6 · 脉冲 <b>立即转抓取</b>（scale 1→1.05 重定向，不从 1.0 重置）<br>' +
+        '白环是独立扩散层，<b>让它把 180ms 播完</b> —— 打断会看到「半圈环突然消失」<br>' +
+        '<span class="sfx">sfx_snap 不重播</span>');
+      pulseSnap(P.A);
+      later(50, () => grabAnim(P.A));
+      later(520, () => releaseAnim(P.A));
+    } },
+
+  { n:'C6', t:'成局中按返回', m:'I10/I11 · 0–660ms 按钮锁定',
+    f(){
+      hud('C6 成局中按返回（第 100ms 尝试）',
+        'I10 · 0–260ms 全屏输入锁定；I11 · 260–660ms 只允许「点屏幕催出面板」，按钮继续禁用<br>' +
+        '260ms 很短，打断会毁掉「拼成了」的唯一高光时刻');
+      setBackLocked(true);
+      winAnim();
+      later(100, () => {
+        const ok = tryBack();
+        hud('C6 第 100ms 点返回',
+          ok ? '<span class="t">✘ 未锁定 — 异常</span>'
+             : '<span class="sfx">✔ 已拦截</span> · 返回按钮 pointer-events:none（0–660ms）');
+      });
+      later(660, () => { showResult(200); });
+      later(900, () => setBackLocked(false));
+    } },
+
+  { n:'C7', t:'结算淡入中按背景', m:'I12 · 遮罩 200ms 内不接收点击',
+    f(){
+      hud('C7 结算淡入中按背景（第 100ms）',
+        'I12 · 淡入 200ms 内遮罩 pointer-events:none，点击被忽略<br>' +
+        '防「幽灵点击」：玩家手可能还停在成局时点过的位置 · 面板按钮 +80ms 才启用');
+      resetStars();
+      hardResetPanel();
+      later(20, () => showResult(200));
+      later(120, () => {
+        const allow = resultOvl.classList.contains('allow');
+        hud('C7 第 120ms 点背景',
+          allow ? '<span class="t">✘ 未被拦截 — 异常</span>'
+                : '<span class="sfx">✔ 已拦截</span> · 遮罩仍 pointer-events:none');
+      });
+      later(460, () => playStars(3));
+    } },
+
+  { n:'C8', t:'全链路：成局→面板→星级', m:'260 + 400 + 200 + 360 = 1220ms',
+    f(){
+      hud('C8 全链路（建议开慢放看）',
+        '成局 <b>260ms</b> → 空窗 <b>400ms</b> → 面板淡入 <b>200ms</b> → 星级 <b>3×120ms</b><br>' +
+        '<span class="sfx">sfx_win @0ms 覆盖全程 1.2s</span> · 建议三音落在 0 / 320 / 700ms');
+      setBackLocked(true);
+      resetStars();
+      hardResetPanel();
+      winAnim();
+      later(660, () => showResult(200));
+      later(860, () => playStars(3));
+      later(1280, () => setBackLocked(false));
+    } }
+];
+
+/* ============================================================
+   11. 构建面板
+   ============================================================ */
+let autoOn = false, loopTimer = null;
+
+function runDemo(d){
+  gen++;
+  pieces.forEach(p => { p.breath = false; });
+  document.querySelectorAll('.ctl').forEach(x => x.classList.remove('hot'));
+  if (d.el) d.el.classList.add('hot');
+  d.f();
+  if (autoOn){
+    clearTimeout(loopTimer);
+    loopTimer = setTimeout(() => { if (autoOn) runDemo(d); }, 3000);
+  }
+}
+
+const ctlList = $('ctlList');
+DEMOS.forEach(d => {
+  const b = document.createElement('button');
+  b.className = 'ctl';
+  b.innerHTML = '<span class="num">' + d.n + '</span><span class="txt">' + d.t + '<i>' + d.m + '</i></span>';
+  b.addEventListener('click', () => runDemo(d));
+  d.el = b;
+  ctlList.appendChild(b);
+});
+
+const chainList = $('chainList');
+CHAINS.forEach(d => {
+  const b = document.createElement('button');
+  b.className = 'ctl';
+  b.innerHTML = '<span class="num">' + d.n + '</span><span class="txt">' + d.t + '<i>' + d.m + '</i></span>';
+  b.addEventListener('click', () => runDemo(d));
+  d.el = b;
+  chainList.appendChild(b);
+});
+
+/* ============================================================
+   12. 开关
+   ============================================================ */
+const slowBtn = $('slowBtn');
+slowBtn.addEventListener('click', () => {
+  T.SLOW = !T.SLOW;
+  document.body.classList.toggle('slow', T.SLOW);
+  slowBtn.classList.toggle('on', T.SLOW);
+  slowBtn.textContent = T.SLOW ? '慢放 0.25x · 开' : '慢放 0.25x';
+});
+
+const ringWhite = $('ringWhite'), ringGold = $('ringGold');
+ringWhite.addEventListener('click', () => {
+  T.RING_COLOR = '#FFFFFF';
+  ringWhite.classList.add('on'); ringGold.classList.remove('on');
+  hud('高亮环配色：白（规格值）',
+    '在白卡 #FFFFFF 上，纯白环本身是看不见的。<br>唯一能让它显影的方式是<b>把板下方的柔投影洗开</b> —— 所以渲染顺序必须是 <b>投影 → 环 → 板</b>。<br>若发现白环仍偏弱，点「暖黄」看对照，再决定要不要改色。');
+});
+ringGold.addEventListener('click', () => {
+  T.RING_COLOR = '#FFB93D';
+  ringGold.classList.add('on'); ringWhite.classList.remove('on');
+  hud('高亮环配色：暖黄 #FFB93D（对照）',
+    '暖黄在亮底上更跳，且与本版「暖黄＝你做到了」的语义一致（星级、主按钮同色）。<br>但它离 6.5 禁忌「发光」只差一步 —— 只改描边色、<b>不要加 shadowBlur</b>。<br>请策划在真机上二选一。');
+});
+
+const xrayBtn = $('shadowBtn');
+xrayBtn.addEventListener('click', () => {
+  const on = $('stage').classList.toggle('xray');
+  xrayBtn.classList.toggle('on', on);
+  xrayBtn.textContent = on ? '板身透视 · 开' : '板身透视';
+  if (on) hud('板身透视：开',
+    '板身降到 18% 不透明度，只留<b>投影 + 高亮环</b>。<br>用来逐帧检查 #7 抓取的投影加深、#10 成局的投影降档、#3 的白环是否真的在洗投影。');
+});
+
+const autoBtn = $('autoBtn');
+autoBtn.addEventListener('click', () => {
+  autoOn = !autoOn;
+  autoBtn.classList.toggle('on', autoOn);
+  autoBtn.textContent = autoOn ? '自动重播 · 开' : '自动重播 · 关';
+  if (!autoOn) clearTimeout(loopTimer);
+});
+
+/* ============================================================
+   13. 复位
+   ============================================================ */
+function resetAll(){
+  gen++;
+  clearTimeout(loopTimer);
+  purge();
+  pieces.forEach(resetPiece);
+  T.setOverlapPair(null);
+  hideLevels();
+  hardResetPanel();
+  resetStars();
+  pageOvl.classList.remove('on');
+  pageOvl.style.transitionDuration = '';
+  stageContent.classList.remove('pending');
+  covSet(62);
+  pressUp();
+  setBackLocked(false);
+  document.querySelectorAll('.ctl').forEach(x => x.classList.remove('hot'));
+  hud('已复位', '所有板件回到初始位置与常态投影。');
+}
+$('resetBtn').addEventListener('click', resetAll);
+
+backBtn.addEventListener('click', () => {
+  if (tryBack()) resetAll();
+});
+
+$('btnNext').addEventListener('click', () => { hardResetPanel(); resetStars(); hud('下一关（示意）', 'P4→P3 走 #13 页面转场 200ms。'); });
+$('btnReplay').addEventListener('click', () => { hardResetPanel(); resetStars(); hud('重玩（示意）', 'P4→P3 走 #13 页面转场 200ms。'); });
+$('btnBack').addEventListener('click', () => { hardResetPanel(); resetStars(); levelAnim(); });
+
+/* 按钮按下的视觉反馈挂到结算面板按钮上（真实触点） */
+[$('btnNext'), $('btnReplay'), $('btnBack')].forEach(el => {
+  if (!el) return;
+  el.addEventListener('pointerdown', () => el.classList.add('is-down'));
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev =>
+    el.addEventListener(ev, () => el.classList.remove('is-down')));
+});
+
+/* ============================================================
+   14. 启动
+   ============================================================ */
+T.fitStage();
+setTimeout(T.fitStage, 60);
+hud('准备好了',
+  '点右侧任一按钮播放。<b>建议先开「慢放 0.25x」</b>逐帧看，尤其 #3 白环、#7 投影、#10 成局的投影降档。<br>' +
+  '中断规则在「连续操作」区，C1–C8 逐条对应规格 §4 的 I1–I12。');
+
+})();
+
+
+</script>
+</body>
+</html>

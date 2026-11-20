@@ -1,0 +1,31 @@
+{
+  "_readme": [
+    "本文件是本地私有配置，不会随代码上传。",
+    "appid 已设为项目所有者的真实小游戏 appid；想换成别人的：改 project.config.json 的 appid，",
+    "或在开发者工具「详情 → 基本信息」里直接改。",
+    "重要：用微信开发者工具打开的是这个 miniprogram 目录，不是它的上一级 tangram 目录。",
+    "上一级是研发工程（推导脚本、动效演示、美术源文件），没有 game.js，打开会白屏。"
+  ],
+  "projectname": "tangram4-v02",
+  "libVersion": "3.18.0",
+  "setting": {
+    "compileHotReLoad": true,
+    "urlCheck": false,
+    "coverView": false,
+    "lazyloadPlaceholderEnable": false,
+    "skylineRenderEnable": false,
+    "preloadBackgroundData": false,
+    "autoAudits": false,
+    "useApiHook": true,
+    "showShadowRootInWxmlPanel": false,
+    "useStaticServer": false,
+    "useLanDebug": false,
+    "showES6CompileOption": false,
+    "useGlassEaselForWxml": false,
+    "checkInvalidKey": true,
+    "ignoreDevUnusedFiles": true,
+    "bigPackageSizeSupport": false,
+    "useIsolateContext": false
+  },
+  "condition": {}
+}

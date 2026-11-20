@@ -1,0 +1,10 @@
+用微信开发者工具打开本目录下的 miniprogram 子目录，不要打开 tangram 根目录。
+
+    正确路径： tangram\miniprogram
+    错误路径： tangram            ← 这里没有 game.js，编译后是白屏
+
+原因：tangram 根目录是研发工程（含几何推导脚本 tools、动效演示 animation、
+美术源文件 art-src、音频源 audio-src、网页预览版 preview），不是小游戏包。
+只有 miniprogram 子目录是可直接编译的小游戏包（game.js + game.json + project.config.json）。
+
+浏览器试玩：直接双击 tangram\preview\index.html 即可，不需要开发者工具。

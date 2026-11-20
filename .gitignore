@@ -1,0 +1,14 @@
+# 生成物（截图 / 临时补丁 / 缓存），不入库
+tools/out/
+node_modules/
+*.log
+
+# 一次性补丁脚本与本地备份
+tools/_*
+*.bak
+*.bak-*
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini

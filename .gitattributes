@@ -1,0 +1,10 @@
+# 统一换行符，避免 Windows 下每次改文件产生全文件 diff
+* text=auto eol=crlf
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.png binary
+*.jpg binary
+*.bmp binary
+*.mp3 binary
+*.wav binary
