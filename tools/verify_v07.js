@@ -188,20 +188,16 @@ check('体力不足时进不去（1 点被拦）', (function () {
   return S.page === 'home' && S.overlay === 'energy';
 })(), 'page=' + S.page + ' overlay=' + S.overlay);
 
-/* ---------- 5. BGM 音量 ---------- */
-section('5. BGM 音量再提一档');
-const NG = CFG.AUDIO.bgmNote;
-const mixPeak = NG.lead + NG.root;
-const mixDb = 20 * Math.log10(mixPeak * CFG.AUDIO.bgmVolume);
-const v06Peak = 0.078 + 0.052;
-const v06Db = 20 * Math.log10(v06Peak * 1.0);
-check('主旋律增益 ≥ 0.25', NG.lead >= 0.25, 'lead=' + NG.lead);
-check('叠加峰值进入 -8dBFS 以内', mixDb >= -8.5, `peak=${mixPeak.toFixed(3)}（${mixDb.toFixed(1)} dBFS）`);
-check('比 v0.6 至少响 8dB', mixDb - v06Db >= 8, `v0.6=${v06Db.toFixed(1)} → ${mixDb.toFixed(1)}（+${(mixDb - v06Db).toFixed(1)}dB）`);
+/* ---------- 5. BGM 音量（v0.11：真人 mp3 满刻度，不再叠合成总线） ---------- */
+section('5. BGM 音量与切曲');
+check('mp3 总线留了 -5dB 余量', CFG.AUDIO.bgmVolume <= 0.7 && CFG.AUDIO.bgmVolume >= 0.4,
+  'bgmVolume=' + CFG.AUDIO.bgmVolume);
+check('弹窗压低不静音', CFG.AUDIO.bgmDuckVolume >= 0.12, 'duck=' + CFG.AUDIO.bgmDuckVolume);
+check('换曲淡变时长已配', CFG.BGM.fadeMs >= 200 && CFG.BGM.fadeMs <= 800, 'fadeMs=' + CFG.BGM.fadeMs);
 for (const file of ['preview/js/game.js', 'miniprogram/game.js']) {
   const t = fs.readFileSync(path.join(ROOT, file), 'utf8');
-  check(`${file} 有软限幅`, /createDynamicsCompressor/.test(t) && /bgmGain\.connect\(bgmBus\)/.test(t));
-  check(`${file} 增益读配置`, /bgmNote/.test(t));
+  check(`${file} 按场景键取文件`, /function bgmFile\(/.test(t));
+  check(`${file} 不再读合成音符配置`, !/bgmNote/.test(t));
 }
 
 /* ---------- 6. 三端一致性 ---------- */

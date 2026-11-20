@@ -193,140 +193,82 @@ function loadBuffers() {
   });
 }
 
-/* ---------------- v0.5 多场景合成 BGM（零音频文件） ----------------
- * 每 120ms 排一次未来 0.55s 的音符：4 音和弦分解 + 低八度根音，按 bpm 循环。
- * setScene(key) 切场景；切后台暂停调度省电。旋律均为益智类轻快/温馨纯音乐。 */
-var BGM_DEF = {
-  home: { bpm: 60, wave: 'sine', chords: [
-    [261.63, 329.63, 392.00, 523.25],   // C
-    [220.00, 261.63, 329.63, 440.00],   // Am
-    [174.61, 220.00, 261.63, 349.23],   // F
-    [196.00, 246.94, 293.66, 392.00]    // G
-  ] },
-  lv1: { bpm: 96, wave: 'triangle', chords: [
-    [261.63, 392.00, 523.25, 392.00],   // C
-    [196.00, 293.66, 392.00, 293.66],   // G
-    [220.00, 329.63, 440.00, 329.63],   // Am
-    [174.61, 261.63, 349.23, 261.63]    // F
-  ] },
-  lv2: { bpm: 104, wave: 'triangle', chords: [
-    [174.61, 261.63, 349.23, 261.63],   // F
-    [261.63, 392.00, 523.25, 392.00],   // C
-    [293.66, 349.23, 440.00, 349.23],   // Dm
-    [196.00, 293.66, 392.00, 293.66]    // G
-  ] },
-  lv3: { bpm: 88, wave: 'sine', chords: [
-    [220.00, 329.63, 440.00, 659.25],   // Am
-    [174.61, 261.63, 349.23, 523.25],   // F
-    [261.63, 392.00, 523.25, 783.99],   // C
-    [196.00, 293.66, 392.00, 587.33]    // G
-  ] },
-  /* v0.6 通关场景：循环欢庆曲，结算面板停留期间一直在放 */
-  win: { bpm: 112, wave: 'triangle', chords: [
-    [261.63, 329.63, 392.00, 523.25],   // C
-    [349.23, 440.00, 523.25, 698.46],   // F
-    [392.00, 493.88, 587.33, 783.99],   // G
-    [261.63, 329.63, 392.00, 659.25]    // C（加高音，循环点更亮）
-  ] }
-};
-var bgmScene = 'home', bgmSeq = null;
-/* v0.6 音量校准：旧值 0.020/0.030/0.024 乘 0.30 总线只有 ≈0.008（听不见） */
-var BGM_NOTE = CONFIG.AUDIO.bgmNote || { root: 0.05, lead: 0.075, other: 0.055 };
+/* ---------------- v0.11 真人 BGM（mp3，90s 循环） ----------------
+ * 用 wx.createInnerAudioContext 直接播包内 mp3：
+ *   · 长音频不 decode 成 buffer，省内存（低端机上 decode 12MB mp3 要几十 MB）；
+ *   · loop=true，一关之内不换曲；
+ *   · 换曲走 6 步音量淡出→换 src→淡入，避免"咔"的断点。
+ * 选哪一首由 core.js 的 bgmSceneKey() 决定，这里只按键取文件。 */
+var bgmScene = 'home', bgmFadeTimer = 0, bgmFileNow = '', bgmPlaying = false;
 
-function bgmNote(freq, at, dur, gain, wave) {
-  if (!AC) return;
-  try {
-    var o = AC.createOscillator(), g = AC.createGain();
-    o.type = wave || 'triangle';
-    o.frequency.value = freq;
-    g.gain.setValueAtTime(0.0001, at);
-    g.gain.linearRampToValueAtTime(gain, at + 0.03);
-    g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
-    o.connect(g); g.connect(bgmGain);
-    o.start(at); o.stop(at + dur + 0.05);
-  } catch (e) {}
+function bgmFile(key) {
+  var m = (CONFIG.AUDIO && CONFIG.AUDIO.bgm) || {};
+  if (key === 'home') return m.home || '';
+  var arr = m.lv || [];
+  if (!arr.length) return m.home || '';
+  var i = parseInt(String(key).replace(/^lv/, ''), 10);
+  return arr[((isFinite(i) && i > 0 ? i - 1 : 0) % arr.length)];
 }
-function bgmStopSeq() {
-  if (bgmSeq && bgmSeq.timer) clearInterval(bgmSeq.timer);
-  bgmSeq = null;
+function bgmPath(file) {
+  return (CONFIG.AUDIO.base + file).replace(/^\.\//, '');
 }
-function bgmStartSeq(key) {
-  if (!AC || !enabled.bgm) return;
-  var def = BGM_DEF[key] || BGM_DEF.home;
-  bgmStopSeq();
-  var beat = 60 / def.bpm, bar = beat * 4;
-  bgmSeq = { idx: 0, nextT: AC.currentTime + 0.10, timer: 0 };
-  var tick = function () {
-    if (!bgmSeq || !AC) return;
-    var horizon = AC.currentTime + 0.55, guard = 0;
-    while (bgmSeq.nextT < horizon && guard++ < 8) {
-      var ch = def.chords[bgmSeq.idx % def.chords.length];
-      bgmNote(ch[0] / 2, bgmSeq.nextT, bar * 0.92, BGM_NOTE.root, 'sine');   // 低八度根音
-      for (var k = 0; k < ch.length; k++) {
-        bgmNote(ch[k], bgmSeq.nextT + k * beat, beat * 0.88,
-          k === 0 ? BGM_NOTE.lead : BGM_NOTE.other, def.wave);
-      }
-      bgmSeq.nextT += bar;
-      bgmSeq.idx++;
-    }
-  };
-  tick();
-  bgmSeq.timer = setInterval(tick, 120);
-}
-function bgmSetScene(key) {
-  if (!BGM_DEF[key] || key === bgmScene) return;
-  bgmScene = key;
-  if (!unlocked || !enabled.bgm || !AC) return;
-  bgmStartSeq(key);
-}
-
 function bgmTarget() {
   if (!enabled.bgm) return 0;
   return ducked ? CONFIG.AUDIO.bgmDuckVolume : CONFIG.AUDIO.bgmVolume;
 }
 function applyBgmGain() {
-  var v = bgmTarget();
-  /* v0.6：mp3 / 元素回退是满刻度素材，仍按旧上限，不跟着合成总线放大 */
-  if ((bgmSrc || bgmPlayer) && v > CONFIG.AUDIO.bgmLegacyVolume) v = CONFIG.AUDIO.bgmLegacyVolume;
-  if (bgmGain && AC) {
-    try {
-      if (bgmGain.gain.setTargetAtTime) bgmGain.gain.setTargetAtTime(v, AC.currentTime, 0.06);
-      else bgmGain.gain.value = v;
-    } catch (e) { try { bgmGain.gain.value = v; } catch (e2) {} }
-  }
-  if (bgmPlayer) { try { bgmPlayer.volume = Math.max(0, Math.min(1, v)); } catch (e) {} }
+  if (!bgmPlayer) return;
+  try { bgmPlayer.volume = Math.max(0, Math.min(1, bgmTarget())); } catch (e) {}
 }
-function startBgm() {
-  if (!unlocked) { applyBgmGain(); return; }
-  /* v0.5：优先合成多场景 BGM（零文件）；AC 完全不可用时才回退 mp3 */
-  if (CONFIG.AUDIO.useSynthBgm !== false && AC) { bgmStartSeq(bgmScene); bgmStarted = true; applyBgmGain(); return; }
-  if (bgmStarted) { applyBgmGain(); return; }
-  if (buffersReady && buf.bgm_main && AC) {
-    try {
-      bgmSrc = AC.createBufferSource();
-      bgmSrc.buffer = buf.bgm_main;
-      bgmSrc.loop = true;
-      bgmSrc.loopStart = CONFIG.AUDIO.loopStart;
-      bgmSrc.loopEnd = CONFIG.AUDIO.loopEnd;
-      bgmSrc.connect(bgmGain);
-      bgmSrc.start(0, CONFIG.AUDIO.loopStart);
-      bgmStarted = true;
-      applyBgmGain();
-      return;
-    } catch (e) { bgmSrc = null; }
-  }
-  if (elementMode && CONFIG.AUDIO.files.bgm_main) {
+function bgmFadeTo(to, cb) {
+  if (bgmFadeTimer) { clearInterval(bgmFadeTimer); bgmFadeTimer = 0; }
+  if (!bgmPlayer) { if (cb) cb(); return; }
+  var from = bgmPlayer.volume || 0, steps = 6, i = 0;
+  var gap = Math.max(24, Math.round(((CONFIG.BGM && CONFIG.BGM.fadeMs) || 320) / steps));
+  bgmFadeTimer = setInterval(function () {
+    i++;
+    try { bgmPlayer.volume = Math.max(0, Math.min(1, from + (to - from) * i / steps)); } catch (e) {}
+    if (i >= steps) { clearInterval(bgmFadeTimer); bgmFadeTimer = 0; if (cb) cb(); }
+  }, gap);
+}
+function bgmPlay(key) {
+  var file = bgmFile(key);
+  if (!file) return;
+  if (!bgmPlayer) {
     try {
       bgmPlayer = wx.createInnerAudioContext();
-      bgmPlayer.src = pkgPath('bgm_main');
       bgmPlayer.loop = true;
       bgmPlayer.obeyMuteSwitch = false;
-      bgmPlayer.volume = 0;
-      bgmPlayer.play();
-      bgmStarted = true;
-      applyBgmGain();
-    } catch (e) { bgmPlayer = null; }
+    } catch (e) { bgmPlayer = null; return; }
+    bgmPlayer.onError(function () { bgmPlaying = false; });
   }
+  if (file === bgmFileNow && bgmPlaying) { applyBgmGain(); return; }
+  /* 立刻换 src——单实例做不了交叉淡变，等淡出只会多一段静音 */
+  try {
+    bgmPlayer.src = bgmPath(file);
+    bgmPlayer.volume = 0;
+    bgmPlayer.play();
+    bgmFileNow = file;
+    bgmPlaying = true;
+  } catch (e) {}
+  bgmFadeTo(bgmTarget());
+}
+function bgmSetScene(key) {
+  if (!key || key === bgmScene) { if (unlocked && enabled.bgm) bgmPlay(bgmScene); return; }
+  bgmScene = key;
+  if (!unlocked || !enabled.bgm) return;
+  bgmPlay(key);
+}
+/* 第一次用户手势（解锁音频）后进入：主页直接起播 */
+function startBgm() {
+  if (!unlocked || !enabled.bgm) { applyBgmGain(); return; }
+  bgmPlay(bgmScene);
+}
+function bgmStop() {
+  if (bgmFadeTimer) { clearInterval(bgmFadeTimer); bgmFadeTimer = 0; }
+  if (!bgmPlayer) return;
+  try { bgmPlayer.pause(); } catch (e) {}
+  bgmPlaying = false;
 }
 
 function playElement(name, rate, gain) {
@@ -388,20 +330,17 @@ var audio = {
   },
   setEnabled: function (sfx, bgm) {
     enabled.sfx = sfx; enabled.bgm = bgm;
-    if (!bgm) bgmStopSeq();
-    else if (unlocked && AC) bgmStartSeq(bgmScene);
+    if (!bgm) bgmStop();
+    else if (unlocked) bgmPlay(bgmScene);
     applyBgmGain();
   },
   duck: function (on) { ducked = !!on; applyBgmGain(); },
   setScene: function (k) { bgmSetScene(k); },   // v0.5：主页 / 关卡多场景 BGM
   setVisible: function (v) {
     if (!v) {
-      if (bgmGain && AC) { try { bgmGain.gain.value = 0; } catch (e) {} }
-      if (bgmPlayer) { try { bgmPlayer.volume = 0; } catch (e) {} }
-      bgmStopSeq();
-    } else {
-      if (unlocked && enabled.bgm) bgmStartSeq(bgmScene);
-      applyBgmGain();
+      bgmStop();
+    } else if (unlocked && enabled.bgm) {
+      bgmPlay(bgmScene);
     }
   },
   play: function (name) {
@@ -409,6 +348,8 @@ var audio = {
     playSfx(name);
   }
 };
+/* 调试/验收钩子：tools/verify_audio.js 用它直接驱动 BGM 切场景（与 __game 同性质） */
+globalThis.__audio = audio;
 
 /* ---------------- 震动 ---------------- */
 function vibrate(ms) {

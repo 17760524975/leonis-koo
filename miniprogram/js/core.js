@@ -734,7 +734,7 @@
       state.running = true;
       env.audio.play('sfx_snap');
       toast(byAd ? '复活成功 +90 巧币' : ('复活成功 -' + E.coinRevive + ' 巧币'));
-      if (env.audio.setScene) env.audio.setScene(C.BGM.scenes[(s.bgmIdx || 0) % C.BGM.scenes.length]);
+      setLevelScene();
     }
     function giveUp() {
       state.overlay = null;
@@ -778,6 +778,20 @@
       go('home');
     }
 
+    /* ---------------- v0.11 BGM 选曲 ----------------
+     * 4 首关卡曲按「关卡序号 / 每首关数」取模，四巧板与七巧板各自从第 1 关起算：
+     *   1~5 → lv1、6~10 → lv2、11~15 → lv3、16~20 → lv4、21~25 → lv1 …
+     * 一关之内永不换曲；换曲只发生在"进入下一关"，结算页沿用本关那首。 */
+    function bgmSceneKey() {
+      var B = C.BGM || {}, arr = B.scenes || [];
+      if (!arr.length) return 'home';
+      var per = B.levelsPerTrack || 5;
+      return arr[Math.floor(state.levelIdx / per) % arr.length];
+    }
+    function setLevelScene() {
+      if (env.audio && env.audio.setScene) env.audio.setScene(bgmSceneKey());
+    }
+
     /* ---------------- 页面切换 ---------------- */
     function go(page) {
       state.page = page;
@@ -787,7 +801,7 @@
        * 对局放当前关卡曲；通关后由 win() 切到欢庆曲，进下一关再切回来。 */
       if (env.audio && env.audio.setScene) {
         if (page === 'home' || page === 'levels') env.audio.setScene('home');
-        else if (page === 'play') env.audio.setScene(C.BGM.scenes[(state.save.bgmIdx || 0) % C.BGM.scenes.length]);
+        else if (page === 'play') env.audio.setScene(bgmSceneKey());
       }
       if (page !== 'play') { state.running = false; }
       syncBanner(page === 'play');       // v0.9：只在拼图页挂 banner
@@ -955,11 +969,10 @@
         s.coin += C.STREAK.coin;
         state.streakGain = C.STREAK.coin;
       }
-      s.bgmIdx = ((s.bgmIdx || 0) + 1) % C.BGM.scenes.length;
       persist();
-      /* v0.6：通关立刻切到「欢庆」循环曲（不是 0.8s 的一次性 sting）。
-       * bgmIdx 已经 +1，下一关进对局时播放的是新的关卡曲。 */
-      if (env.audio.setScene) env.audio.setScene('win');
+      /* v0.11：通关不换曲——一关只播一首，换曲只发生在"进入下一关"。
+       * 结算页继续放本关那首（音效 sting 已经给了庆祝感），
+       * 这样第 5 关结束时不会在结算面板上突然换歌。 */
       /* v0.9 插屏：每攒够 N 关弹一次（N 在 config.ADS.interstitial）。
        * 放在拿到结算之后，不打断拼图；没配广告位时 ad.js 里直接 no-op。 */
       var iv = (C.ADS && C.ADS.interstitial) || null;
@@ -975,7 +988,7 @@
         setupLevel(state.levelIdx + 1);
         state.overlay = null;
         /* v0.6：离开结算页 → 从欢庆曲切回本关关卡曲 */
-        if (env.audio.setScene) env.audio.setScene(C.BGM.scenes[(state.save.bgmIdx || 0) % C.BGM.scenes.length]);
+        setLevelScene();
       } else {
         state.overlay = null;
         go('levels');
@@ -1360,7 +1373,7 @@
         case 'restart': setupLevel(state.levelIdx); break;
         case 'next': nextLevel(); break;
         case 'replay': setupLevel(state.levelIdx); state.overlay = null;
-          if (env.audio.setScene) env.audio.setScene(C.BGM.scenes[(state.save.bgmIdx || 0) % C.BGM.scenes.length]);
+          setLevelScene();
           break;
         case 'to_list': state.overlay = null; go('levels'); break;
         case 'to_home_from_result': state.overlay = null; go('home'); break;
@@ -1435,6 +1448,8 @@
       if (state.page !== 'play' || state.win) return false;
 
       var tier = state.hintLv + 1;
+      var pid = pickHintPiece();
+      if (!pid) { toast('这一关已经拼好啦'); return false; }
       state.hintLv = tier;
       if (paid) state.hintPaid++;
       if (!state.hintUsed) {
@@ -1444,7 +1459,7 @@
         state.save.hintUsed[String(state.levelIdx + 1)] = true;
         persist();
       }
-      state.hint = { id: pickHintPiece(), tier: tier, t: 0, until: nowMs() + (H.showMs[tier - 1] || 3500) };
+      state.hint = { id: pid, tier: tier, t: 0, until: nowMs() + (H.showMs[tier - 1] || 3500) };
       state.overlay = null;
       env.audio.play('sfx_snap');
       var msg = '提示 ' + tier + '/' + H.maxTier + ' · ' + H.names[tier - 1];
@@ -1465,16 +1480,27 @@
       useHint(true);
     }
 
+    /* 一块板是否已经"放对"（位置/角度/翻面都对）。提示选块与档3淡显都用它。 */
+    function pieceSolved(p, st) {
+      return !!p && p.onBoard &&
+        Math.abs(p.x - st.x) <= 1 && Math.abs(p.y - st.y) <= 1 &&
+        Math.abs(((p.angle - st.angle) % 360 + 540) % 360 - 180) <= 1 &&
+        !!p.flipped === !!st.flipped;
+    }
+    /* v0.11：优先「还没上板的块」，其次是「上板但没放对的块」。
+     * 旧版拿 solution[0] 兜底——当所有块都已上板（但没拼对）时会指到一块
+     * 已经摆在棋盘上的板，托盘不亮、落点高亮又被板压住，玩家什么提示都看不见。 */
     function pickHintPiece() {
-      var lv = LEVELS[state.levelIdx];
-      for (var i = 0; i < lv.solution.length; i++) {
-        var st = lv.solution[i];
-        var p = pieceOf(st.id);
+      var lv = LEVELS[state.levelIdx], i, st, p;
+      for (i = 0; i < lv.solution.length; i++) {
+        st = lv.solution[i]; p = pieceOf(st.id);
         if (!p || !p.onBoard) return st.id;
-        if (Math.abs(p.x - st.x) > 1 || Math.abs(p.y - st.y) > 1 ||
-            Math.abs(p.angle - st.angle) > 1 || p.flipped !== st.flipped) return st.id;
       }
-      return lv.solution[0].id;
+      for (i = 0; i < lv.solution.length; i++) {
+        st = lv.solution[i]; p = pieceOf(st.id);
+        if (!pieceSolved(p, st)) return st.id;
+      }
+      return null;                      // 全部放对（理论上已判定通关）
     }
 
     function handleOverlayDown(x, y) {
@@ -1679,7 +1705,21 @@
         state.starShown = state.result ? Math.min(state.result.stars, n) : 0;
       }
       if (state.overlay === 'rank') state.rankT += dt;
-      if (state.hint && nowMs() > state.hint.until) state.hint = null;
+      if (state.hint) {
+        if (nowMs() > state.hint.until) {
+          state.hint = null;
+        } else {
+          /* 被指的那块已经放对 → 剩余时间里改指下一块（不浪费已付的那一档） */
+          var hlv = LEVELS[state.levelIdx], hst = null;
+          for (var hi = 0; hi < hlv.solution.length; hi++) {
+            if (hlv.solution[hi].id === state.hint.id) hst = hlv.solution[hi];
+          }
+          if (hst && pieceSolved(pieceOf(hst.id), hst)) {
+            var nid = pickHintPiece();
+            if (nid) state.hint.id = nid; else state.hint = null;
+          }
+        }
+      }
       if (state.press) state.pressT += dt;
       /* v0.4 A2：长按翻转已彻底移除——翻转改为 pointerup 后判定的「双击」，
        * 不再在按住时段触发，根除「想拖动却被翻面」的真机问题（见规格 §1 根因）。 */
@@ -2662,9 +2702,6 @@
       }
       ctx.restore();
 
-      /* 提示引导（v0.10 三档；档2 的托盘描边单独画在托盘之上，见 drawHintTray） */
-      if (state.hint) drawHintGuide(lv);
-
       /* 已上板的板件（先画，被拖的那块最后画） */
       var dragging = state.drag ? state.drag.id : null;
       for (var m = 0; m < state.pieces.length; m++) {
@@ -2672,6 +2709,11 @@
         if (!p.onBoard || p.id === dragging) continue;
         drawBoardPiece(p);
       }
+
+      /* 提示引导必须画在「已上板件」之上（v0.11 修复）：
+       * 旧版画在板件之前，玩家一旦先摆了几块，落点高亮就被板压住——
+       * 截图里只剩一句「提示 2/3」，棋盘上什么都看不见。 */
+      if (state.hint) drawHintGuide(lv);
 
       /* 托盘 v0.9：不再画整块槽位底框（那是「工具区太大」的主因）。
        * 板件按散放落点直接摆，互相压一点；绘制顺序 = pieceOrder，
@@ -2941,23 +2983,27 @@
       }
     }
 
-    /* ================= v0.10 提示绘制（三档统一） =================
-     * 档1 只画"落点"，档2 加"是哪一块"，档3 直接把整幅标准解淡显。
-     * 三档都画在板件之下（档1/2）或同层（档3 的 ghost），不抢拖动板的最上层。 */
+    /* ================= v0.11 提示绘制（三档统一，画在已上板件之上） =================
+     * 档1 只画"落点"，档2 加"是哪一块"，档3 把还没放对的块淡显到标准解上。
+     * 关键：这一层在 board pieces 之后绘制——玩家先摆了几块也一定看得见提示。
+     * （旧版画在板件之前，落点被板压住，玩家只看到一句"提示 2/3"却什么都找不到。） */
     function drawHintGuide(lv) {
       var H = C.HINT, hh = state.hint, tier = hh.tier || 1;
       var hs = null;
       for (var q = 0; q < lv.solution.length; q++) if (lv.solution[q].id === hh.id) hs = lv.solution[q];
       if (!hs) return;
+      var pz = pieceOf(hh.id);
+      var onBoard = !!(pz && pz.onBoard);
 
-      /* 档3：整幅标准解淡显。玩家一眼看清每块的位置/朝向，3.6s 后自动消失；
-       * 不代打、不自动归位，关卡本身仍然要靠自己拼完。
-       * 这一档已经给了全图，就不再单独指某一块（否则"全图 + 指一块"互相打架）。 */
+      /* 档3：还没放对的块按标准解淡显。
+       * 已经放对的块跳过——再盖一层会把真实板件的颜色/立体感糊掉，
+       * 玩家反而分不清"哪些已经好了、哪些还要动"。 */
       if (tier >= 3) {
         var ga = H.ghostAlpha * (0.85 + 0.15 * Math.sin(state.time / 240));
         ctx.save();
         for (var g = 0; g < lv.solution.length; g++) {
           var st = lv.solution[g];
+          if (pieceSolved(pieceOf(st.id), st)) continue;
           var gp = G.toWorld(LOCAL[st.id], st).map(function (v) { return [w2d(v[0]), h2d(v[1])]; });
           ctx.beginPath();
           ctx.moveTo(gp[0][0], gp[0][1]);
@@ -2966,11 +3012,13 @@
           ctx.globalAlpha = ga;
           ctx.fillStyle = DS.pieces[st.id].color;
           ctx.fill();
-          /* 白色分隔线：让相邻同色块也能看出边界，不然整片糊成一块 */
-          ctx.globalAlpha = Math.min(1, ga * 2.4);
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = '#FFFFFF';
+          /* 金色虚线描边：压在已摆的板上面时也能一眼分出"这是提示不是我的板" */
+          ctx.globalAlpha = 0.85;
+          ctx.lineWidth = 2.5;
+          ctx.setLineDash([7, 5]);
+          ctx.strokeStyle = COL.gold;
           ctx.stroke();
+          ctx.setLineDash([]);
         }
         ctx.restore();
         return;
@@ -2978,7 +3026,7 @@
 
       /* 档1/2：这一块的落点脉冲 */
       var hp = G.toWorld(LOCAL[hs.id], hs).map(function (v) { return [w2d(v[0]), h2d(v[1])]; });
-      var a = 0.35 + 0.3 * Math.sin(state.time / 180);
+      var a = 0.30 + 0.22 * Math.sin(state.time / 180);
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(hp[0][0], hp[0][1]);
@@ -2986,23 +3034,107 @@
       ctx.closePath();
       ctx.fillStyle = 'rgba(255,185,61,' + a.toFixed(2) + ')';
       ctx.fill();
-      ctx.lineWidth = 3; ctx.strokeStyle = COL.gold; ctx.stroke();
-      /* 档2：从托盘那块拉一条引导虚线，省掉"眼睛在棋盘和托盘之间来回找" */
-      if (tier === 2) {
-        var pz = pieceOf(hh.id);
-        if (pz && !pz.onBoard) {
-          var sp0 = SLOT_POS[pz.slot];
-          ctx.setLineDash([10, 10]);
-          ctx.lineWidth = 3;
-          ctx.strokeStyle = 'rgba(255,159,28,0.5)';
+      /* 白色打底 + 金色虚线：浅卡纸上白描边是边界，深色板件上金线是主体 */
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 7;
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.stroke();
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = COL.gold;
+      ctx.setLineDash([10, 7]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      /* 那块已经上了板但没放对（位置/角度/翻面不对）：
+       * 托盘里没有可标的块，就在棋盘上把它圈出来，再拉一条线指向正确落点。
+       * 这是旧版最容易卡住的场景——玩家摆错了 3 块，按提示却毫无反应。 */
+      if (onBoard) {
+        var bp = piecePolyDesign(pz);
+        ctx.save();
+        ctx.beginPath();
+        for (var b2 = 0; b2 < bp.length; b2++) {
+          if (b2 === 0) ctx.moveTo(bp[b2][0], bp[b2][1]); else ctx.lineTo(bp[b2][0], bp[b2][1]);
+        }
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(255,185,61,0.10)';
+        ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.setLineDash([6, 5]);
+        ctx.strokeStyle = 'rgba(255,159,28,0.95)';
+        ctx.stroke();
+        ctx.setLineDash([]);
+        /* 从这块的质心指向目标落点：箭头落在落点边缘，不盖住落点本身 */
+        var x0 = w2d(pz.x), y0 = h2d(pz.y), x1 = w2d(hs.x), y1 = h2d(hs.y);
+        var dx = x1 - x0, dy = y1 - y0, dd = Math.hypot(dx, dy);
+        if (dd > 40) {
+          var ux = dx / dd, uy = dy / dd, ex = x1 - ux * 26, ey = y1 - uy * 26;
           ctx.beginPath();
-          ctx.moveTo(sp0.x, sp0.y);
-          ctx.lineTo(w2d(hs.x), h2d(hs.y));
+          ctx.moveTo(x0 + ux * 18, y0 + uy * 18);
+          ctx.lineTo(ex, ey);
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = 'rgba(255,159,28,0.75)';
+          ctx.setLineDash([9, 7]);
           ctx.stroke();
           ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.moveTo(ex, ey);
+          ctx.lineTo(ex - ux * 14 - uy * 8, ey - uy * 14 + ux * 8);
+          ctx.lineTo(ex - ux * 14 + uy * 8, ey - uy * 14 - ux * 8);
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(255,159,28,0.95)';
+          ctx.fill();
         }
+        ctx.restore();
       }
-      ctx.restore();
+
+      /* 小牌：
+       *   · 那块还在托盘里 → 牌子放在落点形心「放这里」；
+       *   · 那块已上板但摆歪 → 牌子挂在那块上方「移到虚线处」。
+       * 后者的牌子不能放落点：玩家常常正好把歪的那块压在落点上，牌子会像
+       * "写给这块板"的注释，反而误导（v0.11 第一版就是这么翻车的）。 */
+      var label, lw, lh = 40, ly;
+      if (onBoard) {
+        var pTop = 1e9, pBot = -1e9;
+        var pbp = piecePolyDesign(pz);
+        for (var b3 = 0; b3 < pbp.length; b3++) {
+          if (pbp[b3][1] < pTop) pTop = pbp[b3][1];
+          if (pbp[b3][1] > pBot) pBot = pbp[b3][1];
+        }
+        label = '移到虚线处'; lw = 138;
+        ly = pTop - 28;
+        if (ly < LAY.BOARD.y + 30) ly = pBot + 28;
+      } else {
+        var cx = 0, cy = 0;
+        for (var c2 = 0; c2 < hp.length; c2++) { cx += hp[c2][0]; cy += hp[c2][1]; }
+        label = '放这里'; lw = 96;
+        cx /= hp.length; cy /= hp.length;
+        ly = cy;
+      }
+      var bTop = LAY.BOARD.y + 26, bBot = LAY.BOARD.y + LAY.BOARD.size - 26;
+      var bL = LAY.BOARD.x + lw / 2 + 8, bR = LAY.BOARD.x + LAY.BOARD.size - lw / 2 - 8;
+      var lx = onBoard ? w2d(pz.x) : cx;
+      lx = Math.max(bL, Math.min(bR, lx));
+      ly = Math.max(bTop, Math.min(bBot, ly));
+      rr(lx - lw / 2, ly - lh / 2, lw, lh, lh / 2);
+      ctx.fillStyle = 'rgba(44,58,75,0.86)';
+      ctx.fill();
+      text(label, lx, ly + 1, 21, '#FFFFFF', 'center', '600');
+
+      /* 档2：从托盘那块拉一条引导虚线，省掉"眼睛在棋盘和托盘之间来回找" */
+      if (tier === 2 && !onBoard) {
+        var sp0 = SLOT_POS[pz.slot];
+        ctx.save();
+        ctx.setLineDash([10, 10]);
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(255,159,28,0.55)';
+        ctx.beginPath();
+        ctx.moveTo(sp0.x, sp0.y);
+        ctx.lineTo(w2d(hs.x), h2d(hs.y));
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
     }
 
     /* 档2：托盘上那一块的描边 + 「用这块」小牌（档3 给了全图，不再指单块） */

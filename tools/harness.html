@@ -149,14 +149,31 @@
         S.selId = S.pieces[2] && S.pieces[2].id;
       }
       if (screen === 'hint') {
-        /* v0.10：hinttier=1/2/3 指定「提示阶梯」的哪一档（与 tier= 的目标轮廓档不是一回事） */
+        /* v0.10：hinttier=1/2/3 指定「提示阶梯」的哪一档（与 tier= 的目标轮廓档不是一回事）
+         * v0.11：hintbad=N 把第 N 块摆歪，用来截「已上板但没放对」的提示；
+         *        不指定时按真实逻辑取第一块没上板的（旧版固定指 solution[0]，
+         *        一旦那块已上板，截图里就只剩一句 toast、什么提示都看不到）。 */
         var ht = +(q.match(/hinttier=(\d+)/) || [])[1];
         if (isNaN(ht) || ht < 1) ht = 1;
         if (ht > 3) ht = 3;
+        var hbad = +(q.match(/hintbad=(\d+)/) || [])[1];
+        var hid = null;
+        if (!isNaN(hbad) && S.pieces[hbad]) {
+          var hbp = S.pieces[hbad];
+          hbp.onBoard = true;
+          hbp.angle = (hbp.angle + 40) % 360; hbp.dAngle = hbp.angle;
+          hid = hbp.id;
+        } else {
+          for (var hi = 0; hi < S.pieces.length; hi++) {
+            if (!S.pieces[hi].onBoard) { hid = S.pieces[hi].id; break; }
+          }
+          if (!hid) hid = lv.solution[0] && lv.solution[0].id;
+        }
         S.hintLv = ht;
         S.hintUsed = true;
-        S.hint = { id: lv.solution[0] && lv.solution[0].id, tier: ht, until: Date.now() + 1e6 };
-        S.msg = '还差一点点'; S.msgT = 1500;
+        S.hint = { id: hid, tier: ht, until: Date.now() + 1e6 };
+        S.msg = '提示 ' + ht + '/' + C.HINT.maxTier + ' · ' + C.HINT.names[ht - 1];
+        S.msgT = 1500;
       }
       if (screen === 'result') {
         S.overlay = 'result'; S.resT = 1000; S.starShown = 3;

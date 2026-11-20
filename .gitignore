@@ -12,3 +12,6 @@ tools/_*
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 音频母带（34MB，本地保留；打包后的 90s/48kbps 版本已入库 assets/audio/）
+audio/*.mp3

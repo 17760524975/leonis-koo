@@ -9,7 +9,7 @@
   'use strict';
 
   return {
-    version: 'v0.10',
+    version: 'v0.11',
 
     /* ---------- 品牌（v0.6 改名「方寸巧拼」） ----------
      * 游戏名只在这里定义一次：主页标题、分享文案、工程名都从这里取，
@@ -481,16 +481,25 @@
       }
     },
 
-    /* ---------- v0.5 多首 BGM（场景键；实际旋律在两端 game.js 里合成） ----------
-     * home=主页温馨；lv1/lv2/lv3=关卡三首轮换（每通一关切下一首）。 */
+    /* ---------- v0.11 真人 BGM（audio/ 下的 5 首 mp3，已压成 48kbps 单声道） ----------
+     * 规则（用户指定）：
+     *   · 主页固定播「主页音乐」；
+     *   · 对局按章节轮换 4 首关卡曲，顺序 = 文件名开头的 1/2/3/4；
+     *   · 一关之内不换曲，连过 5 关换下一首（第 1~5 关 lv1、6~10 关 lv2…）；
+     *   · 四巧板 30 关 / 七巧板 60 关各自从 lv1 起算，互不影响。
+     * 之所以按「关卡序号」而不是「通关次数」算：同一个关卡每次进来听同一首，
+     * 玩家对关卡与音乐的对应关系是稳定的；重玩旧关也不会跳曲。 */
     BGM: {
-      home: { name: '主页·暖阳', bpm: 60 },
-      lv1: { name: '关卡·木琴轻快', bpm: 96 },
-      lv2: { name: '关卡·五声明亮', bpm: 104 },
-      lv3: { name: '关卡·琶音舒展', bpm: 88 },
-      /* v0.6：通关场景。结算面板停留期间循环播放，进入下一关才切回关卡曲。 */
-      win: { name: '通关·欢庆', bpm: 112 },
-      scenes: ['lv1', 'lv2', 'lv3']
+      home: { name: '主页·暖阳' },
+      lv1: { name: '关卡 1 · Monkeys Spinning Monkeys' },
+      lv2: { name: '关卡 2 · Carefree' },
+      lv3: { name: '关卡 3 · we never（千年之后）' },
+      lv4: { name: '关卡 4 · Cheery Monday' },
+      scenes: ['lv1', 'lv2', 'lv3', 'lv4'],
+      levelsPerTrack: 5,      // 每 5 关换一首
+      /* 换曲淡出/淡入时长（ms）。真机 InnerAudioContext 不支持采样级淡变，
+       * 用定时器分 6 步改 volume，听感上够用，也不会有"咔"的爆音。 */
+      fadeMs: 320
     },
 
     /* ---------- 存档 ---------- */
@@ -508,40 +517,32 @@
       }
     },
 
-    /* ---------- 音频（5 个文件，已到位） ----------
-     * 3 个短音效是 .wav（MP3 固定 25ms 编码延迟，手感可感知）。
-     * gain / 循环点参数来自音频交付说明 §1 §4.2 §6。 */
+    /* ---------- 音频（v0.11：真人 BGM 5 首 + 3 个短音效） ----------
+     * BGM：audio/ 原始 mp3 经 tools/audiokit/build.mjs 转成 90s / 48kbps / 单声道，
+     *      单曲约 0.5MB，5 首合计 2.5MB，主包仍 <4MB（小游戏硬限制）。
+     *      要换曲：把新 mp3 丢进 audio/、按 1_/2_/3_/4_ 前缀命名，再跑一次构建脚本。
+     *      想听整首而不是 90s 循环：把 --sec 调大，但注意主包体积。
+     * 音效仍是 wav（MP3 固定 25ms 编码延迟，手感可感知）。 */
     AUDIO: {
       enabled: true,
       base: './assets/audio/',
       files: {
-        bgm_main: 'bgm_main.mp3',
         sfx_pick: 'sfx_pick.wav',
         sfx_snap: 'sfx_snap.wav',
         sfx_win: 'sfx_win.mp3',
         sfx_tap: 'sfx_tap.wav'
       },
-      /* v0.6 音量校准（v0.5 无声的真正根因）：
-       * 合成 BGM 的单音振幅只有 0.024~0.030，再乘 bgmVolume 0.30 → 峰值约 0.008
-       * （≈ -42 dBFS），手机扬声器基本听不见。现在的口径是：
-       *   单音振幅 bgmNote.*  ≈ 0.05~0.08，bgmVolume 1.0 → 和弦叠加峰值 ≈ 0.13，
-       *   与原来 mp3（满刻度素材 × 0.30）听感相当。
-       * bgmLegacyVolume 只用于 mp3 / <audio> 回退路径，避免满刻度素材被叠加放大。 */
-      bgmVolume: 1.0,           // 合成 BGM 总线（常态）
-      bgmDuckVolume: 0.55,      // 结算/弹窗出现时压低（v0.5=0.18，已听不清）
-      bgmLegacyVolume: 0.30,    // mp3 / element 回退路径的音量上限
-      /* v0.7 二次提音量：v0.6 的 0.052/0.078/0.058 实测峰值仍只有 0.13（≈-17.7dBFS），
-       * 手机外放仍偏小。现在提到 0.15/0.26/0.19，主旋律+根音峰值 0.41（≈-7.7dBFS），
-       * 约为 v0.6 的 +10dB；总线保持 1.0，靠 bgmLimit 软限幅兜住叠加峰值。 */
-      bgmNote: { root: 0.15, lead: 0.26, other: 0.19 },
-      /* v0.6：换真人做的 BGM 只需两步——把音频放进 assets/audio/、把这里改成 false。
-       * true=用代码合成的 5 首场景曲（零音频文件）；false=走 bgm_main.mp3 精确循环。 */
-      useSynthBgm: true,
+      /* 主页 / 关卡四首（顺序即文件名数字顺序） */
+      bgm: {
+        home: 'bgm_home.mp3',
+        lv: ['bgm_lv1.mp3', 'bgm_lv2.mp3', 'bgm_lv3.mp3', 'bgm_lv4.mp3']
+      },
+      /* 真人 mp3 是满刻度素材，0.55 在手机外放上约 -5dB，既能听清又不盖音效。
+       * 弹窗/结算压低到 0.20（v0.10 合成曲的 0.55 是相对合成总线，不能直接搬）。 */
+      bgmVolume: 0.55,
+      bgmDuckVolume: 0.20,
       sfxVolume: 1.0,
       sfxGain: { sfx_snap: 1.00, sfx_win: 1.00, sfx_pick: 0.90, sfx_tap: 0.80 },
-      // MP3 解码后 3088512 采样 = 1105 前置填充 + 3087000 音乐 + 407 尾填充
-      loopStart: 1105 / 44100,
-      loopEnd: (1105 + 3087000) / 44100,
       fadeMs: 220,
       tapGuardMs: 40,
       snapVoices: 2

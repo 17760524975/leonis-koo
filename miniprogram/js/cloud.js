@@ -34,6 +34,8 @@ function createCloud() {
     var msg = (e && (e.errMsg || e.message)) || '网络异常';
     if (code === -501000 || /env.*not.*exist|invalid env/i.test(msg)) return '云环境 ID 不对';
     if (/cloudfunction|FunctionName/i.test(msg)) return '云函数未部署';
+    if (/collection.*not.*exist|DATABASE_COLLECTION_NOT_EXIST|Db or Table not exist/i.test(msg)) return '数据库集合未创建';
+    if (/permission|PERMISSION_DENIED|权限/i.test(msg)) return '集合权限不放行';
     if (/timeout/i.test(msg)) return '网络超时';
     return String(msg).slice(0, 40);
   }

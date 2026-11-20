@@ -227,6 +227,10 @@ function tapD(x, y) {
   check('启动即登录（调用了 init）', cloudLog.init === 1, 'init=' + cloudLog.init);
   check('登录后拿到昵称', S.net.nick === '巧手0921' && S.net.ready === true,
     `nick=${S.net.nick} ready=${S.net.ready}`);
+  /* 先把挂起的 debounce 上行 flush 掉再断言：否则随机停在「同步中…」，
+   * 这是用例本身的竞态，不是产品问题（pushDebounceMs=3500，测试跑不到那么久）。 */
+  game._debug.cloudPush(true);
+  await new Promise(r => setTimeout(r, 30));
   check('设置页文案反映已同步', /已同步/.test(game._debug.netText()), game._debug.netText());
 
   store[CFG.SAVE_KEY] = JSON.stringify({
@@ -255,8 +259,11 @@ function tapD(x, y) {
   game._debug.setupLevel(0);
   S.elapsed = 30; S.steps = 5;
   game._debug.win();
+  /* 先等可能还在路上的上行落地：doCloudPush 有 pushing 互斥，
+   * 紧接着再 push 会被直接跳过，取到的 last 就是上一份（只有一套存档）——用例竞态。 */
+  await sleep(30);
   game._debug.cloudPush(true);
-  await sleep(10);
+  await sleep(30);
   check('通关后把存档推到云端', cloudLog.saved.length >= 1, 'pushes=' + cloudLog.saved.length);
   const last = cloudLog.saved[cloudLog.saved.length - 1];
   check('上行包含两套存档快照', !!last.sets[CFG.SAVE_KEY] && !!last.sets.tangram7_save_v1,

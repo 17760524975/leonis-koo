@@ -38,10 +38,11 @@ animation/ art-src/ audio-src/   动效演示、素材源文件
 ## 开发约定
 
 - `js/` 是唯一真源，`preview/js/` 与 `miniprogram/js/` 由 `node tools/sync.js` 同步，**不要手改副本**。
-- 改完必须跑：`node tools/sync.js && node tools/smoke.js && node tools/verify_v09.js`。
+- 改完必须跑：`node tools/sync.js && node tools/verify_v11.js && node tools/verify_audio.js && node tools/smoke.js`。
 - 关卡数据变更需跑 `verify_levels.js` / `verify_tangram7.js` / `verify_tangram7_geometry.js`。
-- 截图验收：`node tools/shot_v09.js`（headless Edge，对局页/榜单/设置）。
-- 音频链路：`tools/audio_probe.html` 用桩 AudioContext 验证 BGM 是否真的被调度、增益是否可听。
+- 截图验收：`node tools/shot_v11.js`（headless Edge，已摆块的提示/对局页/关卡页）。
+- 音频链路：`node tools/verify_audio.js`（wx 桩真跑 game.js）+ `tools/audio_probe.html`（真实浏览器跑预览端 `<audio>`）。
+- 换 BGM：把 mp3 丢进 `audio/`，按 `1_/2_/3_/4_` 前缀命名，跑 `cd tools/audiokit && node build.mjs`（90s/48kbps 单声道，5 首约 2.5MB）。
 
 ## 版本
 
@@ -58,6 +59,7 @@ animation/ art-src/ audio-src/   动效演示、素材源文件
 | v0.8 | 结算页改成"成品图案+分享+连胜进度"、四巧板 120→30 关、新增排行榜 |
 | v0.9 | 保留 T 字关、倒计时居中、工具区散放压缩、顶部广告位、云开发存档与真实榜单 |
 | v0.10 | 提示统一为三档阶梯（指位置/指板件/看全图）+ 看广告/巧币入口、星级改封顶本局、云环境 ID 落地 |
+| v0.11 | 提示改画在已上板件之上（摆歪时圈块+箭头）、BGM 换真人 mp3（每 5 关一首）、云开发权限指南 |
 
 ## 代码存档
 

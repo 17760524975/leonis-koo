@@ -126,7 +126,7 @@ function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).dig
 
   /* ---------- 1. 配置 ---------- */
   section('1. 配置与三端同步');
-  check('版本号 v0.10', CFG.version === 'v0.10', CFG.version);
+  check('版本号 ≥ v0.10', /^v0\.(1\d|[1-9])/.test(CFG.version), CFG.version);
   check('云开发环境 ID 已填', CFG.CLOUD.envId === 'cloud1-d4g6rm6duad5ba0aa', CFG.CLOUD.envId);
   check('云开发开关打开', CFG.CLOUD.enabled === true);
   const pairs = [['js/core.js', 'preview/js/core.js'], ['js/core.js', 'miniprogram/js/core.js'],

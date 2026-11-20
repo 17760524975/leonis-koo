@@ -184,12 +184,11 @@ const gained = S.save.coin - coinW;
 check('通关奖励巧币（3 星 ' + C.ECON.coinClear3Star + ' / 普通 ' + C.ECON.coinClear + '）',
   gained === C.ECON.coinClear3Star || gained === C.ECON.coinClear, '+' + gained);
 check('连胜 +1', S.save.streak === streakW + 1, streakW + '→' + S.save.streak);
-check('下一关 BGM 序号前进', S.save.bgmIdx === (bgmW + 1) % C.BGM.scenes.length,
-  bgmW + '→' + S.save.bgmIdx);
-/* v0.6 变更：通关不再是「立刻切下一关的曲子」，而是切到常驻的 win 欢庆曲，
- * 进下一关时才切回关卡曲（见 verify_v06 第 5 节）。 */
-check('通关切到 win 欢庆场景',
-  sceneLog[sceneLog.length - 1] === 'win', 'scenes=' + sceneLog.join(','));
+/* v0.11 变更：BGM 改为真人 mp3，按「关卡序号 / 每 5 关」取曲。
+ * 一关之内不换曲、结算页也不换——所以这里断言"通关没有触发任何切曲"。
+ * 换曲只发生在进入下一关（verify_v11 覆盖映射规则）。 */
+check('通关不切曲（一关一首，结算页沿用）', S.save.bgmIdx === bgmW && sceneLog.indexOf('win') < 0,
+  'bgmIdx=' + S.save.bgmIdx + ' scenes=' + sceneLog.join(','));
 
 console.log('\n==== 9. 每日任务 ====');
 S.save.taskPlays = C.ECON.taskPlays;

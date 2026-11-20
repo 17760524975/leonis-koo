@@ -5,160 +5,76 @@
 <title>audio-probe</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" href="data:,">
-<script>
-/* 音频探针：在真实平台层之前把 Web Audio 换成一个只记录、不出声的桩，
- * 用来验证「BGM 到底有没有被调度、音符增益是不是可听量级」。
- * 用法：msedge --headless=new --dump-dom --virtual-time-budget=6000 tools/audio_probe.html */
-(function () {
-  var notes = [], gains = [];
-  window.__probe = { notes: notes, gains: gains };
-
-  function Param(v) { this.value = v; this._peak = null; }
-  Param.prototype.setValueAtTime = function (x) { this.value = x; return this; };
-  Param.prototype.linearRampToValueAtTime = function (x) { this._peak = x; this.value = x; return this; };
-  Param.prototype.exponentialRampToValueAtTime = function (x) { return this; };
-  Param.prototype.setTargetAtTime = function (x) { this.value = x; return this; };
-  Param.prototype.cancelScheduledValues = function () { return this; };
-
-  function Node(kind) { this.kind = kind; this.gain = new Param(1); }
-  Node.prototype.connect = function (dst) { this._dst = dst; return dst; };
-  Node.prototype.disconnect = function () {};
-  Node.prototype.start = function () {};
-  Node.prototype.stop = function () {};
-
-  function AC() {
-    var self = this;
-    this.currentTime = 0;
-    this.sampleRate = 44100;
-    this.state = 'running';
-    this.destination = new Node('destination');
-    gains.push([]);
-    this.createGain = function () {
-      var g = new Node('gain');
-      gains[gains.length - 1].push(g);
-      return g;
-    };
-    this.createOscillator = function () {
-      var o = new Node('osc');
-      o.type = 'sine';
-      o.frequency = new Param(440);
-      o.connect = function (dst) {
-        notes.push({ freq: o.frequency.value, gain: (dst.gain && dst.gain._peak) || 0, t: self.currentTime });
-        return dst;
-      };
-      return o;
-    };
-    this.createBufferSource = function () {
-      var s = new Node('buf');
-      s.playbackRate = new Param(1);
-      s.buffer = null;
-      return s;
-    };
-    this.createBiquadFilter = function () { var f = new Node('filter'); f.frequency = new Param(1000); f.Q = new Param(1); f.type = 'lowpass'; return f; };
-    this.createBuffer = function (ch, len) { return { getChannelData: function () { return new Float32Array(len); }, length: len }; };
-    this.decodeAudioData = function (ab, ok, bad) { if (bad) bad(new Error('skip')); };
-    this.resume = function () {};
-    setInterval(function () { self.currentTime += 0.05; }, 50);
-  }
-  /* headless 下 rAF 只跑一帧就停，用 setTimeout 驱动并手动推进时间戳，
-   * 这样底纹动效（依赖 state.time）才能真的跑起来被采样到。 */
-  var __vt = 0;
-  window.requestAnimationFrame = function (cb) {
-    return setTimeout(function () { __vt += 16; cb(__vt); }, 16);
-  };
-  window.cancelAnimationFrame = function (id) { clearTimeout(id); };
-
-  window.AudioContext = AC;
-  window.webkitAudioContext = AC;
-
-  /* 记录 bgm 总线的最终音量：第 2 个创建的 Gain 就是 bgmGain（第 1 个是 master） */
-  window.__bgmGain = function () {
-    var all = [];
-    for (var i = 0; i < gains.length; i++) for (var j = 0; j < gains[i].length; j++) all.push(gains[i][j]);
-    return all.length >= 2 ? all[1].gain.value : null;
-  };
-})();
-</script>
 <style>
-  html,body{margin:0;height:100%;background:#F6E9D4;overflow:hidden}
-  #wrap{position:fixed;inset:0}
-  canvas{display:block;width:100%;height:100%}
-  #safe-probe{position:fixed;top:0;left:0;width:0;height:0;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
-  #out{position:fixed;left:0;top:0;font:12px monospace;color:#000;background:#fff;opacity:.01;pointer-events:none}
+  html, body { margin: 0; padding: 0; background: #F6E9D4; }
+  #game { width: 375px; height: 812px; display: block; }
+  #safe-probe { position: fixed; top: 0; left: 0; padding: 0; height: 0; }
+  #out { position: fixed; left: 0; top: 0; z-index: 99; background: #fff; font: 12px monospace; white-space: pre; }
 </style>
 </head>
 <body>
-<div id="wrap">
-  <canvas id="game"></canvas>
-  <div id="safe-probe" aria-hidden="true"></div>
-</div>
-<pre id="out">pending</pre>
+<!-- v0.11 音频探针：用真实预览端 game.js 验证 <audio> 换曲链路。
+     放在 tools/ 下，把 AUDIO.base 指到 ../preview/assets/audio/，不污染交付包。
+     用法：msedge --headless=new --dump-dom --autoplay-policy=no-user-gesture-required
+                --virtual-time-budget=6000 tools/audio_probe.html -->
+<canvas id="game"></canvas>
+<div id="safe-probe" aria-hidden="true"></div>
+<pre id="out">BOOT</pre>
+
 <script src="../preview/js/config.js"></script>
+<script>
+  // 探针在 tools/ 目录下运行，资源目录要指回 preview/
+  window.TANGRAM_CONFIG.AUDIO.base = '../preview/assets/audio/';
+</script>
 <script src="../preview/js/geom.js"></script>
 <script src="../preview/js/judge.js"></script>
 <script src="../preview/js/levels.js"></script>
 <script src="../preview/js/core.js"></script>
+<script src="../preview/js/cloud.js"></script>
+<script src="../preview/js/ad.js"></script>
 <script src="../preview/js/game.js"></script>
 <script>
 (function () {
-  /* 在整屏上铺 8×12 网格采样，隔 1.2s 再采一次，统计「变了的格子数」 */
-  function sample() {
-    var cv = document.getElementById('game');
-    var g = cv.getContext('2d');
-    var out = [];
-    for (var gy = 0; gy < 12; gy++) {
-      for (var gx = 0; gx < 8; gx++) {
-        try {
-          var d = g.getImageData(Math.floor(cv.width * (gx + 0.5) / 8), Math.floor(cv.height * (gy + 0.5) / 12), 1, 1).data;
-          out.push([d[0], d[1], d[2]]);
-        } catch (e) { out.push([-1, -1, -1]); }
-      }
-    }
-    return out;
+  var out = [];
+  function log(k, v) { out.push(k + '=' + v); }
+  function flush(tag) {
+    document.getElementById('out').textContent = tag + '\n' + out.join('\n');
+    document.title = tag;
   }
-  var sampleA = null;
-  function finish(tag) {
-    var p = window.__probe;
-    var peak = 0;
-    for (var i = 0; i < p.notes.length; i++) if (p.notes[i].gain > peak) peak = p.notes[i].gain;
-    var sampleB = sample();
-    var delta = 0, changed = 0;
-    if (sampleA) for (var k = 0; k < sampleA.length; k++) {
-      var dd = Math.abs(sampleA[k][0] - sampleB[k][0]) + Math.abs(sampleA[k][1] - sampleB[k][1]) + Math.abs(sampleA[k][2] - sampleB[k][2]);
-      delta += dd;
-      if (dd > 0) changed++;
+  setTimeout(function () {
+    try {
+      var A = window.__audio;
+      if (!A) { flush('NO_AUDIO'); return; }
+      A.unlock();
+      var s1 = A.bgmInfo();
+      log('home.src', s1 ? s1.src.split('/').pop() : 'null');
+      log('home.loop', s1 ? s1.loop : 'null');
+      log('home.paused', s1 ? s1.paused : 'null');
+      log('home.vol', s1 ? s1.volume.toFixed(2) : 'null');
+      A.setScene('lv2');
+      setTimeout(function () {
+        var s2 = A.bgmInfo();
+        log('lv2.src', s2 ? s2.src.split('/').pop() : 'null');
+        log('lv2.vol', s2 ? s2.volume.toFixed(2) : 'null');
+        A.duck(true);
+        setTimeout(function () {
+          log('duck.vol', A.bgmInfo().volume.toFixed(2));
+          A.duck(false);
+          A.setEnabled(true, false);
+          log('off.paused', A.bgmInfo().paused);
+          A.setEnabled(true, true);
+          setTimeout(function () {
+            log('on.paused', A.bgmInfo().paused);
+            log('on.src', A.bgmInfo().src.split('/').pop());
+            flush('DONE');
+          }, 200);
+        }, 420);
+      }, 420);
+    } catch (e) {
+      log('ERR', (e && e.message) || e);
+      flush('ERR');
     }
-    var res = {
-      tag: tag,
-      notes: p.notes.length,
-      peakNoteGain: +peak.toFixed(4),
-      bgmGain: window.__bgmGain(),
-      freqs: p.notes.slice(0, 6).map(function (n) { return +n.freq.toFixed(1); }),
-      fxPixelDelta: delta,
-      timeA: (window.__tA || null), timeB: (window.__game && window.__game.state ? +window.__game.state.time.toFixed(1) : null),
-      fxChangedCells: changed,
-      pixelA: sampleA.slice(0, 6),
-      pixelB: sampleB.slice(0, 6)
-    };
-    document.getElementById('out').textContent = 'PROBE ' + JSON.stringify(res);
-    document.title = 'PROBE ' + JSON.stringify(res);
-  }
-  var waited = 0;
-  var iv = setInterval(function () {
-    waited += 100;
-    if (window.__game) {
-      clearInterval(iv);
-      var cv = document.getElementById('game');
-      function fire(type) {
-        var ev = new PointerEvent(type, { clientX: 200, clientY: 400, pointerId: 1, isPrimary: true, bubbles: true });
-        cv.dispatchEvent(ev);
-      }
-      fire('pointerdown');
-      setTimeout(function () { fire('pointerup'); }, 60);
-      setTimeout(function () { sampleA = sample(); window.__tA = window.__game && window.__game.state ? +window.__game.state.time.toFixed(1) : null; }, 900);
-      setTimeout(function () { finish('home'); }, 2200);
-    } else if (waited > 5000) { clearInterval(iv); finish('no-game'); }
-  }, 100);
+  }, 600);
 })();
 </script>
 </body>

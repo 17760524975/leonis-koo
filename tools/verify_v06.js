@@ -113,24 +113,27 @@ check('微信工程名已改', pcfg.projectname === 'fangcun-qiaopin', pcfg.proj
 check('微信工程描述含新名', /方寸巧拼/.test(pcfg.description), pcfg.description);
 check('网页标题已改', /方寸巧拼/.test(fs.readFileSync(path.join(ROOT, 'preview/index.html'), 'utf8')));
 
-/* ---------- 2. BGM 链路 ---------- */
-section('2. BGM：场景与增益');
-check('BGM 有 win 场景', !!CFG.BGM.win, JSON.stringify(CFG.BGM.win));
-check('关卡轮换曲仍 3 首', CFG.BGM.scenes.length === 3, CFG.BGM.scenes.join(','));
-check('合成总线音量已校准', CFG.AUDIO.bgmVolume >= 0.8, 'bgmVolume=' + CFG.AUDIO.bgmVolume);
-check('压低后仍可听清', CFG.AUDIO.bgmDuckVolume >= 0.4, 'duck=' + CFG.AUDIO.bgmDuckVolume);
-const NG = CFG.AUDIO.bgmNote;
-const peak = NG.lead + NG.root;
-const db = 20 * Math.log10(peak * CFG.AUDIO.bgmVolume);
-check('单音峰值在可听区间', peak >= 0.10 && peak <= 0.50, `peak=${peak.toFixed(3)} (${db.toFixed(1)} dBFS)`);
-const oldDb = 20 * Math.log10((0.030 + 0.020) * 0.30);
-check('旧版确实明显偏小（对比值）', oldDb < -30, `v0.5 峰值 ${oldDb.toFixed(1)} dBFS`);
+/* ---------- 2. BGM 链路（v0.11 起改为真人 mp3，不再走合成） ---------- */
+section('2. BGM：真人 mp3 与音量');
+check('主页曲已配', /^bgm_.*\.mp3$/.test(CFG.AUDIO.bgm.home), CFG.AUDIO.bgm.home);
+check('关卡轮换曲 4 首（按文件名数字顺序）',
+  CFG.BGM.scenes.length === 4 && CFG.AUDIO.bgm.lv.length === 4, CFG.BGM.scenes.join(','));
+check('每 5 关换一首', CFG.BGM.levelsPerTrack === 5, 'levelsPerTrack=' + CFG.BGM.levelsPerTrack);
+check('满刻度 mp3 留了余量（0.4~0.7）',
+  CFG.AUDIO.bgmVolume >= 0.4 && CFG.AUDIO.bgmVolume <= 0.7, 'bgmVolume=' + CFG.AUDIO.bgmVolume);
+check('压低后仍可听清', CFG.AUDIO.bgmDuckVolume >= 0.12, 'duck=' + CFG.AUDIO.bgmDuckVolume);
+check('旧合成参数已移除', !CFG.AUDIO.bgmNote && CFG.AUDIO.useSynthBgm === undefined,
+  'bgmNote=' + JSON.stringify(CFG.AUDIO.bgmNote));
 
-for (const [file, cfgVar] of [['preview/js/game.js', 'C'], ['miniprogram/game.js', 'CONFIG']]) {
+for (const [file, re] of [
+  ['preview/js/game.js', /new Audio\(\)/],
+  ['miniprogram/game.js', /wx\.createInnerAudioContext\(\)/]
+]) {
   const t = fs.readFileSync(path.join(ROOT, file), 'utf8');
-  check(`${file} 有 win 旋律`, /win:\s*\{ bpm: 112/.test(t));
-  check(`${file} 增益走配置`, /BGM_NOTE\.(root|lead)/.test(t));
-  check(`${file} 回退路径限幅括号正确`, /\(\(bgmSrc \|\| bgm\w+\) && v >/.test(t));
+  check(`${file} 用元素/InnerAudio 播 mp3`, re.test(t));
+  check(`${file} 循环播放`, /\.loop\s*=\s*true/.test(t));
+  check(`${file} 换曲有淡入淡出`, /bgmFadeTo/.test(t));
+  check(`${file} 已删除合成 BGM`, !/BGM_DEF/.test(t) && !/bgmStartSeq/.test(t));
 }
 
 /* ---------- 3. 主页版式 ---------- */
@@ -192,19 +195,21 @@ const by = CFG.LAYOUT.BOARD.y + dp.y * (CFG.LAYOUT.BOARD.size / 1000);
 drag([bx, by], [bx + 2, by + 1], 3);
 for (let k = 0; k < 12; k++) step(16);
 check('触发通关', !!S.win);
-check('通关切到欢庆曲', log.scene[log.scene.length - 1] === 'win', log.scene.join('→'));
+/* v0.11：不再有单独的 win 场景——一关只播一首 mp3，结算页沿用本关那首，
+ * 换曲只发生在"进入下一关且跨过 5 关边界"。 */
+check('通关不切曲（一关一首）', log.scene[log.scene.length - 1] === 'lv1', log.scene.join('→'));
 check('通关音效有播放', log.play.indexOf('sfx_win') >= 0);
 for (let k = 0; k < 80; k++) step(16);
 check('结算面板已弹出', S.overlay === 'result', S.overlay);
-check('结算时仍停在欢庆曲（未被其他场景切走）',
-  log.scene[log.scene.length - 1] === 'win', log.scene.join('→'));
+check('结算时仍停在本关曲（未被切走）',
+  log.scene[log.scene.length - 1] === 'lv1', log.scene.join('→'));
 const sceneCount = log.scene.length;
 for (let k = 0; k < 200; k++) step(16);      // 停留 3.2s
 check('停留 3 秒内没有重新调度场景（曲子自然循环）', log.scene.length === sceneCount,
   `新增 ${log.scene.length - sceneCount} 次`);
 tap(375, CFG.WIN ? CFG.WIN.primaryY : 890);   // 下一关（v0.8 面板改版，坐标读配置）
 for (let k = 0; k < 8; k++) step(16);
-check('下一关切回关卡曲（bgmIdx 已前进）', /^lv[123]$/.test(log.scene[log.scene.length - 1]),
+check('下一关仍是本关曲（未跨 5 关边界不换）', log.scene[log.scene.length - 1] === 'lv1',
   log.scene.join('→'));
 
 /* ---------- 6. 持续小花流 ---------- */
