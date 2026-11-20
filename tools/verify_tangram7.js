@@ -218,7 +218,7 @@ const game = CORE(env);
 game.init();
 step(16);
 const S = game.state;
-check('首屏是主界面、默认四巧板', S.page === 'home' && S.setKey === 'tangram4' && game._debug.LEVELS.length === 120);
+check('首屏是主界面、默认四巧板', S.page === 'home' && S.setKey === 'tangram4' && game._debug.LEVELS.length === 30);
 
 // 托盘：7 块共用 scale=1，且落在带内、不压工具栏
 {

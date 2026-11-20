@@ -152,7 +152,19 @@
         S.overlay = 'result'; S.resT = 1000; S.starShown = 3;
         S.result = { stars: 3, time: 63.4, steps: 9 };
         S.win = { t: 2000 };
+        /* v0.8：连胜条截图 —— stk=N 指定连胜数，gain=N 指定刚拿到的里程碑奖励 */
+        var stk = +(q.match(/stk=(\d+)/) || [])[1];
+        S.save.streak = isNaN(stk) ? 3 : stk;
+        var gain = +(q.match(/gain=(\d+)/) || [])[1];
+        S.streakGain = isNaN(gain) ? 0 : gain;
       }
+    } else if (screen === 'rank') {
+      /* v0.8：排行榜浮层（tab=0 主线 / 1 连胜 / 2 好友） */
+      S.page = 'home'; S.fade = 1; S.pageT = 9999; S.overlay = 'rank'; S.rankT = 999;
+      S.save.starOf = { 1: 3, 2: 3, 3: 2, 4: 3, 5: 1, 6: 2, 7: 3, 8: 2, 9: 1, 10: 2, 11: 3, 12: 1 };
+      S.save.streak = 7;
+      var rtab = +(q.match(/tab=(\d+)/) || [])[1];
+      if (!isNaN(rtab)) S.rankTab = rtab;
     } else if (screen === 'settings') {
       S.page = 'home'; S.fade = 1; S.overlay = 'settings';
     } else if (screen === 'energy' || screen === 'tasks' || screen === 'invite' ||

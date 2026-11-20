@@ -90,8 +90,8 @@ function renderHomeClean() {
 
 /* ---------- 1. 版本 ---------- */
 section('1. 版本');
-/* v0.7.1 起版本号带补丁位（胶囊等长修正），断言放宽到 v0.7.x */
-check('版本号 v0.7.x', /^v0\.7(\.\d+)?$/.test(CFG.version), CFG.version);
+/* v0.7.1 起带补丁位，v0.8 起为大版本：只要求 ≥ v0.7（本脚本验的是 v0.7 的行为，不是版本字符串） */
+check('版本号 ≥ v0.7', /^v0\.(7|8|9)/.test(CFG.version), CFG.version);
 
 /* ---------- 2. HUD 胶囊 ---------- */
 section('2. HUD：上移 + 同字号 + 底框描边');

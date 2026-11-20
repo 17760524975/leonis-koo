@@ -173,6 +173,10 @@
       result: null,
       starShown: 0,
       resT: 0,
+      streakGain: 0,          // v0.8 本次通关拿到的连胜奖励巧币（0=没到里程碑）
+      rankTab: 0,             // v0.8 排行榜当前页签
+      rankBack: null,         // v0.8 打开排行榜前的浮层（结算页 → 'result'，主页 → null）
+      rankT: 0,               // v0.8 排行榜入场动画时钟
       bgmDuck: false,
       /* ---- v0.5：倒计时 / 经济 / 浮层 ---- */
       timeLimit: 0,         // 本关总时限（秒）
@@ -236,6 +240,14 @@
             s.streak = (typeof o.streak === 'number') ? o.streak : 0;
           }
         } catch (e) { /* 存档损坏 → 用默认值，静默降级 */ }
+      }
+      /* v0.8：四巧板 120 关 → 30 关。老存档的解锁进度与星星按新关卡数收敛，
+       * 否则会停在「已解锁 87 关」这种越界状态，关卡列表算出空章节。 */
+      var maxLv = LEVELS.length;
+      if (s.unlockedMax > maxLv) s.unlockedMax = maxLv;
+      if (s.unlockedMax < 1) s.unlockedMax = 1;
+      for (var k in s.starOf) {
+        if (!(Number(k) >= 1 && Number(k) <= maxLv)) delete s.starOf[k];
       }
       return s;
     }
@@ -485,7 +497,7 @@
       if (page !== 'play') { state.running = false; }
       /* v0.6：离开对局页就收掉通关鲜花/结算态，避免下次进来还在飘 */
       if (page !== 'play') { state.win = null; state.flower = null; }
-      // 进关卡页时跳到「当前进度所在章」，120 关不该每次都从第 1 章翻起
+      // 进关卡页时跳到「当前进度所在章」，关卡再多也不该每次都从第 1 章翻起
       if (page === 'levels') {
         var um = Math.max(1, Math.min(state.save.unlockedMax || 1, LEVELS.length));
         state.lvPage = Math.floor((um - 1) / CHAP_PER);
@@ -634,6 +646,12 @@
       var E2 = C.ECON;
       s.coin = Math.max(0, (s.coin || 0) + (stars >= 3 ? E2.coinClear3Star : E2.coinClear));
       s.streak = (s.streak || 0) + 1;
+      /* v0.8 连胜里程碑：每满 STREAK.step 关额外给巧币，结算页进度条走满即发 */
+      state.streakGain = 0;
+      if (s.streak % C.STREAK.step === 0) {
+        s.coin += C.STREAK.coin;
+        state.streakGain = C.STREAK.coin;
+      }
       s.bgmIdx = ((s.bgmIdx || 0) + 1) % C.BGM.scenes.length;
       persist();
       /* v0.6：通关立刻切到「欢庆」循环曲（不是 0.8s 的一次性 sting）。
@@ -1043,7 +1061,18 @@
         case 'entry_skin': state.overlay = 'skin'; break;
         case 'entry_invite': state.overlay = 'invite'; break;
         case 'entry_task': state.overlay = 'tasks'; break;
-        case 'entry_rank': toast('排行榜即将上线'); break;
+        case 'entry_rank': openRank(null); break;
+        /* v0.8：结算页分享成品 / 查看榜单 / 切页签 */
+        case 'share_pattern': sharePattern(); break;
+        case 'open_rank': openRank('result'); break;
+        case 'rank_t0': state.rankTab = 0; break;
+        case 'rank_t1': state.rankTab = 1; break;
+        case 'rank_t2': state.rankTab = 2; break;
+        case 'close_rank':
+          /* 从结算页进来的退回结算页，从主页进来的直接关掉（不能读 state.result：
+           * 通关后 result 一直留着，从主页进榜单会被误判成结算页） */
+          state.overlay = state.rankBack || null;
+          break;
         case 'online_claim': claimOnline(); break;
         case 'free_share': grantFreeEnergy(false); break;
         case 'free_ad': adStart('energy'); break;
@@ -1287,6 +1316,7 @@
         var n = Math.min(3, Math.floor(state.resT / C.ANIM.starStep));
         state.starShown = state.result ? Math.min(state.result.stars, n) : 0;
       }
+      if (state.overlay === 'rank') state.rankT += dt;
       if (state.hint && nowMs() > state.hint.until) state.hint = null;
       if (state.press) state.pressT += dt;
       /* v0.4 A2：长按翻转已彻底移除——翻转改为 pointerup 后判定的「双击」，
@@ -1554,6 +1584,9 @@
           ctx.fillStyle = COL.gold; ctx.fill();
           text(String(b.badge), bx, byy + 1, 15, COL.btnText, 'center', '700');
         }
+      } else if (b.variant === 'ghost') {
+        /* v0.8：结算页第三排「重玩 / 回列表」用的无底文字按钮，只保留点击热区 */
+        text(b.label, b.x, b.y + dy, b.size || 22, pressed ? COL.text : COL.textSub, 'center', '500');
       } else {
         // secondary
         rr(x, y, b.w, b.h, 20);
@@ -1563,7 +1596,10 @@
         ctx.fillStyle = COL.cardEdge;
         ctx.fillRect(x, y + b.h - C.LAYOUT.BTN_EDGE + (pressed ? 2 : 0), b.w, C.LAYOUT.BTN_EDGE * 2);
         ctx.restore();
-        text(b.label, b.x, b.y + dy, b.size || 30, b.disabled ? COL.textSub : COL.text, 'center', '500');
+        // v0.8：secondary 也支持左侧图标（分享 / 排行榜），文字随之右移，避免压图标
+        if (b.icon) drawIcon(b.icon, x + 46, b.y + dy, COL.text, 0.86);
+        text(b.label, b.x + (b.icon ? 20 : 0), b.y + dy, b.size || 30,
+          b.disabled ? COL.textSub : COL.text, 'center', '500');
       }
       ctx.restore();
     }
@@ -1954,6 +1990,7 @@
         taskList().some(function (it) { return it.done && !it.got; }));
 
       /* 在线奖励：图标 + 上方倒计时气泡（气泡不与任何标签同行） */
+      homeEntry('entry_rank', 'rank', '排行榜', rx, e0);   // v0.8：右列顶部空位
       homeEntry('online_claim', 'online', '在线奖励', rx, e0 + eg * 1.5);
       var ol = onlineLeft();
       var om = Math.floor(ol / 60), os2 = Math.floor(ol % 60);
@@ -2005,8 +2042,8 @@
       text('已获得 ' + totalStars() + '/' + (LEVELS.length * 3) + ' 星', C.DESIGN.w / 2, 1360, 24, COL.textSub, 'center');
     }
 
-    /* ---------------- 关卡选择（v0.2：120 关，按章分页） ----------------
-     * 120 关塞不进一屏，改成「章节胶囊 + 4×5 格」。
+    /* ---------------- 关卡选择（v0.2：按章分页） ----------------
+     * 一屏塞不下全部关卡，改成「章节胶囊 + 4×5 格」（v0.8 四巧板 30 关 = 3 章）。
      * 每章 20 关 = 4 列 × 5 行，正好一屏，不需要滚动（小游戏里滚动列表
      * 会跟拖拽手势打架，能不分页滚动就不滚）。 */
     /* v0.3 A1：CHAP_PER / CHAP_NAMES 全部从数据集读取（buildSet/useSet 已赋值），
@@ -2138,8 +2175,8 @@
       var bb = { id: 'back_levels', x: 70, y: by, w: 76, h: 76, variant: 'tool', icon: 'back' };
       addHit(bb.x, bb.y, bb.w, bb.h, 'back_levels');
       drawButton(bb);
-      // 关卡名可以为空（120 关里只有少数形状真的像某个物件），空名只显示关号。
-      // 名字过长会压住右侧计时器（第 120 关实测溢出），量一下宽度，放不下就只留关号。
+      // 关卡名可以为空（只有少数形状真的像某个物件），空名只显示关号。
+      // 名字过长会压住右侧计时器（长关名实测溢出），量一下宽度，放不下就只留关号。
       var head = '第 ' + (state.levelIdx + 1) + ' 关';
       var full = lv.name ? head + ' · ' + lv.name : head;
       var titleTxt = full;
@@ -2583,21 +2620,152 @@
       cardBox(cx - w / 2, cy - h / 2, w, h, r);
     }
 
+    /* v0.8：把某关的成品按解算结果画成彩色图案（等比缩放进 maxSide 方框）
+     * 结算页不再只报「拼好了」，而是把玩家刚拼出的形状原样展示出来。 */
+    function drawSolved(lv, cx, cy, maxSide, k) {
+      var polys = [], i, j, minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+      for (i = 0; i < lv.solution.length; i++) {
+        var st = lv.solution[i];
+        var wp = G.toWorld(LOCAL[st.id], st);
+        polys.push({ id: st.id, pts: wp });
+        for (j = 0; j < wp.length; j++) {
+          if (wp[j][0] < minX) minX = wp[j][0];
+          if (wp[j][0] > maxX) maxX = wp[j][0];
+          if (wp[j][1] < minY) minY = wp[j][1];
+          if (wp[j][1] > maxY) maxY = wp[j][1];
+        }
+      }
+      var bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
+      var s = maxSide / Math.max(bw, bh) * (k || 1);
+      var ox = cx - bw * s / 2 - minX * s, oy = cy - bh * s / 2 - minY * s;
+      for (i = 0; i < polys.length; i++) {
+        var pc = (DS.pieces && DS.pieces[polys[i].id]) || {};
+        ctx.beginPath();
+        for (j = 0; j < polys[i].pts.length; j++) {
+          var qx = ox + polys[i].pts[j][0] * s, qy = oy + polys[i].pts[j][1] * s;
+          if (j === 0) ctx.moveTo(qx, qy); else ctx.lineTo(qx, qy);
+        }
+        ctx.closePath();
+        ctx.save();
+        shadow(10, 3, 'rgba(44,58,75,0.18)');
+        ctx.fillStyle = pc.color || COL.gold;
+        ctx.fill();
+        noShadow();
+        ctx.restore();
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        ctx.stroke();
+      }
+      return { s: s, w: bw * s, h: bh * s };
+    }
+
+    /* 连胜条上的小三件：奖杯 / 宝箱 */
+    function drawTrophy(cx, cy, k) {
+      ctx.save();
+      ctx.translate(cx, cy); ctx.scale(k, k);
+      ctx.lineWidth = 2; ctx.strokeStyle = '#D98A00'; ctx.fillStyle = '#FFC53D';
+      // 杯身
+      ctx.beginPath();
+      ctx.moveTo(-14, -16); ctx.lineTo(14, -16);
+      ctx.quadraticCurveTo(14, 4, 0, 7);
+      ctx.quadraticCurveTo(-14, 4, -14, -16);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      // 双耳
+      ctx.beginPath(); ctx.arc(-15, -8, 6, Math.PI * 0.4, Math.PI * 1.55); ctx.stroke();
+      ctx.beginPath(); ctx.arc(15, -8, 6, Math.PI * 1.45, Math.PI * 0.6); ctx.stroke();
+      // 柱与底座
+      ctx.beginPath(); ctx.moveTo(0, 7); ctx.lineTo(0, 12); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-9, 15); ctx.lineTo(9, 15); ctx.stroke();
+      ctx.restore();
+    }
+    function drawChest(cx, cy, k, lit) {
+      ctx.save();
+      ctx.translate(cx, cy); ctx.scale(k, k);
+      ctx.lineWidth = 2.4; ctx.strokeStyle = '#B4690E';
+      // 箱体
+      rr(-22, -8, 44, 26, 6);
+      ctx.fillStyle = '#FF9F1C'; ctx.fill(); ctx.stroke();
+      // 箱盖
+      rr(-22, -20, 44, 14, 6);
+      ctx.fillStyle = '#FFC53D'; ctx.fill(); ctx.stroke();
+      // 锁扣
+      rr(-6, -8, 12, 12, 3);
+      ctx.fillStyle = lit ? '#FFF3D0' : '#FFE2A6'; ctx.fill(); ctx.stroke();
+      ctx.restore();
+    }
+
+    /* 连胜进度：本轮第 n/step 关，进度条走满即开箱 */
+    function drawStreakBar(y, streak) {
+      var W = C.WIN, ST = C.STREAK;
+      var n = ((streak - 1) % ST.step) + 1;
+      var x0 = 154, x1 = 588, bh = 38, by = y - bh / 2;
+      // 奖杯 + 文字
+      drawTrophy(W.streakX0 + 8, y - 8, 1.15);
+      text('连胜', W.streakX0 + 8, y + 26, 17, '#B4690E', 'center', '700');
+      // 槽
+      rr(x0, by, x1 - x0, bh, bh / 2);
+      ctx.fillStyle = 'rgba(214,205,192,0.55)'; ctx.fill();
+      // 进度
+      var pw = (x1 - x0) * n / ST.step;
+      if (pw > bh) {
+        ctx.save();
+        rr(x0, by, pw, bh, bh / 2);
+        ctx.clip();
+        var g = ctx.createLinearGradient(x0, 0, x1, 0);
+        g.addColorStop(0, '#FFD24A');
+        g.addColorStop(1, '#FFB01F');
+        ctx.fillStyle = g;
+        ctx.fillRect(x0, by, pw, bh);
+        ctx.restore();
+      }
+      // 数值（本轮进度居中；刚到里程碑时在条内右端补一条 +60，不往卡片边缘外挤）
+      text(n + '/' + ST.step, (x0 + x1) / 2, y + 1, 22, '#8A5A1A', 'center', '700');
+      if (state.streakGain > 0) {
+        text('+' + state.streakGain, x1 - 26, y + 1, 20, '#8A5A1A', 'right', '700');
+      }
+      // 宝箱
+      drawChest(W.streakX1, y, 1, n >= ST.step);
+    }
+
     function renderResult() {
+      var W = C.WIN;
       ctx.fillStyle = COL.mask;
       ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
       var appear = Math.min(1, state.resT / C.ANIM.panelFade);
       var e = G.easeOutCubic(appear);
       ctx.save();
       ctx.globalAlpha = e;
-      var cy = 760 + (1 - e) * 24;
-      drawCard(C.DESIGN.w / 2, cy, 600, 700, 32);
+      var cy = W.cy + (1 - e) * 24;
+      var dy = cy - W.cy;
+      drawCard(C.DESIGN.w / 2, cy, W.cardW, W.cardH, 34);
       var lv = LEVELS[state.levelIdx];
       var last = state.levelIdx === LEVELS.length - 1;
-      /* v0.3 A7：结算文案从数据集取，修掉 Phase 0 的「四巧板完成/七巧板开启」串词 */
-      text(last ? (COMPLETE_TITLE || '四巧板全部完成') : '拼好了！', C.DESIGN.w / 2, cy - 250, 44, COL.text, 'center', '700');
-      text(last ? (COMPLETE_SUB || '七巧板即将开启') : (lv.name || '拼得不错'), C.DESIGN.w / 2, cy - 196, 26, COL.textSub, 'center');
-      // 星级
+
+      /* ---- 顶部：连胜进度（参考用户截图：奖杯 + 进度条 + 宝箱） ---- */
+      drawStreakBar(W.streakY + dy, state.save.streak || 0);
+
+      /* ---- 标题（v0.8 缩小，让位给成品图案） ---- */
+      text(last ? (COMPLETE_TITLE || '四巧板全部完成') : '拼好了！',
+        C.DESIGN.w / 2, W.titleY + dy, W.titleSize, COL.text, 'center', '700');
+      /* 有关名才画副标题：四巧板 30 关里 28 关无名称，占位文案会顶到图案框 */
+      var subTxt = last ? (COMPLETE_SUB || '七巧板即将开启') : lv.name;
+      if (subTxt) text(subTxt, C.DESIGN.w / 2, W.nameY + dy, W.nameSize, COL.textSub, 'center');
+
+      /* ---- 成品图案：白底框 + 四块板原色，进场缩放弹出 ---- */
+      var boxW = W.shapeBox, boxH = W.shapeBox, bx = C.DESIGN.w / 2, byc = W.shapeY + dy;
+      ctx.save();
+      shadow(16, 6, 'rgba(44,58,75,0.10)');
+      rr(bx - boxW / 2, byc - boxH / 2, boxW, boxH, 26);
+      ctx.fillStyle = 'rgba(255,255,255,0.94)'; ctx.fill();
+      noShadow(); ctx.restore();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255,185,61,0.55)';
+      rr(bx - boxW / 2, byc - boxH / 2, boxW, boxH, 26);
+      ctx.stroke();
+      var pop = G.easeOutBack(Math.min(1, Math.max(0, (state.resT - 140) / 460)));
+      drawSolved(lv, bx, byc, W.shapeMax, 0.84 + 0.16 * pop);
+
+      /* ---- 星级（位置让给图案，半径 40→24） ---- */
       for (var i = 0; i < 3; i++) {
         var on = state.result && i < state.result.stars;
         var shown = state.starShown > i;
@@ -2607,31 +2775,165 @@
           sc = 0.6 + 0.55 * G.easeOutBack(st);
           if (st >= 1) sc = 1;
         }
-        drawStar(C.DESIGN.w / 2 - 110 + i * 110, cy - 110, 40, on && shown, on ? sc : 1);
+        drawStar(C.DESIGN.w / 2 - W.starGap + i * W.starGap, W.starY + dy, W.starR, on && shown, on ? sc : 1);
       }
+
       // 数据
       var sec = Math.floor(state.result ? state.result.time : 0);
       var mm = Math.floor(sec / 60), ss = sec % 60;
-      text('用时', C.DESIGN.w / 2 - 150, cy - 20, 26, COL.textSub, 'center');
-      text((mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss, C.DESIGN.w / 2 - 150, cy + 26, 36, COL.text, 'center', '600');
-      text('步数', C.DESIGN.w / 2 + 150, cy - 20, 26, COL.textSub, 'center');
-      text(String(state.result ? state.result.steps : 0), C.DESIGN.w / 2 + 150, cy + 26, 36, COL.text, 'center', '600');
+      text('用时', C.DESIGN.w / 2 - 120, W.statLabelY + dy, 22, COL.textSub, 'center');
+      text((mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss,
+        C.DESIGN.w / 2 - 120, W.statValueY + dy, 30, COL.text, 'center', '600');
+      text('步数', C.DESIGN.w / 2 + 120, W.statLabelY + dy, 22, COL.textSub, 'center');
+      text(String(state.result ? state.result.steps : 0),
+        C.DESIGN.w / 2 + 120, W.statValueY + dy, 30, COL.text, 'center', '600');
 
-      var b1 = { id: last ? 'to_list' : 'next', x: C.DESIGN.w / 2, y: cy + 130, w: 380, h: 100, label: last ? '回列表' : '下一关', variant: 'primary', size: 32 };
+      var b1 = { id: last ? 'to_list' : 'next', x: C.DESIGN.w / 2, y: W.primaryY + dy,
+        w: 360, h: W.primaryH, label: last ? '回列表' : '下一关', variant: 'primary', size: 30 };
       addHit(b1.x, b1.y, b1.w, b1.h, b1.id);
       drawButton(b1);
-      var b2 = { id: 'replay', x: C.DESIGN.w / 2 - (last ? 0 : 130), y: cy + 250, w: 240, h: 84, label: '重玩', variant: 'secondary', size: 30 };
-      addHit(b2.x, b2.y, b2.w, b2.h, 'replay');
+
+      // 第二排：分享图案 / 排行榜
+      var b2 = { id: 'share_pattern', x: C.DESIGN.w / 2 - 118, y: W.row2Y + dy,
+        w: 216, h: W.row2H, label: '分享图案', variant: 'secondary', size: 24, icon: 'share' };
+      addHit(b2.x, b2.y, b2.w, b2.h, 'share_pattern');
       drawButton(b2);
-      // 最后一关时主按钮已是「回列表」，不再重复画第二个回列表
+      var b3 = { id: 'open_rank', x: C.DESIGN.w / 2 + 118, y: W.row2Y + dy,
+        w: 216, h: W.row2H, label: '排行榜', variant: 'secondary', size: 24, icon: 'rank' };
+      addHit(b3.x, b3.y, b3.w, b3.h, 'open_rank');
+      drawButton(b3);
+
+      // 第三排：重玩 / 回列表（小号文字按钮）
+      var b4 = { id: 'replay', x: last ? C.DESIGN.w / 2 : C.DESIGN.w / 2 - 108,
+        y: W.row3Y + dy, w: 200, h: W.row3H, label: '重玩', variant: 'ghost', size: 22 };
+      addHit(b4.x, b4.y, b4.w, b4.h, 'replay');
+      drawButton(b4);
       if (!last) {
-        var b3 = { id: 'to_list', x: C.DESIGN.w / 2 + 130, y: cy + 250, w: 240, h: 84, label: '回列表', variant: 'secondary', size: 30 };
-        addHit(b3.x, b3.y, b3.w, b3.h, 'to_list');
-        drawButton(b3);
+        var b5 = { id: 'to_list', x: C.DESIGN.w / 2 + 108, y: W.row3Y + dy,
+          w: 200, h: W.row3H, label: '回列表', variant: 'ghost', size: 22 };
+        addHit(b5.x, b5.y, b5.w, b5.h, 'to_list');
+        drawButton(b5);
       }
-      // 右下角预留按钮位（v0.3 放分享），本版只留空间不放按钮
       ctx.restore();
     }
+
+    /* ---------------- v0.8 排行榜 ---------------- */
+    /* 三个榜都只有「自己」是真实数据，其余是配置里的示例榜：
+     * 主线榜/连胜榜=自己的通关数与连胜；好友榜需开放数据域取真实好友数据。 */
+    function rankValue(tab) {
+      var s = state.save;
+      if (tab === 1) return s.streak || 0;
+      var n = 0;
+      for (var k in s.starOf) if ((s.starOf[k] || 0) > 0) n++;
+      return n;
+    }
+    function rankData() {
+      var tab = state.rankTab;
+      var list = (C.RANK.mock[tab] || []).slice();
+      var mine = { n: '我', v: rankValue(tab), me: true, c: COL.gold };
+      var rank = 1;
+      for (var i = 0; i < list.length; i++) if (list[i].v > mine.v) rank++;
+      var all = list.concat([mine]);
+      all.sort(function (a, b) { return b.v - a.v || (a.me ? 1 : -1); });
+      var top = all.slice(0, 7);
+      var inTop = false;
+      for (var j = 0; j < top.length; j++) if (top[j].me) inTop = true;
+      return { top: top, mine: mine, rank: rank, inTop: inTop };
+    }
+
+    function rankRow(item, y, idx, highlight) {
+      var x0 = 92, w = 566, h = 74;
+      ctx.save();
+      if (highlight) shadow(10, 4, 'rgba(255,120,80,0.18)');
+      rr(x0, y - h / 2, w, h, 16);
+      ctx.fillStyle = highlight ? '#FDE7DF' : 'rgba(246,243,238,0.95)';
+      ctx.fill();
+      noShadow();
+      ctx.restore();
+      // 名次
+      if (idx < 3 && !highlight) {
+        var medal = ['#F5B73D', '#C9D3DD', '#E0A276'][idx];
+        ctx.beginPath(); ctx.arc(x0 + 42, y, 23, 0, Math.PI * 2);
+        ctx.fillStyle = medal; ctx.fill();
+        text(String(idx + 1), x0 + 42, y + 1, 24, '#FFFFFF', 'center', '700');
+      } else {
+        /* 自己那行显示真实名次（榜尾固定条）；名次过百按「99+」收敛宽度 */
+        var rk = idx + 1;
+        text(String(rk > 99 ? '99+' : rk), x0 + 42, y + 1, rk > 99 ? 20 : 24,
+          highlight ? '#E2624A' : COL.textSub, 'center', '700');
+      }
+      // 头像：首字 + 底色（无图资源，避免包体与 404）
+      ctx.beginPath(); ctx.arc(x0 + 96, y, 26, 0, Math.PI * 2);
+      ctx.fillStyle = item.c || COL.gold; ctx.fill();
+      text((item.n || '?').slice(0, 1), x0 + 96, y + 2, 26, '#FFFFFF', 'center', '700');
+      // 名字
+      text(item.n, x0 + 136, y + 1, 24, COL.text, 'left', highlight ? '700' : '500');
+      // 数值
+      var unit = C.RANK.unit[state.rankTab] || '关';
+      text(item.v + ' ' + unit, x0 + w - 28, y + 1, 26, highlight ? '#E2624A' : COL.text, 'right', '700');
+    }
+
+    function renderRank() {
+      var R = C.RANK;
+      var W = 660, H = 900, cy = 812;
+      ctx.fillStyle = COL.mask;
+      ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
+      var e = G.easeOutCubic(Math.min(1, state.rankT / 180));
+      ctx.save();
+      ctx.globalAlpha = e;
+      var y0 = cy + (1 - e) * 20;
+      drawCard(C.DESIGN.w / 2, y0, W, H, 34);
+      text('排行榜', C.DESIGN.w / 2, 425 + (y0 - cy), 40, COL.text, 'center', '700');
+
+      // 页签
+      var tw = 176, gap = 10, tx0 = C.DESIGN.w / 2 - (tw * 3 + gap * 2) / 2;
+      for (var i = 0; i < 3; i++) {
+        var tx = tx0 + i * (tw + gap) + tw / 2, ty = 495 + (y0 - cy);
+        rr(tx - tw / 2, ty - 27, tw, 54, 27);
+        ctx.fillStyle = state.rankTab === i ? COL.gold : 'rgba(240,235,226,0.95)';
+        ctx.fill();
+        text(R.tabs[i], tx, ty + 1, 24, state.rankTab === i ? '#7A4A00' : COL.textSub, 'center', '700');
+        addHit(tx, ty, tw + 12, 80, 'rank_t' + i);
+      }
+
+      // 榜单
+      var d = rankData();
+      var ry = 566 + (y0 - cy), step = 84;
+      for (var j = 0; j < d.top.length; j++) rankRow(d.top[j], ry + j * step, j, false);
+      // 自己不在前 7 → 底部固定一条「我的排名」
+      if (!d.inTop) {
+        rankRow({ n: '我', v: d.mine.v, me: true, c: COL.gold }, ry + d.top.length * step + 6, d.rank - 1, true);
+      }
+      text('示例榜单 · 真实好友榜需开启开放数据域', C.DESIGN.w / 2, 1222 + (y0 - cy), 18, COL.textSub, 'center');
+
+      // 关闭（卡片外的圆形按钮，参考图同位置）
+      ctx.beginPath(); ctx.arc(C.DESIGN.w / 2, 1300, 38, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.fill();
+      drawIcon('close', C.DESIGN.w / 2, 1300, COL.text, 1.0);
+      addHit(C.DESIGN.w / 2, 1300, 100, 100, 'close_rank');
+      ctx.restore();
+    }
+
+    /* 打开排行榜：记住来源，关闭时原路返回 */
+    function openRank(from) {
+      state.rankBack = from || null;
+      state.overlay = 'rank';
+      state.rankT = 0;
+    }
+
+    /* ---------------- v0.8 分享成品图案 ---------------- */
+    function sharePattern() {
+      var lv = LEVELS[state.levelIdx];
+      var name = lv.name || ('第 ' + (state.levelIdx + 1) + ' 关');
+      var stars = state.result ? state.result.stars : 0;
+      var starTxt = stars ? ' ' + new Array(stars + 1).join('★') : '';
+      var title = '我在方寸巧拼拼出了「' + name + '」' + starTxt + '，来挑战一下？';
+      if (env.share) {
+        try { env.share({ title: title, text: title, capture: true }); } catch (err) { /* 静默 */ }
+      }
+      toast('已唤起分享');
+    }
+
 
     function renderSettings() {
       ctx.fillStyle = COL.mask;
@@ -2892,6 +3194,7 @@
       // 浮层打开时清空页面热区，避免点穿到下层
       if (state.overlay) hits = [];
       if (state.overlay === 'result') renderResult();
+      else if (state.overlay === 'rank') renderRank();
       else if (state.overlay === 'settings') renderSettings();
       else if (state.overlay === 'fail') renderFail();
       else if (state.overlay === 'energy') renderEnergy();
@@ -2988,7 +3291,7 @@
       init: init,
       resize: resize,
       state: state,
-      _debug: { judgeNow: judgeNow, setupLevel: setupLevel, useSet: useSet,
+      _debug: { judgeNow: judgeNow, setupLevel: setupLevel, useSet: useSet, win: win,
         handleAt: handleDesign,   // v0.3.2 B1：测试用，返回手柄圆心的设计坐标
         /* v0.5：经济/体力/倒计时/皮肤的工具函数，供 verify_v05 直接驱动 */
         fireBtn: fireBtn, syncEnergy: syncEnergy, claimOnline: claimOnline,

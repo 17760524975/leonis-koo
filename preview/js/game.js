@@ -503,10 +503,13 @@
       audio: audio,
       vibrate: vibrate,
       images: images,
-      share: function () {                       // v0.5 邀请有礼：系统分享 / 复制链接
+      share: function (opt) {                     // v0.5 邀请有礼 / v0.8 分享成品图案
+        opt = opt || {};
+        var text = opt.text || '一起来拼图！';
+        var url = location.href;
         try {
-          if (navigator.share) navigator.share({ title: '方寸巧拼', text: '一起来拼图！', url: location.href });
-          else if (navigator.clipboard) navigator.clipboard.writeText(location.href);
+          if (navigator.share) navigator.share({ title: opt.title || '方寸巧拼', text: text, url: url });
+          else if (navigator.clipboard) navigator.clipboard.writeText(text + ' ' + url);
         } catch (e) {}
       },
       onHide: function (cb) {

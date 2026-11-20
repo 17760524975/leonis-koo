@@ -476,8 +476,28 @@ function boot() {
     audio: audio,
     vibrate: vibrate,
     images: images,
-    share: function () {                       // v0.5 邀请有礼：微信转发
-      try { if (wx.shareAppMessage) wx.shareAppMessage({ title: '方寸巧拼 · 一起来拼图！' }); } catch (e) {}
+    share: function (opt) {                   // v0.5 邀请有礼 / v0.8 分享成品图案
+      opt = opt || {};
+      var title = opt.title || '方寸巧拼 · 一起来拼图！';
+      var doShare = function (imageUrl) {
+        try {
+          wx.shareAppMessage(imageUrl ? { title: title, imageUrl: imageUrl } : { title: title });
+        } catch (e) {}
+      };
+      /* v0.8：分享成品图案时把当前画面（结算页）截成图片一起转发。
+       * toTempFilePath 是画布实例方法；老基础库没有就退回纯文字分享。 */
+      if (opt.capture && canvas && canvas.toTempFilePath) {
+        try {
+          canvas.toTempFilePath({
+            x: 0, y: 0, width: canvas.width, height: canvas.height,
+            destWidth: 500, destHeight: Math.round(500 * canvas.height / Math.max(1, canvas.width)),
+            success: function (res) { doShare(res.tempFilePath); },
+            fail: function () { doShare(null); }
+          });
+          return;
+        } catch (e) { /* 落到纯文字 */ }
+      }
+      doShare(null);
     },
     onHide: function (cb) { wx.onHide(function () { audio.setVisible(false); cb(); }); },
     onShow: function (cb) { wx.onShow(function () { audio.setVisible(true); cb(); }); }

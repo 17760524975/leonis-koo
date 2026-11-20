@@ -228,8 +228,8 @@ check('结算时 BGM 压低', duckLog.length > 0 && duckLog[duckLog.length - 1] 
 check('星级已计算', S.result && S.result.stars >= 1, JSON.stringify(S.result));
 check('存档有星级', !!S.save.starOf['1'], JSON.stringify(S.save.starOf));
 
-// 下一关
-tap(375, 890);
+// 下一关（v0.8 结算面板改版：主按钮位置从 config.WIN 读，别再写死）
+tap(375, CFG.WIN.primaryY);
 step(16);
 check('进入第 2 关', S.levelIdx === 1 && S.page === 'play', 'idx=' + S.levelIdx);
 

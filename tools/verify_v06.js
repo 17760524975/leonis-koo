@@ -202,7 +202,7 @@ const sceneCount = log.scene.length;
 for (let k = 0; k < 200; k++) step(16);      // 停留 3.2s
 check('停留 3 秒内没有重新调度场景（曲子自然循环）', log.scene.length === sceneCount,
   `新增 ${log.scene.length - sceneCount} 次`);
-tap(375, 890);                                // 下一关
+tap(375, CFG.WIN ? CFG.WIN.primaryY : 890);   // 下一关（v0.8 面板改版，坐标读配置）
 for (let k = 0; k < 8; k++) step(16);
 check('下一关切回关卡曲（bgmIdx 已前进）', /^lv[123]$/.test(log.scene[log.scene.length - 1]),
   log.scene.join('→'));
