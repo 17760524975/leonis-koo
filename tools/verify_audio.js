@@ -72,9 +72,10 @@ function mkParam(v) {
     cancelScheduledValues() { return this; }
   };
 }
+let AC_REF = null;
 function mkAC() {
-  return {
-    currentTime: 0, sampleRate: 44100, state: 'running', destination: {},
+  const ac = {
+    currentTime: 0, sampleRate: 44100, state: 'running', destination: {}, resumeCalls: 0,
     createGain: () => ({ gain: mkParam(1), connect() {}, disconnect() {} }),
     createOscillator: () => {
       const o = {
@@ -97,8 +98,11 @@ function mkAC() {
       attack: mkParam(0.003), release: mkParam(0.25), connect() {}, disconnect() {}
     }),
     decodeAudioData: () => new Promise(() => {}),
-    resume() {}, suspend() {}
+    resume() { ac.state = 'running'; ac.resumeCalls++; },
+    suspend() { ac.state = 'suspended'; }
   };
+  AC_REF = ac;
+  return ac;
 }
 
 const wx = {
@@ -111,7 +115,7 @@ const wx = {
   getStorageSync: k => (k in storage ? storage[k] : ''),
   setStorageSync: (k, v) => { storage[k] = v; },
   createInnerAudioContext: mkPlayer,
-  createWebAudioContext: mkAC,
+  createWebAudioContext: () => mkAC(),
   createImage: () => {
     const img = { src: '', width: 0, height: 0, onload: null, onerror: null };
     Object.defineProperty(img, 'src', {
@@ -293,6 +297,43 @@ setImmediate(async function () {
   check('预览：bgm 切曲不再 currentTime = 0', !/currentTime = 0/.test(pvBgm));
   check('预览：有 canplay 补播 + 看门狗', /startEl\(/.test(pvSrc) && /armWatch\(/.test(pvSrc));
   check('两端都关掉了在飞的补播（关音乐时）', /_watch/.test(miniSrc) && /_watch/.test(pvSrc));
+
+  console.log('\n== 10. v0.14.2：WebAudio 被挂起后回主页要自己醒过来 ==');
+  /* 真机现象：第一次主页有声 → 进关卡（原生 mp3 抢了音频会话）→ 回主页静音。
+   * 系统把 wx.createWebAudioContext 置为 suspended，currentTime 冻结、音符全不发；
+   * mp3 走 InnerAudioContext，所以关卡那边照常有声。 */
+  audio.setScene('lv1');
+  await sleep(60);
+  AC_REF.state = 'suspended';                 // 模拟平台挂起
+  const resumeBefore = AC_REF.resumeCalls;
+  const oscBefore = oscillators.length;
+  audio.setScene('home');
+  await sleep(120);
+  check('挂起后回主页会自动 resume', AC_REF.state === 'running' && audio.bgmInfo().ac === 'running',
+    'state=' + AC_REF.state);
+  check('resume 只叫一次（不刷）', AC_REF.resumeCalls - resumeBefore === 1,
+    'resumeCalls +' + (AC_REF.resumeCalls - resumeBefore));
+  check('醒来后主页曲重新排上', oscillators.length > oscBefore, 'osc=' + (oscillators.length - oscBefore));
+
+  /* 主页正在放时被挂起：tick 里要能自己救回来，而不是一直空转 */
+  AC_REF.state = 'suspended';
+  const resume2 = AC_REF.resumeCalls;
+  await sleep(500);                            // 等一次 400ms 的 tick
+  check('主页播放中被挂起，tick 也能叫醒', AC_REF.state === 'running' || AC_REF.resumeCalls > resume2,
+    'state=' + AC_REF.state + ' resume+=' + (AC_REF.resumeCalls - resume2));
+
+  console.log('\n== 11. 闸门写入要能盖住「在飞的淡出」 ==');
+  audio.setScene('lv1');                       // 触发 150ms 淡出
+  await sleep(20);
+  audio.setScene('home');                      // 淡出还没走完就回主页
+  await sleep(40);
+  check('淡出未完成时回主页，闸门仍到 1', audio.bgmInfo().gate > 0.9,
+    'gate=' + audio.bgmInfo().gate);
+  const gmSrc = fs.readFileSync(path.join(ROOT, 'miniprogram/game.js'), 'utf8');
+  check('闸门写入用 cancel(0)+setValueAtTime，不只写 .value', /function gateTo/.test(gmSrc));
+
+  const pvHome = fs.readFileSync(path.join(ROOT, 'preview/js/game.js'), 'utf8');
+  check('预览端 homeStart 前也先 resumeAudio', /function homeStart\(\) \{[\s\S]{0,160}resumeAudio\(\)/.test(pvHome));
 
   console.log('\n' + (fail === 0 ? '音频验收全部通过' : `!! ${fail} 项未通过`));
   process.exit(fail === 0 ? 0 : 1);

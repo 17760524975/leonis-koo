@@ -201,6 +201,35 @@ function loadBuffers() {
  * 闸门归零 + 硬停振荡器，才能做到进关卡时主页曲当场消失。 */
 var HOME_OSC = [], homeGate = null, homeLead = null, homeSeq = null;
 
+/* v0.14.2：WebAudio 会被系统挂起 —— 回主页没声音的根因
+ *
+ * 现象：第一次进主页有音乐 → 进关卡（InnerAudioContext 播 mp3）→ 回主页静音。
+ * 原因：小游戏在原生音频起播/音频会话切换时会把 wx.createWebAudioContext 置为
+ * suspended，此时 currentTime 冻结、排进去的音符一个都不发。mp3 走的是另一套
+ * （InnerAudioContext），所以关卡那边照常有声——这就是"只有主页没音乐"的原因。
+ * 我们的代码从来没主动 suspend 过，所以只需要在"要出声"的时机确保它在 running。 */
+function ensureAC() {
+  if (!AC) return false;
+  try {
+    if (AC.state === 'suspended' && AC.resume) AC.resume();
+  } catch (e) {}
+  return true;
+}
+function acRunning() { return !!(AC && AC.state === 'running'); }
+
+/* 闸门写入：cancelScheduledValues(0) 连历史一起清（包括在飞的淡出 ramp），
+ * 再补一条显式 setValueAtTime —— 只写 .value 在某些实现里会被旧 ramp 覆盖，
+ * 结果就是"闸门永远停在 0"，听起来同样是没声音。 */
+function gateTo(v) {
+  if (!homeGate || !AC) return;
+  var g = homeGate.gain;
+  try {
+    if (g.cancelScheduledValues) g.cancelScheduledValues(0);
+    if (g.setValueAtTime) g.setValueAtTime(v, AC.currentTime);
+    g.value = v;
+  } catch (e) { try { g.value = v; } catch (e2) {} }
+}
+
 function homeInit() {
   if (!AC || homeGate) return;
   try {
@@ -270,19 +299,23 @@ function homeBar(bar, t0, beat) {
 
 function homeStart() {
   if (!AC || !enabled.bgm) return;
+  ensureAC();                                   // 系统可能把 WebAudio 挂了，先叫醒
   homeInit();
   if (!homeGate) return;
   if (homeSeq) { applyBgmGain(); return; }
   var H = CONFIG.AUDIO.home;
   if (!H || !H.prog) return;
   var beat = 60 / (H.bpm || 100), bar = beat * 4;
-  try {
-    if (homeGate.gain.cancelScheduledValues) homeGate.gain.cancelScheduledValues(AC.currentTime);
-    homeGate.gain.value = 1;
-  } catch (e) {}
-  homeSeq = { bar: 0, nextT: AC.currentTime + 0.04, timer: 0 };
+  gateTo(1);
+  homeSeq = { bar: 0, nextT: AC.currentTime + 0.04, timer: 0, watch: 0 };
   var tick = function () {
     if (!homeSeq || !AC) return;
+    if (!acRunning()) {                          // 挂起时时钟是冻的，别拿它算时刻
+      ensureAC();
+      return;
+    }
+    /* 从挂起里醒来时时钟可能跳过一段：落后太多就重新对表，避免一次性补放一堆音 */
+    if (homeSeq.nextT < AC.currentTime - 0.25) homeSeq.nextT = AC.currentTime + 0.05;
     var horizon = AC.currentTime + bar * 0.98 + 0.05, guard = 0;
     while (homeSeq.nextT < horizon && guard++ < 4) {
       homeBar(homeSeq.bar, homeSeq.nextT, beat);
@@ -291,11 +324,21 @@ function homeStart() {
   };
   tick();
   homeSeq.timer = setInterval(tick, 400);
+  /* 健康检查：600ms 后如果还没醒（有些机型 resume 会被静默拒），再叫一次；
+   * 闸门若被旧的淡出 ramp 拖到接近 0，也顺手拉回来。 */
+  homeSeq.watch = setTimeout(function () {
+    if (!homeSeq) return;
+    if (!acRunning()) ensureAC();
+    try {
+      if (homeGate.gain.value < 0.5) gateTo(1);
+    } catch (e) {}
+  }, 600);
   applyBgmGain();
 }
 
 function homeStop(soft) {
   if (homeSeq && homeSeq.timer) clearInterval(homeSeq.timer);
+  if (homeSeq && homeSeq.watch) clearTimeout(homeSeq.watch);
   homeSeq = null;
   if (homeGate && AC) {
     /* soft=true：进关卡时主页曲淡出 150ms，给 mp3 一点缓冲时间。
@@ -303,9 +346,10 @@ function homeStop(soft) {
      * 关音乐 / 切后台仍然用硬切，那两处不需要过渡。 */
     var ramp = soft ? 0.15 : 0.03;
     try {
-      homeGate.gain.cancelScheduledValues(AC.currentTime);
-      homeGate.gain.setValueAtTime(homeGate.gain.value, AC.currentTime);
-      homeGate.gain.linearRampToValueAtTime(0, AC.currentTime + ramp);
+      var g = homeGate.gain, cur = g.value;
+      if (g.cancelScheduledValues) g.cancelScheduledValues(0);   // 清历史，含上一次淡出
+      if (g.setValueAtTime) g.setValueAtTime(cur, AC.currentTime);
+      g.linearRampToValueAtTime(0, AC.currentTime + ramp);
     } catch (e) { try { homeGate.gain.value = 0; } catch (e2) {} }
   }
   var dead = HOME_OSC; HOME_OSC = [];
@@ -511,7 +555,7 @@ function warmUp() {
 var audio = {
   unlock: function () {
     initAudio();
-    try { if (AC && AC.state === 'suspended') AC.resume(); } catch (e) {}
+    ensureAC();
     unlocked = true;
     startBgm();                       // 先出声
     setTimeout(warmUp, 120);          // 音效解码 + mp3 预载算下一拍
@@ -532,11 +576,13 @@ var audio = {
       if (curCtx && curCtx._watch) { clearTimeout(curCtx._watch); curCtx._watch = null; }
       pauseAll(null); homeStop();               // 切后台：两边都停，别继续排程
     } else if (unlocked && enabled.bgm) {
+      ensureAC();                             // 切后台也可能被挂起
       bgmPlay(bgmScene);
     }
   },
   play: function (name) {
     if (!enabled.sfx) return;
+    ensureAC();                               // 每次点击都顺手叫醒（点击是真手势，resume 最容易被接受）
     playSfx(name);
   }
 };
@@ -549,7 +595,7 @@ audio.bgmInfo = function () {
     gain: bgmGain && bgmGain.gain ? bgmGain.gain.value : null,
     file: bgmFileNow, playing: n, ctxs: Object.keys(BGM_CTX).length,
     volume: curCtx ? curCtx.volume : null, paused: curCtx ? curCtx.paused : null,
-    preloaded: bgmPreloaded
+    preloaded: bgmPreloaded, ac: AC ? AC.state : null
   };
 };
 globalThis.__audio = audio;

@@ -66,6 +66,7 @@ animation/ art-src/ audio-src/   动效演示、素材源文件
 | v0.13 | 主页换成 8 小节四声部轻音乐、切场景零延迟（预载+同步切）、四首关卡曲响度对齐 |
 | v0.14 | 微信登录态下的玩家资料：`createUserInfoButton` 授权拿微信昵称头像、`showKeyboard` 改名、设置页资料卡、榜单头像、云端 `players` 加 nick/avatar/src/auth |
 | v0.14.1 | 修「进关卡音乐没了/卡顿」：预载不再 `play→pause` 掐正在放的曲、只做一次、解锁当拍不再同步解码；首播看门狗；进关卡主页曲 150ms 淡出让位 |
+| v0.14.2 | 修「回主页没音乐」：WebAudioContext 被系统挂起后自动 `resume`（homeStart / tick / 每次点击 / 切前台），闸门写入防被旧淡出覆盖 |
 
 ## 代码存档
 

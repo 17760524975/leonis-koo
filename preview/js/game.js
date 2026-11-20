@@ -255,6 +255,7 @@
 
   function homeStart() {
     if (!AC || !enabled.bgm) return;
+    resumeAudio();                               // v0.14.2：挂起的 AudioContext 先叫醒，否则排了也不响
     homeInit();
     if (!homeGate) return;
     if (homeSeq) { applyBgmGain(); return; }          // 已在放
@@ -514,7 +515,7 @@
     var info = {
       scene: bgmScene, home: !!homeSeq, gain: (bgmGain && bgmGain.gain) ? bgmGain.gain.value : null,
       gate: (homeGate && homeGate.gain) ? homeGate.gain.value : null,
-      preloaded: !!bgmPreloaded, els: Object.keys(EL).length,
+      preloaded: !!bgmPreloaded, els: Object.keys(EL).length, ac: AC ? AC.state : null,
       playing: (function () { var n = 0; for (var k in EL) if (EL[k] && !EL[k].paused) n++; return n; })()
     };
     if (curEl) {
