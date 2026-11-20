@@ -147,7 +147,8 @@ WS = CFG.LAYOUT.BOARD.size / 1000;
 
 console.log('v0.11 验收：提示可见性 + 真人 BGM + 云环境');
 section('1. 版本与云环境');
-check('版本号 v0.11+', /^v0\.(1[1-9]|[2-9]\d)$/.test(CFG.version), CFG.version);
+/* v0.14.1 起允许补丁位（v0.14.1），所以正则放开 .N */
+check('版本号 v0.11+', /^v0\.(1[1-9]|[2-9]\d)(\.\d+)?$/.test(CFG.version), CFG.version);
 check('云环境 ID 已填', CFG.CLOUD.envId === 'cloud1-d4g6rm6duad5ba0aa', CFG.CLOUD.envId);
 
 section('2. BGM 换曲规则：每 5 关一首，按文件名数字顺序');

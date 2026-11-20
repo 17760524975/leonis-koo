@@ -283,7 +283,7 @@ function homeStart() {
   homeSeq = { bar: 0, nextT: AC.currentTime + 0.04, timer: 0 };
   var tick = function () {
     if (!homeSeq || !AC) return;
-    var horizon = AC.currentTime + bar + 0.6, guard = 0;
+    var horizon = AC.currentTime + bar * 0.98 + 0.05, guard = 0;
     while (homeSeq.nextT < horizon && guard++ < 4) {
       homeBar(homeSeq.bar, homeSeq.nextT, beat);
       homeSeq.nextT += bar; homeSeq.bar++;
@@ -294,25 +294,29 @@ function homeStart() {
   applyBgmGain();
 }
 
-function homeStop() {
+function homeStop(soft) {
   if (homeSeq && homeSeq.timer) clearInterval(homeSeq.timer);
   homeSeq = null;
   if (homeGate && AC) {
+    /* soft=true：进关卡时主页曲淡出 150ms，给 mp3 一点缓冲时间。
+     * 硬切（30ms）会先静音一两百毫秒，听感就是"音乐没了"；
+     * 关音乐 / 切后台仍然用硬切，那两处不需要过渡。 */
+    var ramp = soft ? 0.15 : 0.03;
     try {
       homeGate.gain.cancelScheduledValues(AC.currentTime);
       homeGate.gain.setValueAtTime(homeGate.gain.value, AC.currentTime);
-      homeGate.gain.linearRampToValueAtTime(0, AC.currentTime + 0.03);
-    } catch (e) { try { homeGate.gain.value = 0; } catch (e) {} }
+      homeGate.gain.linearRampToValueAtTime(0, AC.currentTime + ramp);
+    } catch (e) { try { homeGate.gain.value = 0; } catch (e2) {} }
   }
   var dead = HOME_OSC; HOME_OSC = [];
   setTimeout(function () {
     for (var i = 0; i < dead.length; i++) { try { dead[i].stop(); } catch (e) {} }
-  }, 60);
+  }, soft ? 190 : 60);
 }
 
-/* ---------------- 关卡 mp3：每首一个 InnerAudioContext，解锁时全部预载 ----------------
- * 切曲 = 暂停旧的 + 播新的，both 同步；预载把"点开始后等几百毫秒才响"吃掉了。
- * 4 个实例都在音量 0 下 play→pause 一次，只为触发解码预热，听不到声音。 */
+/* ---------------- 关卡 mp3：每首一个 InnerAudioContext，解锁时建好预载 ----------------
+ * 切曲 = 暂停旧的 + 播新的，同步完成；实例在解锁时就建好并设 src，
+ * 平台据此开始缓冲，真正播的时候不用再等解码。 */
 var BGM_CTX = {}, curCtx = null, bgmScene = 'home', bgmFileNow = '';
 
 function bgmFile(key) {
@@ -335,22 +339,35 @@ function ctxFor(file) {
     a.obeyMuteSwitch = false;
     a.volume = 0;
     a.src = bgmPath(file);
+    /* 加载完时如果正是"该响却没响"，补一次 play —— 覆盖 pause/play 抢拍丢首播的机型 */
+    if (a.onCanplay) a.onCanplay(function () {
+      if (enabled.bgm && bgmFileNow === file && a.paused) { try { a.play(); } catch (e) {} }
+    });
+    if (a.onError) a.onError(function (e) {
+      a._err = (e && (e.errMsg || e.errCode)) || 'audio error';
+      /* 加载失败就把这首标出来，别让后面的看门狗一直空转 */
+    });
   } catch (e) { return null; }
   BGM_CTX[file] = a;
   return a;
 }
+/* v0.14.1：预载只做「建实例 + 设 src」，不再 play→pause 预热。
+ *
+ * v0.13 那版是解锁时把 4 首一起 play()、90ms 后统一 pause()。两个坑：
+ *   ① 玩家第一下点的就是「开始」时，解锁与进关卡在同一拍发生 ——
+ *      bgm_lv1 刚被 bgmPlay 正式播上，90ms 后预载的 pause 把它掐了，
+ *      「进拼图音乐直接没了」，而且之后没有代码会把它救回来；
+ *   ② loadBuffers() 解码完会再调一次 startBgm() → 再预载一遍。这次可能发生在
+ *      玩家已经在关卡里放歌之后，同样把正在放的掐掉（"随机中途没音乐"）。
+ *   ③ 4 个解码器同一拍启动，就是玩家说的"卡顿"。
+ * 现在：一个 preloaded 闸门只建一次；InnerAudioContext 在设 src 时就会开始缓冲，
+ * 不需要真的出声去"暖机"；真正该响的时候由 startCtx 的 300ms 看门狗兜底。 */
+var bgmPreloaded = false;
 function preloadBgm() {
+  if (bgmPreloaded) return;
+  bgmPreloaded = true;
   var lv = (CONFIG.AUDIO.bgm && CONFIG.AUDIO.bgm.lv) || [];
-  for (var i = 0; i < lv.length; i++) {
-    var a = ctxFor(lv[i]);
-    if (!a) continue;
-    /* 音量 0 播一下再停：只为让底层把文件读进缓存 */
-    try {
-      a.volume = 0;
-      a.play();
-      setTimeout(function (x) { return function () { try { x.pause(); } catch (e) {} }; }(a), 90);
-    } catch (e) {}
-  }
+  for (var i = 0; i < lv.length; i++) ctxFor(lv[i]);
 }
 function pauseAll(except) {
   for (var k in BGM_CTX) {
@@ -389,19 +406,36 @@ function bgmPlay(key) {
     homeStart();
     return;
   }
-  homeStop();                                   // 进关卡：主页曲立刻收声
+  homeStop(true);                               // 进关卡：主页曲淡出 150ms 让位给 mp3
   var a = ctxFor(file);
   if (!a) return;
   /* 同一首已经在放就别重头开始——1~5 关都是 lv1，换关不该把音乐倒回去 */
   if (a === curCtx && a.paused === false) {
     try { a.volume = Math.min(1, bgmTarget() * trimOf(file)); } catch (e) {}
+    armWatch(a, file);
     return;
   }
   pauseAll(a);
   curCtx = a; bgmFileNow = file;
-  try { a.seek(0); } catch (e) {}
+  /* v0.14.1：不再 seek(0)。新建的实例本来就在 0，seek 在还没 canplay 时会触发
+   * 一次多余的解码；而回到同一首时"接着放"比"倒回开头"更不容易听出接缝。 */
   try { a.volume = Math.min(1, bgmTarget() * trimOf(file)); } catch (e) {}
+  startCtx(a, file);
+}
+
+/* 首播补一次：个别机型在 pause→play 的同一拍里会丢掉这次 play（回调不报错），
+ * 300ms 后如果还是 paused 就再补一次；只补一次，不做无限重试。 */
+function armWatch(a, file) {
+  if (a._watch) { clearTimeout(a._watch); a._watch = null; }
+  a._watch = setTimeout(function () {
+    a._watch = null;
+    if (!enabled.bgm || bgmFileNow !== file) return;
+    if (a.paused) { try { a.play(); } catch (e) {} }
+  }, 300);
+}
+function startCtx(a, file) {
   try { a.play(); } catch (e) {}
+  armWatch(a, file);
 }
 function bgmSetScene(key) {
   if (!key || key === bgmScene) { if (unlocked && enabled.bgm) bgmPlay(bgmScene); return; }
@@ -412,7 +446,6 @@ function bgmSetScene(key) {
 /* 第一次用户手势（解锁音频）后进入：主页直接起播 */
 function startBgm() {
   if (!unlocked || !enabled.bgm) { applyBgmGain(); return; }
-  preloadBgm();
   bgmPlay(bgmScene);
 }
 
@@ -465,24 +498,38 @@ function playSfx(name) {
   if (synth[name]) synth[name]();
 }
 
+/* v0.14.1：解锁这一拍只做「出声」，其它活挪到下一拍。
+ * loadBuffers() 里 4 次 readFileSync + 解码是同步 I/O，紧跟在点击后面执行，
+ * 就是"点开始卡一下"的直接来源；preloadBgm() 建 4 个 InnerAudioContext 也一样。
+ * 现在先起主页曲，120ms 后再预热，玩家听感上完全无感。 */
+function warmUp() {
+  if (!unlocked) return;
+  preloadBgm();
+  loadBuffers();
+}
+
 var audio = {
   unlock: function () {
     initAudio();
     try { if (AC && AC.state === 'suspended') AC.resume(); } catch (e) {}
     unlocked = true;
-    loadBuffers();
-    startBgm();
+    startBgm();                       // 先出声
+    setTimeout(warmUp, 120);          // 音效解码 + mp3 预载算下一拍
   },
   setEnabled: function (sfx, bgm) {
     enabled.sfx = sfx; enabled.bgm = bgm;
-    if (!bgm) { pauseAll(null); curCtx = null; homeStop(); }
-    else if (unlocked) bgmPlay(bgmScene);
+    if (!bgm) {
+      /* 关音乐：先撤看门狗再停，否则 300ms 后的重播会把刚关掉的又放起来 */
+      if (curCtx && curCtx._watch) { clearTimeout(curCtx._watch); curCtx._watch = null; }
+      pauseAll(null); curCtx = null; bgmFileNow = ''; homeStop();
+    } else if (unlocked) bgmPlay(bgmScene);
     applyBgmGain();
   },
   duck: function (on) { ducked = !!on; applyBgmGain(); },
   setScene: function (k) { bgmSetScene(k); },   // v0.5：主页 / 关卡多场景 BGM
   setVisible: function (v) {
     if (!v) {
+      if (curCtx && curCtx._watch) { clearTimeout(curCtx._watch); curCtx._watch = null; }
       pauseAll(null); homeStop();               // 切后台：两边都停，别继续排程
     } else if (unlocked && enabled.bgm) {
       bgmPlay(bgmScene);
@@ -501,7 +548,8 @@ audio.bgmInfo = function () {
     scene: bgmScene, home: !!homeSeq, gate: homeGate && homeGate.gain ? homeGate.gain.value : null,
     gain: bgmGain && bgmGain.gain ? bgmGain.gain.value : null,
     file: bgmFileNow, playing: n, ctxs: Object.keys(BGM_CTX).length,
-    volume: curCtx ? curCtx.volume : null, paused: curCtx ? curCtx.paused : null
+    volume: curCtx ? curCtx.volume : null, paused: curCtx ? curCtx.paused : null,
+    preloaded: bgmPreloaded
   };
 };
 globalThis.__audio = audio;

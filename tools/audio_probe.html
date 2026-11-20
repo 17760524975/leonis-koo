@@ -68,6 +68,8 @@
         var s2b = A.bgmInfo();
         log('lv2.vol', s2b.volume === undefined ? '(none)' : s2b.volume.toFixed(2));
         log('lv2.readyLater', s2b.ready === undefined ? '(none)' : s2b.ready);
+        /* v0.14.1：进关卡 400ms 后必须还在放（旧版会被预载的 pause 掐掉） */
+        log('lv2.stillPlaying', s2b.paused === false && s2b.playing === 1);
         A.duck(true);
         setTimeout(function () {
           log('duck.vol', A.bgmInfo().volume.toFixed(2));

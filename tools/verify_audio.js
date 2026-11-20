@@ -156,8 +156,12 @@ setImmediate(async function () {
   check('响度对齐表覆盖主页 + 4 首关卡',
     typeof trim.home === 'number' && CFG.AUDIO.bgm.lv.every(f => typeof trim[f.replace(/\.mp3$/, '')] === 'number'),
     JSON.stringify(trim));
-  check('4 首关卡曲已在解锁时预载', i1.ctxs === 4, 'ctxs=' + i1.ctxs);
-  check('预载不留声（没有 mp3 在播）', i1.playing === 0, 'playing=' + i1.playing);
+  /* v0.14.1：预载挪到解锁后 120ms（不再堵住点击那一拍），所以这里等一下 */
+  await sleep(200);
+  check('4 首关卡曲在解锁后预载完成', audio.bgmInfo().ctxs === 4, 'ctxs=' + audio.bgmInfo().ctxs);
+  check('预载不留声（没有 mp3 在播）', audio.bgmInfo().playing === 0, 'playing=' + audio.bgmInfo().playing);
+  check('解锁当拍只做「出声」（不阻塞点击）', i1.ctxs === 0 && i1.home === true,
+    'instant ctxs=' + i1.ctxs + ' home=' + i1.home);
   const nHome = oscillators.length;
   check('主页排出了音符（振荡器 > 20）', nHome > 20, 'osc=' + nHome);
   const types = [...new Set(oscillators.map(o => o.type))].sort().join(',');
@@ -240,6 +244,55 @@ setImmediate(async function () {
   check('主页谱表完整（8 小节 / 32 个旋律音）',
     (CFG.AUDIO.home.prog || []).length === 8 && (CFG.AUDIO.home.melody || []).length === 32,
     'prog=' + (CFG.AUDIO.home.prog || []).length + ' melody=' + (CFG.AUDIO.home.melody || []).length);
+
+  console.log('\n== 7. v0.14.1：进关卡不会被「预载收声」掐掉 ==');
+  /* 上一版的坑：解锁时把 4 首 play() 起来、90ms 后统一 pause()。
+   * 玩家第一下点的就是「开始」时，解锁与进关卡同一拍，lv1 刚播上就被 90ms 后的
+   * pause 掐掉 → "进拼图音乐直接没了"，而且没有代码救回来。 */
+  audio.setScene('lv1');
+  const lv1p = players.filter(p => /bgm_lv1/.test(p.src))[0];
+  const playsAtEntry = lv1p.plays;
+  await sleep(260);
+  check('进关卡 260ms 后仍在播（不被预载 pause 掐掉）',
+    audio.bgmInfo().paused === false && audio.bgmInfo().playing === 1,
+    'paused=' + audio.bgmInfo().paused + ' playing=' + audio.bgmInfo().playing);
+  check('没有反复 play（plays 只 +1）', lv1p.plays - playsAtEntry <= 1,
+    'plays ' + playsAtEntry + '→' + lv1p.plays);
+  check('预载闸门只开一次（loadBuffers 完成再调 startBgm 不会二次预载）',
+    audio.bgmInfo().preloaded === true && audio.bgmInfo().ctxs === 4,
+    'preloaded=' + audio.bgmInfo().preloaded + ' ctxs=' + audio.bgmInfo().ctxs);
+
+  console.log('\n== 8. 首播被吞时看门狗补一次 ==');
+  audio.setScene('lv2');
+  await sleep(80);
+  const lv2p = players.filter(p => /bgm_lv2/.test(p.src))[0];
+  /* 制造"点了 play 但没起来"：下一次 play 只计数不真的播 */
+  let swallow = true;
+  const realPlay = lv2p.play.bind(lv2p);
+  lv2p.play = function () {
+    if (swallow) { swallow = false; lv2p.plays++; return; }
+    return realPlay();
+  };
+  audio.setScene('lv3');            // 换走，保证下一次进来要重新 play
+  await sleep(60);
+  audio.setScene('lv2');
+  await sleep(40);
+  check('首播被吞时确实处于暂停', lv2p.paused === true, 'paused=' + lv2p.paused);
+  await sleep(360);
+  check('300ms 看门狗把它补起来了', lv2p.paused === false, 'paused=' + lv2p.paused);
+
+  console.log('\n== 9. 源码约束（两端一致的做法） ==');
+  const miniSrc = fs.readFileSync(path.join(ROOT, 'miniprogram/game.js'), 'utf8');
+  const pvSrc = fs.readFileSync(path.join(ROOT, 'preview/js/game.js'), 'utf8');
+  check('小程序：预载里不再 play() / pause()', !/a\.play\(\)[\s\S]{0,200}a\.pause\(\)/.test(miniSrc));
+  check('小程序：预载有一次性闸门', /bgmPreloaded/.test(miniSrc));
+  check('小程序：不再 seek(0)（避免多余解码）', !/\.seek\(0\)/.test(miniSrc));
+  check('小程序：进关卡用淡出让位', /homeStop\(true\)/.test(miniSrc));
+  /* 只卡 bgmPlay 段：音效池 playElement 里的 currentTime=0 是正常的"重头播一声" */
+  const pvBgm = pvSrc.slice(pvSrc.indexOf('function bgmPlay'), pvSrc.indexOf('function bgmSetScene'));
+  check('预览：bgm 切曲不再 currentTime = 0', !/currentTime = 0/.test(pvBgm));
+  check('预览：有 canplay 补播 + 看门狗', /startEl\(/.test(pvSrc) && /armWatch\(/.test(pvSrc));
+  check('两端都关掉了在飞的补播（关音乐时）', /_watch/.test(miniSrc) && /_watch/.test(pvSrc));
 
   console.log('\n' + (fail === 0 ? '音频验收全部通过' : `!! ${fail} 项未通过`));
   process.exit(fail === 0 ? 0 : 1);

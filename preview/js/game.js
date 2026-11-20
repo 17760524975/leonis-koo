@@ -270,7 +270,7 @@
     homeSeq = { bar: 0, nextT: AC.currentTime + 0.04, timer: 0 };
     var tick = function () {
       if (!homeSeq || !AC) return;
-      var horizon = AC.currentTime + bar + 0.6, guard = 0;
+      var horizon = AC.currentTime + bar * 0.98 + 0.05, guard = 0;
       while (homeSeq.nextT < horizon && guard++ < 4) {
         homeBar(homeSeq.bar, homeSeq.nextT, beat);
         homeSeq.nextT += bar; homeSeq.bar++;
@@ -281,21 +281,24 @@
     applyBgmGain();
   }
 
-  function homeStop() {
+  function homeStop(soft) {
     if (homeSeq && homeSeq.timer) clearInterval(homeSeq.timer);
     homeSeq = null;
     if (homeGate && AC) {
+      /* soft=true：进关卡时主页曲淡出 150ms，给 mp3 一点缓冲时间。
+       * 硬切（30ms）会先静音一两百毫秒，听感就是"音乐没了"。 */
+      var ramp = soft ? 0.15 : 0.03;
       try {
         homeGate.gain.cancelScheduledValues(AC.currentTime);
         homeGate.gain.setValueAtTime(homeGate.gain.value, AC.currentTime);
-        homeGate.gain.linearRampToValueAtTime(0, AC.currentTime + 0.03);
+        homeGate.gain.linearRampToValueAtTime(0, AC.currentTime + ramp);
       } catch (e) { try { homeGate.gain.value = 0; } catch (e2) {} }
     }
     /* 闸门归零后再硬停振荡器，避免已经排进时间轴的音继续响 */
     var dead = HOME_OSC; HOME_OSC = [];
     setTimeout(function () {
       for (var i = 0; i < dead.length; i++) { try { dead[i].stop(); } catch (e) {} }
-    }, 60);
+    }, soft ? 190 : 60);
   }
 
   /* ---- 关卡 mp3：每首一个 <audio>，开局预载 ----
@@ -321,9 +324,40 @@
     EL[file] = el;
     return el;
   }
+  /* v0.14.1：预载只建元素（preload=auto 会自己缓冲），不真的 play()。
+   * 加闸门是为了"只建一次"——反复进来会重复请求 4 个文件。 */
+  var bgmPreloaded = false;
   function preloadBgm() {
+    if (bgmPreloaded) return;
+    bgmPreloaded = true;
     var lv = (C.AUDIO.bgm && C.AUDIO.bgm.lv) || [];
     for (var i = 0; i < lv.length; i++) elFor(lv[i]);
+  }
+  /* 首播兜底：play() 在"还没缓冲好"时会 reject，不重试就是「进关卡没音乐」。
+   * 一次 canplay 补播 + 320ms 看门狗，两道就够，不做无限重试。 */
+  function armWatch(el, file) {
+    if (el._watch) { clearTimeout(el._watch); el._watch = null; }
+    el._watch = setTimeout(function () {
+      el._watch = null;
+      if (!enabled.bgm || bgmFileNow !== file) return;
+      if (el.paused) { var q = el.play(); if (q && q.catch) q.catch(function () {}); }
+    }, 320);
+  }
+  function startEl(el, file) {
+    var p = el.play();
+    if (p && p.catch) {
+      p.catch(function () {
+        if (!el.addEventListener) return;
+        var once = function () {
+          el.removeEventListener('canplay', once);
+          if (enabled.bgm && bgmFileNow === file) {
+            var q = el.play(); if (q && q.catch) q.catch(function () {});
+          }
+        };
+        el.addEventListener('canplay', once);
+      });
+    }
+    armWatch(el, file);
   }
   function pauseAll(except) {
     for (var k in EL) {
@@ -364,22 +398,23 @@
       homeStart();
       return;
     }
-    homeStop();                                   // 进关卡：主页曲立刻收声
+    homeStop(true);                               // 进关卡：主页曲淡出 150ms 让位给 mp3
     preloadBgm();
     var el = elFor(file);
     /* 同一首已经在放就别重头开始——1~5 关都是 lv1，换关不该把音乐倒回去 */
     if (el === curEl && !el.paused) {
       try { el.volume = Math.min(1, bgmTarget() * trimOf(file)); } catch (e) {}
+      armWatch(el, file);
       return;
     }
     pauseAll(el);
     curEl = el; bgmFileNow = file;
-    try { el.currentTime = 0; } catch (e) {}
     /* 音量直接给到位：曲目本身从静音开始，不存在爆音；
-     * 淡入只会让"点开始"到出声多等几十毫秒。 */
+     * 淡入只会让"点开始"到出声多等几十毫秒。
+     * v0.14.1：不再 currentTime=0 —— 元数据没到之前赋值会抛、还可能触发一次重解；
+     * 回到同一首时"接着放"比"倒回开头"更不容易听出接缝。 */
     try { el.volume = Math.min(1, bgmTarget() * trimOf(file)); } catch (e) {}
-    var p = el.play();
-    if (p && p.catch) p.catch(function () {});
+    startEl(el, file);
   }
   function bgmSetScene(key) {
     if (!key || key === bgmScene) { if (unlocked && enabled.bgm) bgmPlay(bgmScene); return; }
@@ -451,7 +486,9 @@
     setEnabled: function (sfx, bgm) {
       enabled.sfx = sfx; enabled.bgm = bgm;
       if (!bgm) {
-        pauseAll(null); curEl = null;             // 关卡 mp3
+        /* 先撤看门狗再停，否则 320ms 后的补播会把刚关掉的又放起来 */
+        if (curEl && curEl._watch) { clearTimeout(curEl._watch); curEl._watch = null; }
+        pauseAll(null); curEl = null; bgmFileNow = '';   // 关卡 mp3
         homeStop();                               // 主页轻音乐（同时清掉已排程的音）
       } else if (unlocked) bgmPlay(bgmScene);
       applyBgmGain();
@@ -460,6 +497,7 @@
     setScene: function (k) { bgmSetScene(k); },   // v0.5：主页 / 关卡多场景 BGM
     setVisible: function (v) {                    // 切后台：停调度并静音；回前台恢复
       if (!v) {
+        if (curEl && curEl._watch) { clearTimeout(curEl._watch); curEl._watch = null; }
         pauseAll(null); homeStop();               // 切后台：两边都停，别继续排程
       } else if (unlocked && enabled.bgm) {
         bgmPlay(bgmScene);
@@ -476,7 +514,7 @@
     var info = {
       scene: bgmScene, home: !!homeSeq, gain: (bgmGain && bgmGain.gain) ? bgmGain.gain.value : null,
       gate: (homeGate && homeGate.gain) ? homeGate.gain.value : null,
-      preloaded: Object.keys(EL).length,
+      preloaded: !!bgmPreloaded, els: Object.keys(EL).length,
       playing: (function () { var n = 0; for (var k in EL) if (EL[k] && !EL[k].paused) n++; return n; })()
     };
     if (curEl) {
