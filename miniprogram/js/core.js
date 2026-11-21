@@ -2688,11 +2688,11 @@
         taskList().some(function (it) { return it.done && !it.got; }));
 
       /* 在线奖励：图标 + 上方气泡。
-       * v0.15：气泡从「3 分钟倒计时」改成「今日累计时长」，有可领档位时变红显示「可领 N」，
-       * 图标右上角再补一个红点（与任务/邀请一致的提示语言）。 */
+       * v0.15：气泡从「3 分钟倒计时」改成「今日累计时长」，有可领档位时变红显示「可领 N」。
+       * 不再叠图标红点 —— 红气泡本身已经把「有事可做」说清楚了，双红点反而吵。 */
       homeEntry('entry_rank', 'rank', '排行榜', rx, e0);   // v0.8：右列顶部空位
       var oReady = onlineClaimCount();
-      homeEntry('online_claim', 'online', '在线奖励', rx, e0 + eg * 1.5, oReady > 0);
+      homeEntry('online_claim', 'online', '在线奖励', rx, e0 + eg * 1.5);
       var otxt = oReady > 0 ? ('可领 ' + oReady) : onlineClock(onlineSecNow());
       var bbx = rx, bby = e0 + eg * 1.5 - 70, bw2 = 92, bh2 = 36;
       ctx.save();
