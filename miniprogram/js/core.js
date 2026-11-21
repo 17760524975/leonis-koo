@@ -292,7 +292,10 @@
       reviveUsed: 0,        // 本关已复活次数
       toast: null,          // { text, t } 轻提示
       adSim: null,          // { kind, t } 模拟广告进度（无广告位时的兜底演示）
-      adWait: null          // v0.9 正在拉激励视频：存 kind，回调里发奖
+      adWait: null,         // v0.9 正在拉激励视频：存 kind，回调里发奖
+      /* v0.15：在线计时锚点（毫秒时间戳，0=停表）与落盘节流计数 */
+      onlineMark: 0,
+      onlineSaveT: 0
     };
 
     var hits = [];        // 每帧重建的可点区域
@@ -308,7 +311,9 @@
         coin: E.coinInit,
         energy: E.energyInit, energyMax: E.energyMax, energyTs: Date.now(),
         freeEnergyUsed: 0, freeEnergyDay: '',
-        onlineTs: Date.now(),
+        /* v0.15：每日在线奖励 —— 当日累计秒数 / 当天已领档位（每日 0 点清空） */
+        onlineDay: '', onlineSec: 0, onlineGot: {},
+        hintItems: 0,             // 提示卡（在线奖励 40/60 分钟给），跨天不清
         tasksDay: '', tasksClaimed: {}, taskPlays: 0,
         inviteCount: 0, inviteDay: '',
         skin: 'warm',
@@ -340,7 +345,13 @@
             s.energyTs = (typeof o.energyTs === 'number') ? o.energyTs : Date.now();
             s.freeEnergyUsed = (typeof o.freeEnergyUsed === 'number') ? o.freeEnergyUsed : 0;
             s.freeEnergyDay = o.freeEnergyDay || '';
-            s.onlineTs = (typeof o.onlineTs === 'number') ? o.onlineTs : Date.now();
+            /* v0.15：老存档只有 onlineTs（3 分钟领一次那套），直接丢弃，
+             * 从当天 0 秒开始累计 —— 不能把旧的时间戳换算成累计时长，
+             * 否则老玩家一进来就能把 6 档全领了。 */
+            s.onlineDay = o.onlineDay || '';
+            s.onlineSec = (typeof o.onlineSec === 'number') ? o.onlineSec : 0;
+            s.onlineGot = (o.onlineGot && typeof o.onlineGot === 'object') ? o.onlineGot : {};
+            s.hintItems = (typeof o.hintItems === 'number') ? o.hintItems : 0;
             s.tasksDay = o.tasksDay || '';
             s.tasksClaimed = o.tasksClaimed || {};
             s.taskPlays = (typeof o.taskPlays === 'number') ? o.taskPlays : 0;
@@ -364,8 +375,11 @@
       }
       return s;
     }
-    function writeLocal() {
-      state.save.updatedAt = Date.now();
+    /* keepTs=true：只落盘、不刷新 updatedAt。
+     * 在线计时的 15 秒定时写盘必须走这个分支 —— 否则玩家挂在主页没玩，
+     * updatedAt 一直在涨，云端合并会误判「本机最新」，把另一台设备刚打的进度顶掉。 */
+    function writeLocal(keepTs) {
+      if (!keepTs) state.save.updatedAt = Date.now();
       try { env.storage.set(SAVE_KEY, JSON.stringify(state.save)); } catch (e) { /* 隐私模式静默降级 */ }
     }
     function persist() {
@@ -560,6 +574,13 @@
       for (lv in (b.starOf || {})) out.starOf[lv] = Math.max(out.starOf[lv] || 0, b.starOf[lv] || 0);
       out.unlockedMax = Math.max(a.unlockedMax || 1, b.unlockedMax || 1);
       out.streak = Math.max(a.streak || 0, b.streak || 0);
+      /* v0.15：在线时长是「这台设备今天待了多久」，不能拿云端那份覆盖本机，
+       * 否则换设备一登录就凭空多出几小时、白领一轮奖励；已领记录同源，一并保留本地。 */
+      out.onlineDay = a.onlineDay || '';
+      out.onlineSec = a.onlineSec || 0;
+      out.onlineGot = a.onlineGot || {};
+      /* 提示卡是消耗品：谁改得晚听谁的（updatedAt 已经判过新旧） */
+      out.hintItems = (newer.hintItems || 0);
       out.updatedAt = Math.max(a.updatedAt || 0, b.updatedAt || 0);
       return out;
     }
@@ -751,16 +772,123 @@
       return true;
     }
 
-    /* ---- 在线奖励 ---- */
-    function onlineLeft() {
-      var s = state.save, E = C.ECON;
-      var el = (Date.now() - (s.onlineTs || Date.now())) / 1000;
-      return Math.max(0, E.onlineRewardSec - el);
+    /* ==================== v0.15 每日在线奖励 ====================
+     * 旧版（v0.5）：每 3 分钟点一次 +10 巧币，没有页面、没有上限、也没有「今天待了多久」的概念。
+     * 新版：按今日累计在线时长解锁 6 档，点主页入口进页面领，每日 0 点清零。
+     *
+     * 计时口径：
+     *   只算前台。state.onlineMark 记「上一次结算的时刻」，update 每帧把差值累进 onlineSec；
+     *   切后台时 flush 一次并把 mark 置 0（停表），回前台再置为当前时刻。
+     *   这样即使杀掉进程，最多只丢 15 秒（persistSec 落盘间隔）。
+     *
+     * 落盘：onlineSec 用 writeLocal（只写本地、不走云端上行），每 15 秒一次；
+     *       领取 / 切后台 / 关面板才 persist()。避免每帧刷 storage，也避免云端被刷。
+     *
+     * 日界：与每日任务同一个 todayKey()（本地时区），进入页面/领取/每帧都会先 onlineRoll()，
+     *       0 点整在游戏里也会自动清零，不需要重启。 */
+
+    /* 跨天就把今天的时长与已领记录清空；返回是否发生了清零 */
+    function onlineRoll() {
+      var s = state.save; if (!s) return false;
+      var d = todayKey();
+      if (s.onlineDay === d) return false;
+      s.onlineDay = d;
+      s.onlineSec = 0;
+      s.onlineGot = {};
+      return true;
     }
-    function claimOnline() {
-      if (onlineLeft() > 0) { toast('奖励还在路上～'); return; }
-      state.save.onlineTs = Date.now();
-      addCoin(C.ECON.onlineRewardCoin, '在线奖励');
+
+    /* 把「上次结算到现在」的时间累进 today 的 onlineSec。可在任何地方安全重复调用 */
+    function onlineSync() {
+      var s = state.save; if (!s) return false;
+      var rolled = onlineRoll();
+      if (!state.onlineMark) return rolled;
+      var now = Date.now();
+      var el = (now - state.onlineMark) / 1000;
+      state.onlineMark = now;
+      /* 单次最多记 5 分钟：时钟被手动改过 / 主线程长卡顿 / 从挂起里"诈尸"时，
+       * 不加这个上限会一次性灌进几小时，玩家一进来就能领满 6 档 */
+      if (el > 300) el = 300;
+      if (el > 0) s.onlineSec = Math.min(C.ONLINE.maxSec, (s.onlineSec || 0) + el);
+      return rolled;
+    }
+
+    /* 当前今日累计秒数（读之前先结算，保证界面数字与判定一致） */
+    function onlineSecNow() {
+      onlineSync();
+      return Math.max(0, Math.floor(state.save.onlineSec || 0));
+    }
+
+    function onlineClock(sec) {
+      sec = Math.max(0, Math.floor(sec));
+      var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), ss = sec % 60;
+      function p2(n) { return (n < 10 ? '0' : '') + n; }
+      return h > 0 ? (h + ':' + p2(m) + ':' + p2(ss)) : (p2(m) + ':' + p2(ss));
+    }
+
+    /* 六档的实时状态：got=已领、ready=到点可领、left=还差多少秒 */
+    function onlineTierList() {
+      var sec = onlineSecNow(), got = state.save.onlineGot || {}, out = [];
+      var T = C.ONLINE.tiers;
+      for (var i = 0; i < T.length; i++) {
+        var t = T[i];
+        out.push({
+          id: t.id, at: t.at, label: t.label,
+          energy: t.energy || 0, coin: t.coin || 0, hint: t.hint || 0,
+          got: !!got[t.id],
+          ready: !got[t.id] && sec >= t.at,
+          left: Math.max(0, t.at - sec)
+        });
+      }
+      return out;
+    }
+    function onlineClaimCount() {
+      var arr = onlineTierList(), n = 0;
+      for (var i = 0; i < arr.length; i++) if (arr[i].ready) n++;
+      return n;
+    }
+
+    /* 领一档。体力允许溢出上限 —— 在线奖励被 16 点上限吃掉会让玩家觉得白等一小时 */
+    function onlineClaim(id) {
+      var arr = onlineTierList(), t = null;
+      for (var i = 0; i < arr.length; i++) if (arr[i].id === id) t = arr[i];
+      if (!t) return false;
+      if (t.got) { toast('这一档已经领过了'); return false; }
+      if (!t.ready) { toast('还差 ' + onlineClock(t.left) + ' 才能领'); return false; }
+      var s = state.save;
+      var got = s.onlineGot || (s.onlineGot = {});
+      got[id] = true;
+      var parts = [];
+      if (t.coin) { s.coin = (s.coin || 0) + t.coin; parts.push('+' + t.coin + ' 巧币'); }
+      if (t.energy) { s.energy = (s.energy || 0) + t.energy; parts.push('+' + t.energy + ' 体力'); }
+      if (t.hint) { s.hintItems = (s.hintItems || 0) + t.hint; parts.push('+' + t.hint + ' 提示卡'); }
+      persist();
+      env.audio.play('sfx_snap');
+      toast('在线奖励 ' + parts.join(' · '));
+      return true;
+    }
+
+    /* 提示卡：付费档提示的第三种支付方式（不花巧币、不看广告） */
+    function useHintItem() {
+      var s = state.save;
+      if (state.hintLv >= C.HINT.maxTier) { toast('本关提示已经用完'); return; }
+      if ((s.hintItems || 0) <= 0) { toast('提示卡不足'); return; }
+      s.hintItems -= 1;
+      persist();
+      useHint(true);
+    }
+
+    /* 每帧记账（由 update 调用）：累计 + 每 persistSec 落一次本地盘 */
+    function onlineTick(dt) {
+      var s = state.save; if (!s) return;
+      if (!state.onlineMark) { state.onlineMark = Date.now(); return; }
+      if (onlineRoll()) { state.onlineSaveT = 0; writeLocal(true); }
+      onlineSync();
+      state.onlineSaveT += dt;
+      if (state.onlineSaveT >= (C.ONLINE.persistSec || 15) * 1000) {
+        state.onlineSaveT = 0;
+        writeLocal(true);
+      }
     }
 
     /* ---- 每日任务 ---- */
@@ -1520,6 +1648,7 @@
         }
         case 'hint_ad': adStart('hint'); break;
         case 'hint_coin': useHintCoin(); break;
+        case 'hint_item': useHintItem(); break;
         case 'restart': setupLevel(state.levelIdx); break;
         case 'next': nextLevel(); break;
         case 'replay': setupLevel(state.levelIdx); state.overlay = null;
@@ -1545,7 +1674,8 @@
            * 通关后 result 一直留着，从主页进榜单会被误判成结算页） */
           state.overlay = state.rankBack || null;
           break;
-        case 'online_claim': claimOnline(); break;
+        /* v0.15：在线奖励从「点一下直接领」改成「进页面按档领」 */
+        case 'online_claim': state.overlay = 'online'; break;
         case 'free_share': grantFreeEnergy(false); break;
         case 'free_ad': adStart('energy'); break;
         case 'ad_revive': adStart('revive'); break;
@@ -1566,6 +1696,8 @@
           break;
         case 'lvl': break;
         default:
+          /* v0.15：在线奖励 6 档统一走前缀，别在 switch 里铺 6 个 case */
+          if (id.indexOf('online_o') === 0) { onlineClaim(id.slice(7)); break; }
           if (id.indexOf('lvpage_') === 0) {
             state.lvPage = +id.slice(7);
             state.pageT = 0;          // 重置入场错峰，让新一章重新入场
@@ -1790,6 +1922,8 @@
 
     function update(dt) {
       state.time += dt;
+      /* v0.15：在线时长记账（只在前台；切后台由 init 里的 onHide 停表） */
+      onlineTick(dt);
       if (state.page === 'play' && state.running && !state.overlay && !state.win) {
         state.elapsed += dt / 1000;
         /* v0.5 A：倒计时递减 → 映射生命值；归零即失败 */
@@ -2553,20 +2687,21 @@
       homeEntry('entry_task', 'task', '任务', lx, e0 + eg * 3,
         taskList().some(function (it) { return it.done && !it.got; }));
 
-      /* 在线奖励：图标 + 上方倒计时气泡（气泡不与任何标签同行） */
+      /* 在线奖励：图标 + 上方气泡。
+       * v0.15：气泡从「3 分钟倒计时」改成「今日累计时长」，有可领档位时变红显示「可领 N」，
+       * 图标右上角再补一个红点（与任务/邀请一致的提示语言）。 */
       homeEntry('entry_rank', 'rank', '排行榜', rx, e0);   // v0.8：右列顶部空位
-      homeEntry('online_claim', 'online', '在线奖励', rx, e0 + eg * 1.5);
-      var ol = onlineLeft();
-      var om = Math.floor(ol / 60), os2 = Math.floor(ol % 60);
-      var otxt = ol > 0 ? ((om < 10 ? '0' : '') + om + ':' + (os2 < 10 ? '0' : '') + os2) : '可领';
+      var oReady = onlineClaimCount();
+      homeEntry('online_claim', 'online', '在线奖励', rx, e0 + eg * 1.5, oReady > 0);
+      var otxt = oReady > 0 ? ('可领 ' + oReady) : onlineClock(onlineSecNow());
       var bbx = rx, bby = e0 + eg * 1.5 - 70, bw2 = 92, bh2 = 36;
       ctx.save();
       rr(bbx - bw2 / 2, bby - bh2 / 2, bw2, bh2, bh2 / 2);
-      ctx.fillStyle = ol > 0 ? 'rgba(255,255,255,0.95)' : '#FF5A5A';
+      ctx.fillStyle = oReady > 0 ? '#FF5A5A' : 'rgba(255,255,255,0.95)';
       ctx.fill();
       noShadow();
       ctx.restore();
-      text(otxt, bbx, bby, 19, ol > 0 ? COL.goldDeep : '#FFFFFF', 'center', '700');
+      text(otxt, bbx, bby, 19, oReady > 0 ? '#FFFFFF' : COL.goldDeep, 'center', '700');
 
       var startLabel = state.save.unlockedMax > 1
         ? '继续 第 ' + Math.min(state.save.unlockedMax, LEVELS.length) + ' 关'
@@ -3867,7 +4002,7 @@
      * 绝不静默自动播广告，也不把"广告"和"提示"两个概念混在一个按钮里。 */
     function renderHint() {
       var H = C.HINT, s = state.save, done = state.hintLv;
-      var ch = 800, cy = sheetBg(640, ch);
+      var ch = 900, cy = sheetBg(640, ch);
       sheetTitle('提示', cy, ch);
       var top = cy - ch / 2;
 
@@ -3888,19 +4023,31 @@
       text(H.descs[done], C.DESIGN.w / 2, top + 358, 26, COL.textSub, 'center');
 
       var busy = !!state.adSim || !!state.adWait;
-      var bAd = { id: 'hint_ad', x: C.DESIGN.w / 2, y: top + 470, w: 480, h: 104,
+      /* v0.15：提示卡（在线奖励 40/60 分钟给的）放在最上面 —— 已有道具先让用，
+       * 再往下才是看视频 / 花巧币，符合「能白嫖的先用掉」的直觉。 */
+      var items = s.hintItems || 0;
+      if (items > 0) {
+        var bItem = { id: 'hint_item', x: C.DESIGN.w / 2, y: top + 430, w: 460, h: 92,
+          label: '用提示卡 · 剩 ' + items, variant: 'primary', size: 28, disabled: busy };
+        addHit(bItem.x, bItem.y, bItem.w, bItem.h, 'hint_item');
+        drawButton(bItem);
+      } else {
+        text('没有提示卡 · 在线奖励 40 分钟可得', C.DESIGN.w / 2, top + 430, 21, COL.textSub, 'center');
+      }
+
+      var bAd = { id: 'hint_ad', x: C.DESIGN.w / 2, y: top + 534, w: 480, h: 98,
         label: '看视频 · 免费看', variant: 'danger', size: 30, icon: 'tv', disabled: busy };
       var canCoin = (s.coin || 0) >= H.coinCost && !busy;
-      var bCoin = { id: 'hint_coin', x: C.DESIGN.w / 2, y: top + 590, w: 420, h: 88,
+      var bCoin = { id: 'hint_coin', x: C.DESIGN.w / 2, y: top + 642, w: 420, h: 84,
         label: (s.coin || 0) >= H.coinCost ? ('花 ' + H.coinCost + ' 巧币') : '巧币不足，看视频吧',
         variant: 'secondary', size: 28, disabled: !canCoin };
       addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'hint_ad');
       addHit(bCoin.x, bCoin.y, bCoin.w, bCoin.h, 'hint_coin');
       drawButton(bAd); drawButton(bCoin);
 
-      text('用提示本关最高 ★★ · 重玩可再冲三星', C.DESIGN.w / 2, top + 672, 22, COL.textSub, 'center');
-      text('巧币余额 ' + (s.coin || 0), C.DESIGN.w / 2, top + 710, 22, COL.textSub, 'center');
-      sheetClose(top + 776, 'close_hint');
+      text('用提示本关最高 ★★ · 重玩可再冲三星', C.DESIGN.w / 2, top + 716, 22, COL.textSub, 'center');
+      text('巧币余额 ' + (s.coin || 0) + ' · 提示卡 ' + items, C.DESIGN.w / 2, top + 752, 22, COL.textSub, 'center');
+      sheetClose(top + 828, 'close_hint');
       adLayer();
     }
 
@@ -3987,6 +4134,67 @@
       }
       text('每日 0 点刷新', C.DESIGN.w / 2, top + 620, 22, COL.textSub, 'center');
       sheetClose(top + 740, 'close_sheet');
+      adLayer();
+    }
+
+    /* 在线奖励（v0.15）：今日累计时长 + 6 档奖励
+     * 版式：顶部大号累计时长 + 到下一档的进度条，下面 6 行档位，
+     * 每行左边「在线 N 分钟 + 奖励内容」，右边 领取/已领取/还差 mm:ss。
+     * 卡片 1180 高，上下各留 222，关闭按钮压在中轴，不压安全区。 */
+    function renderOnline() {
+      var cy = sheetBg(680, 1180), top = cy - 1180 / 2;
+      sheetTitle('在线奖励', cy, 1180);
+      var sec = onlineSecNow(), arr = onlineTierList();
+      var i;
+
+      text('今日累计在线', C.DESIGN.w / 2, top + 112, 22, COL.textSub, 'center');
+      text(onlineClock(sec), C.DESIGN.w / 2, top + 158, 54, COL.goldDeep, 'center', '700');
+
+      /* 进度条：到「下一个还没领的档」的完成度。全领完就满格 */
+      var next = null;
+      for (i = 0; i < arr.length; i++) { if (!arr[i].got) { next = arr[i]; break; } }
+      var p = next ? Math.min(1, sec / next.at) : 1;
+      var bx = C.DESIGN.w / 2 - 260, bw = 520, by = top + 204;
+      ctx.save();
+      rr(bx, by, bw, 12, 6); ctx.fillStyle = COL.track; ctx.fill();
+      if (p > 0) { rr(bx, by, Math.max(12, bw * p), 12, 6); ctx.fillStyle = COL.gold; ctx.fill(); }
+      ctx.restore();
+      var readyN = onlineClaimCount();
+      var note = readyN > 0 ? ('有 ' + readyN + ' 档奖励可领')
+        : (!next ? '今天的奖励已全部领完'
+          : ('距「' + next.label + '」还差 ' + onlineClock(next.left)));
+      text(note + ' · 每日 0 点重新统计', C.DESIGN.w / 2, top + 240, 20, COL.textSub, 'center');
+
+      for (i = 0; i < arr.length; i++) {
+        var t = arr[i], y = top + 318 + i * 122;
+        ctx.save();
+        rr(55, y - 56, 640, 112, 20);
+        ctx.fillStyle = t.ready ? 'rgba(255,185,61,0.13)' : 'rgba(74,51,39,0.05)';
+        ctx.fill();
+        if (t.ready) { ctx.lineWidth = 2; ctx.strokeStyle = COL.gold; ctx.stroke(); }
+        ctx.restore();
+
+        text('在线 ' + t.label, 86, y - 18, 27, COL.text, 'left', '600');
+        var rw = [];
+        if (t.energy) rw.push('体力 +' + t.energy);
+        if (t.coin) rw.push('巧币 +' + t.coin);
+        if (t.hint) rw.push('提示卡 +' + t.hint);
+        text(rw.join('   '), 86, y + 22, 21, t.got ? COL.textSub : COL.goldDeep, 'left');
+
+        var label = t.got ? '已领取' : (t.ready ? '领取' : ('差 ' + onlineClock(t.left)));
+        var b = {
+          id: 'online_' + t.id, x: 596, y: y, w: 150, h: 70,
+          label: label, variant: t.ready ? 'primary' : 'secondary',
+          size: t.ready || t.got ? 24 : 20,
+          disabled: t.got || !t.ready
+        };
+        addHit(b.x, b.y, b.w, b.h, b.id);
+        drawButton(b);
+      }
+
+      text('提示卡 ×' + (state.save.hintItems || 0) + ' · 关卡提示面板可直接使用',
+        C.DESIGN.w / 2, top + 1030, 21, COL.textSub, 'center');
+      sheetClose(top + 1112, 'close_sheet');
       adLayer();
     }
 
@@ -4088,6 +4296,7 @@
       else if (state.overlay === 'hint') renderHint();
       else if (state.overlay === 'energy') renderEnergy();
       else if (state.overlay === 'tasks') renderTasks();
+      else if (state.overlay === 'online') renderOnline();
       else if (state.overlay === 'invite') renderInvite();
       else if (state.overlay === 'desktop') renderDesktop();
       else if (state.overlay === 'skin') renderSkin();
@@ -4210,8 +4419,23 @@
           if (C.CLOUD.pullOnBoot) cloudPull();
         });
       }
-      if (env.onHide) env.onHide(function () { state.running = false; });
-      if (env.onShow) env.onShow(function () { if (state.page === 'play' && !state.win && !state.overlay) state.running = true; lastT = 0; });
+      if (env.onHide) env.onHide(function () {
+        state.running = false;
+        /* v0.15：切后台停表 + 落一次盘（onlineSec 不 persist 到云端，只写本地） */
+        onlineSync();
+        state.onlineMark = 0;
+        state.onlineSaveT = 0;
+        writeLocal(true);            // 只记时长，不动 updatedAt
+      });
+      if (env.onShow) env.onShow(function () {
+        if (state.page === 'play' && !state.win && !state.overlay) state.running = true;
+        /* v0.15：回前台重新起表（第一次进游戏时 mark 由 init 末尾设置） */
+        state.onlineMark = Date.now();
+        lastT = 0;
+      });
+      /* v0.15：起表。老存档没有 onlineDay，这里会顺手清零并从 0 开始累计 */
+      onlineRoll();
+      state.onlineMark = Date.now();
       lastT = 0;
       frame(nowMs());
     }
@@ -4223,9 +4447,13 @@
       _debug: { judgeNow: judgeNow, setupLevel: setupLevel, useSet: useSet, win: win,
         handleAt: handleDesign,   // v0.3.2 B1：测试用，返回手柄圆心的设计坐标
         /* v0.5：经济/体力/倒计时/皮肤的工具函数，供 verify_v05 直接驱动 */
-        fireBtn: fireBtn, syncEnergy: syncEnergy, claimOnline: claimOnline,
+        fireBtn: fireBtn, syncEnergy: syncEnergy, onlineClaim: onlineClaim,
         claimTask: claimTask, applySkin: applySkin, grantFreeEnergy: grantFreeEnergy,
-        doRevive: doRevive, taskList: taskList, onlineLeft: onlineLeft,
+        doRevive: doRevive, taskList: taskList,
+        /* v0.15：在线奖励（6 档 / 每日 0 点清零）与提示卡 */
+        onlineSecNow: onlineSecNow, onlineTierList: onlineTierList,
+        onlineClaimCount: onlineClaimCount, onlineClock: onlineClock,
+        onlineSync: onlineSync, useHintItem: useHintItem, onlineTick: onlineTick,
         timeLimitOf: timeLimitOf, heartsOf: heartsOf, totalStars: totalStars,
         /* v0.9：云同步 / 广告 / 榜单，供 verify_v09 直接驱动 */
         cloudPush: cloudPush, cloudPull: cloudPull, cloudRank: cloudRank,

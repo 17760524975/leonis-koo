@@ -38,9 +38,9 @@ animation/ art-src/ audio-src/   动效演示、素材源文件
 ## 开发约定
 
 - `js/` 是唯一真源，`preview/js/` 与 `miniprogram/js/` 由 `node tools/sync.js` 同步，**不要手改副本**。
-- 改完必须跑：`node tools/sync.js && node tools/verify_v14.js && node tools/verify_v11.js && node tools/verify_audio.js && node tools/smoke.js`。
+- 改完必须跑：`node tools/sync.js && node tools/verify_v15.js && node tools/verify_v14.js && node tools/verify_v11.js && node tools/verify_audio.js && node tools/smoke.js`。
 - 关卡数据变更需跑 `verify_levels.js` / `verify_tangram7.js` / `verify_tangram7_geometry.js`。
-- 截图验收：`node tools/shot_v11.js`（提示/对局页）、`node tools/shot_v14.js`（设置页资料态/榜单头像）。
+- 截图验收：`node tools/shot_v11.js`（提示/对局页）、`node tools/shot_v14.js`（设置页资料态/榜单头像）、`node tools/shot_v15.js`（在线奖励页/主页气泡/提示卡）。
 - 玩家资料：`miniprogram/js/wxprofile.js`（只有小程序端有）；`core` 只认 `env.profile`，浏览器预览自动降级。
 - 音频链路：`node tools/verify_audio.js`（wx 桩真跑 game.js）+ `tools/audio_probe.html`（真实浏览器跑预览端 `<audio>`）。
 - 换关卡 BGM：把 mp3 丢进 `audio/`，按 `1_/2_/3_/4_` 前缀命名，跑 `cd tools/audiokit && node build.mjs`（90s/48kbps 单声道，4 首约 2.0MB）。
@@ -67,6 +67,7 @@ animation/ art-src/ audio-src/   动效演示、素材源文件
 | v0.14 | 微信登录态下的玩家资料：`createUserInfoButton` 授权拿微信昵称头像、`showKeyboard` 改名、设置页资料卡、榜单头像、云端 `players` 加 nick/avatar/src/auth |
 | v0.14.1 | 修「进关卡音乐没了/卡顿」：预载不再 `play→pause` 掐正在放的曲、只做一次、解锁当拍不再同步解码；首播看门狗；进关卡主页曲 150ms 淡出让位 |
 | v0.14.2 | 修「回主页没音乐」：WebAudioContext 被系统挂起后自动 `resume`（homeStart / tick / 每次点击 / 切前台），闸门写入防被旧淡出覆盖 |
+| v0.15 | 每日在线奖励页：今日累计在线时长 + 6 档（1/5/10/20/40/60 分钟）按档领取，每日 0 点清零；新增「提示卡」道具并在提示面板可直接使用 |
 
 ## 代码存档
 

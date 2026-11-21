@@ -183,6 +183,9 @@
         S.selId = S.pieces[2] && S.pieces[2].id;
       }
       if (screen === 'hint') {
+        /* v0.15：&items=<n> 提示卡数量（0/不传 = 没有卡，看「获取指引」文案） */
+        var hit0 = +(q.match(/items=(\d+)/) || [])[1];
+        S.save.hintItems = isNaN(hit0) ? 0 : hit0;
         /* v0.10：hinttier=1/2/3 指定「提示阶梯」的哪一档（与 tier= 的目标轮廓档不是一回事）
          * v0.11：hintbad=N 把第 N 块摆歪，用来截「已上板但没放对」的提示；
          *        不指定时按真实逻辑取第一块没上板的（旧版固定指 solution[0]，
@@ -229,6 +232,9 @@
       S.hintLv = hl; S.hintUsed = true;
       var coinQ = +(q.match(/coin=(\d+)/) || [])[1];
       S.save.coin = isNaN(coinQ) ? 168 : coinQ;
+      /* v0.15：&items=<n> 提示卡数量（0/不传 = 没有卡） */
+      var itemQ = +(q.match(/items=(\d+)/) || [])[1];
+      S.save.hintItems = isNaN(itemQ) ? 0 : itemQ;
       S.overlay = 'hint';
     } else if (screen === 'rank') {
       /* v0.8：排行榜浮层（tab=0 主线 / 1 连胜 / 2 好友） */
@@ -263,7 +269,7 @@
       if (/net=1/.test(q)) S.net = { on: true, ready: true, nick: '巧手0921', syncing: false, ts: 1, err: '' };
       S.page = 'home'; S.fade = 1; S.overlay = 'settings';
     } else if (screen === 'energy' || screen === 'tasks' || screen === 'invite' ||
-               screen === 'desktop' || screen === 'skin') {
+               screen === 'desktop' || screen === 'skin' || screen === 'online') {
       /* v0.5：主页弹窗截图（体力/任务/邀请/桌面/皮肤） */
       S.page = 'home'; S.fade = 1; S.pageT = 9999; S.overlay = screen;
       S.save.coin = 168; S.save.energy = 12;
@@ -275,6 +281,18 @@
         S.save.starOf = { 1: 3, 2: 2 };
       }
       if (screen === 'invite') { S.save.inviteCount = 2; }
+      if (screen === 'online') {
+        /* v0.15：&online=<秒> 今日累计时长；&ogot=1,2 已领档位；&items=<n> 提示卡数量 */
+        var os = +(q.match(/online=(\d+)/) || [])[1];
+        if (!isNaN(os)) S.save.onlineSec = os;
+        var td2 = new Date();
+        S.save.onlineDay = td2.getFullYear() + '-' + (td2.getMonth() + 1) + '-' + td2.getDate();
+        S.save.onlineGot = {};
+        var og = (q.match(/ogot=([\d,]+)/) || [])[1];
+        if (og) og.split(',').forEach(function (n) { S.save.onlineGot['o' + n] = true; });
+        var it = +(q.match(/items=(\d+)/) || [])[1];
+        S.save.hintItems = isNaN(it) ? 0 : it;
+      }
     } else if (screen === 'fail') {
       /* v0.5：复活弹窗（倒计时归零） */
       var LIBF = game._debug.LEVELS;
@@ -284,6 +302,14 @@
       S.timeLeft = 0; S.hearts = 0;
       S.overlay = 'fail'; S.failT = 0;
       S.save.streak = 1; S.save.coin = 210;
+    }
+    /* v0.15：主页也支持 &online=<秒>，用来看「可领 N」气泡与累计时长气泡 */
+    var qOn = +(q.match(/online=(\d+)/) || [])[1];
+    if (!isNaN(qOn) && screen === 'home') {
+      var qd = new Date();
+      S.save.onlineDay = qd.getFullYear() + '-' + (qd.getMonth() + 1) + '-' + qd.getDate();
+      S.save.onlineSec = qOn;
+      S.save.onlineGot = {};
     }
     /* v0.3.4 A4a：?flower=<ms> 冻结鲜花在某关键帧，便于 headless 截图逐帧验收。
      * >660ms 时同时打开结算面板，检查「鲜花不吞结算按钮、面板画在鲜花之上」。 */

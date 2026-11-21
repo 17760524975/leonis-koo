@@ -206,14 +206,19 @@ const cTask2 = S.save.coin;
 D.claimTask('t1');
 check('重复领取无效', S.save.coin === cTask2);
 
-console.log('\n==== 10. 在线奖励 ====');
-S.save.onlineTs = Date.now() - (C.ECON.onlineRewardSec + 5) * 1000;
-check('到点可领（剩余 0s）', D.onlineLeft() === 0, 'left=' + D.onlineLeft().toFixed(1));
+console.log('\n==== 10. 在线奖励（v0.15 起改为 6 档累计，完整用例见 verify_v15） ====');
+/* 旧的「每 3 分钟领 10 巧币」已被按累计时长解锁的 6 档取代。
+ * 这里只保留最小回归：字段存在 + 第一档能领 + 不能重复领。 */
+check('存档有在线累计字段（onlineDay / onlineSec / onlineGot）',
+  typeof S.save.onlineDay === 'string' && typeof S.save.onlineSec === 'number' &&
+  !!S.save.onlineGot && typeof S.save.onlineGot === 'object');
+check('旧的 onlineTs 字段已移除', S.save.onlineTs === undefined);
+S.save.onlineSec = 70;
+S.save.onlineGot = {};
 const cOn = S.save.coin;
-D.claimOnline();
-check('领取 +' + C.ECON.onlineRewardCoin + ' 巧币', S.save.coin === cOn + C.ECON.onlineRewardCoin,
-  cOn + '→' + S.save.coin);
-check('领取后重新计时', D.onlineLeft() > 0, 'left=' + D.onlineLeft().toFixed(0) + 's');
+check('到点可领（1 分钟档）', D.onlineClaim('o1') === true);
+check('领取 +5 巧币', S.save.coin === cOn + 5, cOn + '→' + S.save.coin);
+check('重复领取无效', D.onlineClaim('o1') === false && S.save.coin === cOn + 5);
 
 console.log('\n==== 11. 皮肤切换 ====');
 D.applySkin('mint');
