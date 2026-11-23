@@ -398,6 +398,23 @@
     /* v0.5：?skin=warm|mint|night 预览皮肤 */
     var skinKey = (q.match(/skin=(\w+)/) || [])[1];
     if (skinKey && C.SKINS[skinKey]) { game._debug.applySkin(skinKey); S.toast = null; }
+    /* v0.27：视觉风格截图参数
+     *   ?bgfx=aurora|stars|bubbles|petals|geometric|classic  背景特效
+     *   &pstyle=candy|wood|neon|pastel|classic               板件样式
+     *   &sfx=bell|water|retro|wood                           音效风格（仅状态，截图无声）
+     *   &skinpanel=1&skintab=0..3                            直接打开皮肤面板并选页签 */
+    var bgfxKey = (q.match(/bgfx=(\w+)/) || [])[1];
+    if (bgfxKey && game._debug.applyBgFx) game._debug.applyBgFx(bgfxKey);
+    var psKey = (q.match(/pstyle=(\w+)/) || [])[1];
+    if (psKey && game._debug.applyPieceStyle) game._debug.applyPieceStyle(psKey);
+    var sfxKey2 = (q.match(/sfx=(\w+)/) || [])[1];
+    if (sfxKey2 && game._debug.applySfxStyle) game._debug.applySfxStyle(sfxKey2);
+    if ((q.match(/skinpanel=(\d+)/) || [])[1] === '1') {
+      S.overlay = 'skin';
+      var st = +(q.match(/skintab=(\d+)/) || [])[1];
+      if (!isNaN(st)) S.skinTab = st;
+    }
+    S.toast = null;
     /* v0.5：?toast=1 关闭提示气泡，避免遮挡截图 */
     if ((q.match(/notoast=(\d+)/) || [])[1] === '1') S.toast = null;
     gameRef = game;

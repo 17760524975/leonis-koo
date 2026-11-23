@@ -269,6 +269,8 @@
       resT: 0,
       streakGain: 0,          // v0.8 本次通关拿到的连胜奖励巧币（0=没到里程碑）
       rankTab: 0,             // v0.8 排行榜当前页签
+      skinTab: 0,             // v0.27 皮肤面板分类页签（0配色 1背景 2板件 3音效）
+      fxParts: null,          // v0.27 背景特效粒子缓存（惰性初始化，按当前 bgFx 生成）
       rankBack: null,         // v0.8 打开排行榜前的浮层（结算页 → 'result'，主页 → null）
       rankT: 0,               // v0.8 排行榜入场动画时钟
       /* v0.9 云端：登录态 / 榜单缓存 / 同步状态。没有云环境时全部保持默认，
@@ -330,6 +332,10 @@
         hintItems: 0,             // v0.16：查找道具（在线奖励 40/60 分钟、邀请有礼给），跨天不清
         inviteCount: 0, inviteDay: '',
         skin: 'warm',
+        /* v0.27 视觉升级：三类独立风格，缺省为经典组合 */
+        bgFx: 'classic',          // 主页动态背景特效（见 C.BG_FX）
+        pieceStyle: 'classic',    // 板件样式（见 C.PIECE_STYLES）
+        sfxStyle: 'wood',         // 音效风格（见 C.SFX_STYLES）
         bgmIdx: 0,
         streak: 0,
         /* v0.18：历史最高连胜。榜单按它排（当前连胜会因一次失手归零，
@@ -388,6 +394,10 @@
             /* v0.14：老存档没有 profile，留 null 让登录后由云端补 */
             s.profile = (o.profile && typeof o.profile === 'object') ? o.profile : null;
             s.skin = o.skin || 'warm';
+            /* v0.27：老存档缺视觉风格字段 → 缺省经典组合；非法值也收敛，避免渲染分支落空 */
+            s.bgFx = (C.BG_FX && C.BG_FX[o.bgFx]) ? o.bgFx : 'classic';
+            s.pieceStyle = (C.PIECE_STYLES && C.PIECE_STYLES[o.pieceStyle]) ? o.pieceStyle : 'classic';
+            s.sfxStyle = (C.SFX_STYLES && C.SFX_STYLES[o.sfxStyle]) ? o.sfxStyle : 'wood';
             s.bgmIdx = (typeof o.bgmIdx === 'number') ? o.bgmIdx : 0;
             s.streak = (typeof o.streak === 'number') ? o.streak : 0;
             /* v0.18：老存档没有 bestStreak —— 用当前连胜兜底（宁可少不能凭空多），
@@ -1060,17 +1070,55 @@
     }
 
     /* ---- 皮肤（只覆盖配色，动态改 COL 字段以让闭包引用同步生效） ---- */
+    /* v0.28 refreshPalette：先铺所选皮肤，再叠「深色背景特效」的暗色板。
+     * 顺序固定 皮肤→暗色板，保证换肤 / 换背景都能得到正确对比度（否则深色夜空配深色字会看不清）。 */
+    function refreshPalette() {
+      var sk = C.SKINS[state.save.skin || 'warm'];
+      if (sk) { for (var k in sk) { if (k !== 'name') COL[k] = sk[k]; } }
+      var fx = C.BG_FX && C.BG_FX[state.save.bgFx || 'classic'];
+      state.darkFx = !!(fx && fx.dark);
+      if (state.darkFx && C.DARK_PAL) {
+        for (var d in C.DARK_PAL) { COL[d] = C.DARK_PAL[d]; }
+      }
+    }
     function applySkin(key) {
       var sk = C.SKINS[key];
       if (!sk) return;
       state.save.skin = key;
-      for (var k in sk) { if (k !== 'name') COL[k] = sk[k]; }
+      refreshPalette();
       persist();
       toast('皮肤：' + sk.name);
     }
     function initSkin() {
-      var sk = C.SKINS[state.save.skin || 'warm'];
-      if (sk) { for (var k in sk) { if (k !== 'name') COL[k] = sk[k]; } }
+      /* v0.27：视觉风格三件套随存档恢复。板件样式/背景特效是纯绘制状态，
+       * 音效风格需要通知音频层（两端 game.js 实现了 setSfxStyle）。 */
+      refreshPalette();
+      state.fxParts = null;
+      if (env.audio && env.audio.setSfxStyle) env.audio.setSfxStyle(state.save.sfxStyle || 'wood');
+    }
+
+    /* ---- v0.27：三类视觉风格的切换 ---- */
+    function applyBgFx(key) {
+      if (!C.BG_FX || !C.BG_FX[key]) return;
+      state.save.bgFx = key;
+      state.fxParts = null;          // 换了特效 → 下一帧重新生成粒子
+      refreshPalette();              // v0.28：深/浅特效切换时同步换字色 / 卡色
+      persist();
+      toast('背景：' + C.BG_FX[key].name);
+    }
+    function applyPieceStyle(key) {
+      if (!C.PIECE_STYLES || !C.PIECE_STYLES[key]) return;
+      state.save.pieceStyle = key;
+      persist();
+      toast('板件：' + C.PIECE_STYLES[key].name);
+    }
+    function applySfxStyle(key) {
+      if (!C.SFX_STYLES || !C.SFX_STYLES[key]) return;
+      state.save.sfxStyle = key;
+      if (env.audio && env.audio.setSfxStyle) env.audio.setSfxStyle(key);
+      persist();
+      env.audio.play('sfx_pick');    // 立即试听，切换手感可感知
+      toast('音效：' + C.SFX_STYLES[key].name);
     }
 
     /* ---- 模拟广告（个人主体无流量主：adSimMs 进度条后发奖） ---- */
@@ -2088,7 +2136,7 @@
         case 'to_home_from_result': state.overlay = null; go('home'); break;
         /* v0.5：HUD / 主页入口 / 弹窗按钮 */
         case 'hud_energy': state.overlay = 'energy'; break;
-        case 'entry_desktop': state.overlay = 'desktop'; break;
+        /* v0.28：entry_desktop「添加桌面」已按用户要求下线 */
         case 'entry_skin': state.overlay = 'skin'; break;
         case 'entry_invite': state.overlay = 'invite'; break;
         /* v0.16：主页「任务」入口下线（用户要求，不再有每日任务） */
@@ -2115,6 +2163,8 @@
         case 'skin_warm': applySkin('warm'); break;
         case 'skin_mint': applySkin('mint'); break;
         case 'skin_night': applySkin('night'); break;
+        case 'skin_sunset': applySkin('sunset'); break;
+        case 'skin_ocean': applySkin('ocean'); break;
         case 'invite_share': adStart('invite'); break;
         case 'close_sheet':
         case 'close_energy':
@@ -2124,6 +2174,11 @@
           break;
         case 'lvl': break;
         default:
+          /* v0.27：皮肤面板页签 + 三类风格项（前缀统一分发） */
+          if (id.indexOf('skin_tab_') === 0) { state.skinTab = +id.slice(9) || 0; break; }
+          if (id.indexOf('bgfx_') === 0) { applyBgFx(id.slice(5)); break; }
+          if (id.indexOf('pstyle_') === 0) { applyPieceStyle(id.slice(7)); break; }
+          if (id.indexOf('sfx_') === 0) { applySfxStyle(id.slice(4)); break; }
           /* v0.15：在线奖励 6 档统一走前缀，别在 switch 里铺 6 个 case */
           if (id.indexOf('online_o') === 0) { onlineClaim(id.slice(7)); break; }
           if (id.indexOf('lvpage_') === 0) {
@@ -2337,6 +2392,7 @@
 
     function update(dt) {
       state.time += dt;
+      state.dt = dt;                // v0.27：供背景粒子层按真实帧间隔推进
       /* v0.15：在线时长记账（只在前台；切后台由 init 里的 onHide 停表） */
       onlineTick(dt);
       if (state.page === 'play' && state.running && !state.overlay && !state.win) {
@@ -2749,6 +2805,18 @@
       ctx.restore();
     }
 
+    /* v0.28 图标重设计：货币 / 道具 / 入口图标改成「彩色徽章」质感（渐变 + 高光 + 暗描边），
+     * 工具图标（返回/旋转/翻转/关闭等）维持线性风格不动，避免破坏操作语义。
+     * 所有图标只依赖传入 color，不写死皮肤色，换肤自然跟随。 */
+    function badgeDisc(rad, c1, c2, edge) {
+      var g = ctx.createLinearGradient(-rad * 0.6, -rad, rad * 0.5, rad);
+      g.addColorStop(0, c1); g.addColorStop(1, c2);
+      ctx.beginPath(); ctx.arc(0, 0, rad, 0, Math.PI * 2);
+      ctx.fillStyle = g; ctx.fill();
+      ctx.lineWidth = 2.4; ctx.strokeStyle = edge || 'rgba(0,0,0,0.18)'; ctx.stroke();
+      ctx.beginPath(); ctx.arc(-rad * 0.28, -rad * 0.32, rad * 0.34, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.42)'; ctx.fill();
+    }
     function drawIcon(name, cx, cy, color, s) {
       s = s || 1;
       ctx.save();
@@ -2757,7 +2825,112 @@
       ctx.strokeStyle = color; ctx.fillStyle = color;
       ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       var r = 22;
-      if (name === 'back') {
+
+      /* ---------- 彩色徽章系：巧币 / 体力 / 查找 / 排行榜 / 在线奖励 / 礼物 ---------- */
+      if (name === 'coin') {
+        /* 金币：三层同心 + 星形压印 + 高光，比原来的「圆+竖纹」更像收藏币 */
+        badgeDisc(15.5, '#FFE07A', '#F5A623', 'rgba(150,90,10,0.55)');
+        ctx.strokeStyle = 'rgba(150,90,10,0.42)'; ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = '#B86E12';
+        ctx.beginPath();
+        for (var ci = 0; ci < 10; ci++) {
+          var ca = -Math.PI / 2 + ci * Math.PI / 5, cr = ci % 2 === 0 ? 6.6 : 2.9;
+          var cxx = Math.cos(ca) * cr, cyy = Math.sin(ca) * cr;
+          if (ci === 0) ctx.moveTo(cxx, cyy); else ctx.lineTo(cxx, cyy);
+        }
+        ctx.closePath(); ctx.fill();
+      } else if (name === 'energy') {
+        /* 体力：蓝色能量珠 + 白色闪电，闪电带深色描边更立体 */
+        badgeDisc(15.5, '#8FE3FF', '#22A9E8', 'rgba(12,78,128,0.5)');
+        ctx.beginPath();
+        ctx.moveTo(3, -11); ctx.lineTo(-8, 1.5); ctx.lineTo(-1.5, 1.5);
+        ctx.lineTo(-4, 11); ctx.lineTo(8.5, -2.5); ctx.lineTo(1.5, -2.5);
+        ctx.closePath();
+        ctx.lineWidth = 2.4; ctx.strokeStyle = '#0E6FA8'; ctx.stroke();
+        ctx.fillStyle = '#FFFFFF'; ctx.fill();
+      } else if (name === 'hint') {
+        /* 查找道具：放大镜 + 镜柄 + 镜内星芒（"找"的语义，而不是灯泡） */
+        ctx.lineWidth = 3.4; ctx.strokeStyle = shadeHex(color, -0.15);
+        ctx.beginPath(); ctx.arc(-2, -3, 9.5, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = hexA(color, 0.22); ctx.fill();
+        ctx.lineWidth = 4.6; ctx.beginPath();
+        ctx.moveTo(5, 4.5); ctx.lineTo(13, 13); ctx.stroke();
+        ctx.lineWidth = 1.8; ctx.strokeStyle = shadeHex(color, -0.3);
+        ctx.beginPath(); ctx.moveTo(-2, -9); ctx.lineTo(-2, 3);
+        ctx.moveTo(-8, -3); ctx.lineTo(4, -3); ctx.stroke();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.beginPath(); ctx.arc(-4.5, -6, 2.1, 0, Math.PI * 2); ctx.fill();
+      } else if (name === 'rank') {
+        /* 排行榜：奖杯（杯身 + 双耳 + 底座），替换原三根柱子 */
+        ctx.lineWidth = 3; ctx.strokeStyle = shadeHex(color, -0.18);
+        ctx.beginPath(); ctx.moveTo(-9, -11); ctx.lineTo(9, -11);
+        ctx.lineTo(6, -1); ctx.quadraticCurveTo(0, 5, -6, -1); ctx.closePath();
+        ctx.fillStyle = hexA(color, 0.42); ctx.fill(); ctx.stroke();
+        ctx.beginPath(); ctx.arc(-11, -7, 4, Math.PI * 0.5, Math.PI * 1.5); ctx.stroke();
+        ctx.beginPath(); ctx.arc(11, -7, 4, Math.PI * 0.5, Math.PI * 1.5); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, 4); ctx.lineTo(0, 10); ctx.stroke();
+        ctx.lineWidth = 3.6; ctx.beginPath(); ctx.moveTo(-9, 12); ctx.lineTo(9, 12); ctx.stroke();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.beginPath(); ctx.arc(0, -6, 2.4, 0, Math.PI * 2); ctx.fill();
+      } else if (name === 'online' || name === 'gift') {
+        /* 在线奖励/礼物：礼盒 + 丝带蝴蝶结 + 点点闪光 */
+        ctx.fillStyle = hexA(color, 0.30);
+        ctx.strokeStyle = shadeHex(color, -0.2); ctx.lineWidth = 2.6;
+        rr(-13, -6, 26, 17, 3); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = hexA(color, 0.46);
+        rr(-15, -10, 30, 6, 2); ctx.fill(); ctx.stroke();
+        ctx.lineWidth = 2.6; ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(0, 11); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, -10); ctx.quadraticCurveTo(-12, -20, -7, -11); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, -10); ctx.quadraticCurveTo(12, -20, 7, -11); ctx.stroke();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.beginPath(); ctx.arc(9, 1, 2, 0, Math.PI * 2); ctx.fill();
+      } else if (name === 'gear') {
+        /* 设置：真齿轮 + 中心孔，加一圈浅色高光环 */
+        ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2);
+        ctx.strokeStyle = shadeHex(color, -0.12); ctx.lineWidth = 3.4; ctx.stroke();
+        ctx.fillStyle = color;
+        for (var gi = 0; gi < 8; gi++) {
+          ctx.save(); ctx.rotate(gi * Math.PI / 4);
+          rr(-3.4, -16.5, 6.8, 7, 2); ctx.fill();
+          ctx.restore();
+        }
+        ctx.beginPath(); ctx.arc(0, 0, 3.8, 0, Math.PI * 2);
+        ctx.fillStyle = hexA(color, 0.35); ctx.fill();
+        ctx.strokeStyle = shadeHex(color, -0.2); ctx.lineWidth = 2.4; ctx.stroke();
+      } else if (name === 'heart') {
+        /* 生命心：渐变 + 高光点 */
+        var hg = ctx.createLinearGradient(0, -12, 0, 12);
+        hg.addColorStop(0, shadeHex(color, 0.28)); hg.addColorStop(1, color);
+        ctx.beginPath();
+        ctx.moveTo(0, 14);
+        ctx.bezierCurveTo(-21, -2, -14, -17, 0, -7);
+        ctx.bezierCurveTo(14, -17, 21, -2, 0, 14);
+        ctx.closePath(); ctx.fillStyle = hg; ctx.fill();
+        ctx.beginPath(); ctx.arc(-5, -5, 2.6, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.62)'; ctx.fill();
+      } else if (name === 'invite') {
+        /* 邀请有礼：两个人形 + 中间心 */
+        ctx.lineWidth = 3; ctx.strokeStyle = shadeHex(color, -0.15);
+        ctx.beginPath(); ctx.arc(-8, -7, 5, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(8, -7, 5, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(-8, 15, 10, Math.PI * 1.12, Math.PI * 1.88); ctx.stroke();
+        ctx.beginPath(); ctx.arc(8, 15, 10, Math.PI * 1.12, Math.PI * 1.88); ctx.stroke();
+        ctx.fillStyle = '#FF6B8A';
+        ctx.beginPath(); ctx.moveTo(0, 2);
+        ctx.bezierCurveTo(-7, -4, -4, -9, 0, -5);
+        ctx.bezierCurveTo(4, -9, 7, -4, 0, 2); ctx.closePath(); ctx.fill();
+      } else if (name === 'skin') {
+        /* 皮肤：调色盘 + 三色颜料点 */
+        ctx.lineWidth = 3; ctx.strokeStyle = shadeHex(color, -0.15);
+        if (ctx.ellipse) { ctx.beginPath(); ctx.ellipse(0, 0, 17, 13, 0, 0, Math.PI * 2); ctx.stroke(); }
+        else { ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.stroke(); }
+        var dots = ['#FF6B6B', '#4FA8E0', '#63C88B'];
+        for (var di = 0; di < 3; di++) {
+          ctx.beginPath(); ctx.arc(-7 + di * 8, -3 + (di === 1 ? -4 : 0), 3, 0, Math.PI * 2);
+          ctx.fillStyle = dots[di]; ctx.fill();
+        }
+      } else if (name === 'back') {
         ctx.beginPath();
         ctx.moveTo(6, -r); ctx.lineTo(-8, 0); ctx.lineTo(6, r);
         ctx.stroke();
@@ -2788,18 +2961,6 @@
         ctx.beginPath();
         ctx.moveTo(-13, 7); ctx.lineTo(-6, 1.5); ctx.lineTo(-6, 12.5);
         ctx.closePath(); ctx.fill();
-      } else if (name === 'hint') {
-        // 灯泡：圆 + 颈 + 两道底边
-        ctx.lineWidth = 3.2;
-        ctx.beginPath();
-        ctx.arc(0, -3, 11, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(-5, 7); ctx.lineTo(-5, 12); ctx.lineTo(5, 12); ctx.lineTo(5, 7);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(-4, 17); ctx.lineTo(4, 17);
-        ctx.stroke();
       } else if (name === 'restart') {
         ctx.beginPath();
         ctx.arc(0, 0, r * 0.85, -0.6, 4.4);
@@ -2808,60 +2969,12 @@
         ctx.beginPath();
         ctx.moveTo(ax - 9, ay - 1); ctx.lineTo(ax + 5, ay + 6); ctx.lineTo(ax + 2, ay - 9);
         ctx.closePath(); ctx.fill();
-      } else if (name === 'gear') {
-        // 真齿轮：环形主体 + 8 个实心梯形齿 + 中心孔（原版是"圆 + 8 条放射线"，看着像太阳）
-        ctx.beginPath();
-        ctx.arc(0, 0, 10.5, 0, Math.PI * 2);
-        ctx.stroke();
-        for (var gi = 0; gi < 8; gi++) {
-          ctx.save();
-          ctx.rotate(gi * Math.PI / 4);
-          ctx.beginPath();
-          ctx.moveTo(-3.2, -10);
-          ctx.lineTo(-2.2, -15.5);
-          ctx.lineTo(2.2, -15.5);
-          ctx.lineTo(3.2, -10);
-          ctx.closePath();
-          ctx.fill();
-          ctx.restore();
-        }
-        ctx.beginPath();
-        ctx.arc(0, 0, 3.6, 0, Math.PI * 2);
-        ctx.stroke();
       } else if (name === 'lock') {
         ctx.lineWidth = 3.5;
         rr(-11, -2, 22, 18, 4); ctx.fill();
         ctx.beginPath();
         ctx.arc(0, -3, 7, Math.PI, 0);
         ctx.stroke();
-      } else if (name === 'coin') {
-        // 金币：实心圆 + 内圈 + 竖纹
-        ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI * 2); ctx.fill();
-        ctx.save();
-        ctx.strokeStyle = 'rgba(255,255,255,0.82)'; ctx.lineWidth = 2.2;
-        ctx.beginPath(); ctx.arc(0, 0, 9.6, 0, Math.PI * 2); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(0, -5); ctx.lineTo(0, 5);
-        ctx.moveTo(-4, -1.5); ctx.lineTo(4, -1.5); ctx.stroke();
-        ctx.restore();
-      } else if (name === 'energy') {
-        // 闪电
-        ctx.beginPath();
-        ctx.moveTo(3, -17); ctx.lineTo(-12, 2); ctx.lineTo(-1, 2);
-        ctx.lineTo(-4, 17); ctx.lineTo(12, -3); ctx.lineTo(1, -3);
-        ctx.closePath(); ctx.fill();
-      } else if (name === 'heart') {
-        ctx.beginPath();
-        ctx.moveTo(0, 14);
-        ctx.bezierCurveTo(-21, -2, -14, -17, 0, -7);
-        ctx.bezierCurveTo(14, -17, 21, -2, 0, 14);
-        ctx.closePath(); ctx.fill();
-      } else if (name === 'gift') {
-        ctx.lineWidth = 3;
-        rr(-14, -4, 28, 18, 3); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(-17, -8); ctx.lineTo(17, -8); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(0, 14); ctx.stroke();
-        ctx.beginPath(); ctx.arc(-6.5, -13, 5, 0, Math.PI * 2); ctx.stroke();
-        ctx.beginPath(); ctx.arc(6.5, -13, 5, 0, Math.PI * 2); ctx.stroke();
       } else if (name === 'desktop') {
         ctx.lineWidth = 3;
         rr(-10, -17, 17, 34, 4); ctx.stroke();
@@ -2870,29 +2983,6 @@
         rr(9, -6, 7, 7, 1.6); ctx.stroke();
         rr(9, 3, 7, 7, 1.6); ctx.stroke();
         rr(9, 12, 7, 7, 1.6); ctx.stroke();
-      } else if (name === 'skin') {
-        ctx.lineWidth = 3;
-        if (ctx.ellipse) { ctx.beginPath(); ctx.ellipse(0, 0, 17, 13, 0, 0, Math.PI * 2); ctx.stroke(); }
-        else { ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.stroke(); }
-        ctx.beginPath(); ctx.arc(-7, -5, 3.2, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(2, -8, 3.2, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(9, 2, 3.2, 0, Math.PI * 2); ctx.fill();
-      } else if (name === 'invite') {
-        ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.arc(-7, -7, 6, 0, Math.PI * 2); ctx.stroke();
-        ctx.beginPath(); ctx.arc(9, -4, 5, 0, Math.PI * 2); ctx.stroke();
-        ctx.beginPath(); ctx.arc(-7, 15, 11, Math.PI * 1.12, Math.PI * 1.88); ctx.stroke();
-        ctx.beginPath(); ctx.arc(9, 16, 9, Math.PI * 1.12, Math.PI * 1.88); ctx.stroke();
-      } else if (name === 'online') {
-        ctx.lineWidth = 3;
-        rr(-15, -5, 30, 18, 3); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(-15, -5); ctx.quadraticCurveTo(0, -21, 15, -5); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(0, -5); ctx.lineTo(0, 13); ctx.stroke();
-        ctx.beginPath(); ctx.arc(0, -1, 2.8, 0, Math.PI * 2); ctx.fill();
-      } else if (name === 'rank') {
-        rr(-15, 2, 7.5, 13, 2); ctx.fill();
-        rr(-3.8, -6, 7.5, 21, 2); ctx.fill();
-        rr(7.4, -14, 7.5, 29, 2); ctx.fill();
       } else if (name === 'close') {
         ctx.lineWidth = 4.2;
         ctx.beginPath(); ctx.moveTo(-10, -10); ctx.lineTo(10, 10); ctx.stroke();
@@ -2978,6 +3068,291 @@
       ctx.restore();
     }
 
+    /* ================= v0.27 主页动态背景特效系统（纯 Canvas，零素材） =================
+     * 设计目标：让主页「一眼看出是活的」——粒子持续运动 + 主题化视觉。
+     * 工程约束：
+     *   ① 粒子惰性初始化并按当前皮肤主色着色，换肤/换特效时重建（fxParts=null）；
+     *   ② 低帧率（lowFps）减半粒子、关闭逐帧渐变开销；reduceMotion 全停；
+     *   ③ 只用设计坐标 (750×1624)，不写 hits、不吞点击；
+     *   ④ 六套特效共用一份粒子缓存结构，靠 eff 分支绘制，避免为每套存一份状态。 */
+
+    function fxRnd(seed) {                       // 确定性伪随机（粒子生成用，避免 Math.random 抖动）
+      var x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
+      return x - Math.floor(x);
+    }
+
+    function buildFxParts(key) {
+      var P = (C.BG_FX_PARTS && C.BG_FX_PARTS[key]) || {};
+      var mode = C.BG_FX[key] ? C.BG_FX[key].mode : 'glow';
+      var pal = ['#FF8A5B', '#4FA8E0', '#63C88B', '#A87BE8', '#D96A9B', '#FFC53D', '#3FB8B0'];
+      var out = { mode: mode, items: [], t: 0, lastShoot: 0 };
+      var i, r1, r2, r3;
+      if (mode === 'aurora') {
+        var bands = P.bands || 4;
+        for (i = 0; i < bands; i++) {
+          out.items.push({ phase: fxRnd(i + 1) * 6.28, y: 0.26 + i * 0.16,
+            hue: i, speed: (P.speed || 0.085) * (0.8 + fxRnd(i + 7) * 0.5) });
+        }
+      } else if (mode === 'stars') {
+        var n = P.count || 64;
+        for (i = 0; i < n; i++) {
+          r1 = fxRnd(i * 3 + 1); r2 = fxRnd(i * 3 + 2); r3 = fxRnd(i * 3 + 3);
+          out.items.push({ x: r1 * C.DESIGN.w, y: r2 * C.DESIGN.h,
+            r: 1 + r3 * 2.4, ph: r1 * 6.28, sp: 0.6 + r2 * 1.4, big: r3 > 0.94 });
+        }
+        out.shoot = null;
+      } else if (mode === 'bubbles' || mode === 'petals' || mode === 'geometric' ||
+                 mode === 'snow' || mode === 'firefly') {
+        var cnt = P.count || 22;
+        for (i = 0; i < cnt; i++) {
+          r1 = fxRnd(i * 4 + 1); r2 = fxRnd(i * 4 + 2); r3 = fxRnd(i * 4 + 3);
+          var r4 = fxRnd(i * 4 + 4);
+          out.items.push({
+            x: r1 * C.DESIGN.w, y: r2 * C.DESIGN.h,
+            size: mode === 'bubbles' ? (10 + r3 * 34)
+                : mode === 'firefly' ? (2 + r3 * 4.5)
+                : mode === 'snow' ? (4.5 + r3 * 9) : (10 + r3 * 16),
+            sp: mode === 'firefly' ? (10 + r4 * 24)
+              : mode === 'snow' ? (28 + r4 * 46) : (18 + r4 * 42),
+            ph: r1 * 6.28, sway: mode === 'snow' ? (20 + r3 * 34) : (12 + r3 * 26),
+            color: mode === 'firefly' ? (r3 > 0.5 ? '#C8FF7A' : '#FFE98A')
+                 : mode === 'snow' ? '#FFFFFF' : pal[i % pal.length],
+            spin: (r2 - 0.5) * 2.2,
+            rot: r3 * 6.28,
+            shape: i % 3
+          });
+        }
+      } else if (mode === 'rain') {
+        var rn = P.count || 60;
+        for (i = 0; i < rn; i++) {
+          r1 = fxRnd(i * 3 + 1); r2 = fxRnd(i * 3 + 2); r3 = fxRnd(i * 3 + 3);
+          out.items.push({ x: r1 * C.DESIGN.w, y: r2 * C.DESIGN.h,
+            len: 22 + r3 * 46, sp: 480 + r3 * 560, ph: r1 * 6.28,
+            alpha: 0.18 + r2 * 0.36, sway: r1 * 6 });
+        }
+      } else if (mode === 'nebula') {
+        var cn = P.clouds || 6;
+        for (i = 0; i < cn; i++) {
+          r1 = fxRnd(i * 3 + 1); r2 = fxRnd(i * 3 + 2); r3 = fxRnd(i * 3 + 3);
+          out.items.push({ x: r1 * C.DESIGN.w, y: r2 * C.DESIGN.h,
+            r: 160 + r3 * 240, ph: r1 * 6.28, speed: 0.10 + r2 * 0.14,
+            color: ['#7B5CE8', '#3E7FE0', '#C451D6', '#4BC6E8', '#9B6BFF', '#E85C9E'][i % 6] });
+        }
+      }
+      return out;
+    }
+
+    /* intensity：主页 1、关卡 / 对局 0.55（局内收敛，不抢拼图注意力）。
+     * v0.28：① 深色特效自己铺一层夜空底（对局白卡之下仍可见）；② 粒子整体加浓；
+     *        ③ 新增 snow / rain / firefly / nebula 四套，全部纯 Canvas。 */
+    function drawFxLayer(tSec, dtMs, intensity) {
+      var key = state.save.bgFx || 'classic';
+      var def = C.BG_FX && C.BG_FX[key];
+      if (!def || def.mode === 'glow') return;    // classic 沿用原 drawHomeGlow，不叠加粒子
+      var inten = (intensity === undefined ? 1 : intensity);
+      if (state.reduceMotion) {
+        /* 减少动效：深色背景仍要铺（否则配色错乱），但不画任何粒子 */
+        if (def.dark) drawFxDarkBase(def.mode);
+        return;
+      }
+      if (!state.fxParts || state.fxParts.mode !== def.mode) state.fxParts = buildFxParts(key);
+      var F = state.fxParts;
+      var low = !!state.lowFps;
+      var n = F.items.length;
+      var W = C.DESIGN.w, H = C.DESIGN.h;
+      var dt = Math.min(0.05, dtMs / 1000);
+      F.t += dt;
+
+      ctx.save();
+      if (def.dark) drawFxDarkBase(def.mode);
+      if (def.mode === 'aurora') {
+        ctx.globalCompositeOperation = 'source-over';
+        for (var a = 0; a < n; a++) {
+          var b = F.items[a];
+          var cx = W * (0.14 + a * 0.19) + Math.sin(F.t * b.speed * 6 + b.phase) * W * 0.19;
+          var cw = W * (0.40 + 0.08 * Math.sin(F.t * 0.4 + a));
+          var cy = H * b.y + Math.cos(F.t * 0.3 + b.phase) * 100;
+          var col = ['#FFB38A', '#8EC9F5', '#9BE3C4', '#C6A8F2', '#FFD166'][a % 5];
+          var gr = ctx.createRadialGradient(cx, cy, 10, cx, cy, cw);
+          gr.addColorStop(0, hexA(col, 0.42 * inten));
+          gr.addColorStop(0.5, hexA(col, 0.22 * inten));
+          gr.addColorStop(1, hexA(col, 0));
+          ctx.fillStyle = gr;
+          ctx.fillRect(cx - cw, cy - cw, cw * 2, cw * 2);
+        }
+      } else if (def.mode === 'nebula') {
+        /* 星云：多团大半径彩色雾，缓慢公转 + 呼吸，深紫夜空上非常显眼 */
+        for (var q = 0; q < n; q++) {
+          var cl = F.items[q];
+          var ang = cl.ph + F.t * cl.speed;
+          var nx = W / 2 + Math.cos(ang) * (W * 0.26) + (cl.x - W / 2) * 0.42;
+          var ny = H * 0.42 + Math.sin(ang) * (H * 0.16) + (cl.y - H / 2) * 0.34;
+          var pulse = 1 + 0.16 * Math.sin(F.t * 0.7 + cl.ph);
+          var rr = cl.r * pulse;
+          var ng = ctx.createRadialGradient(nx, ny, 8, nx, ny, rr);
+          ng.addColorStop(0, hexA(cl.color, 0.44 * inten));
+          ng.addColorStop(0.45, hexA(cl.color, 0.24 * inten));
+          ng.addColorStop(1, hexA(cl.color, 0));
+          ctx.fillStyle = ng; ctx.fillRect(nx - rr, ny - rr, rr * 2, rr * 2);
+        }
+        /* 星云里叠一层细星点，避免只有雾 */
+        var sn = low ? 26 : 52;
+        for (var si = 0; si < sn; si++) {
+          var sx = fxRnd(si * 7 + 1) * W, sy = fxRnd(si * 7 + 2) * H;
+          var stw = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(F.t * 1.6 + si));
+          ctx.globalAlpha = stw * 0.9 * inten; ctx.fillStyle = '#EAF0FF';
+          ctx.beginPath(); ctx.arc(sx, sy, si % 9 === 0 ? 2.8 : 1.3, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      } else if (def.mode === 'stars') {
+        for (var s = 0; s < n; s++) {
+          var st = F.items[s];
+          var tw = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(F.t * st.sp * 2 + st.ph));
+          ctx.globalAlpha = tw * (st.big ? 1 : 0.85) * inten;
+          ctx.fillStyle = st.big ? '#FFF4C8' : '#FFFFFF';
+          ctx.beginPath();
+          ctx.arc(st.x, st.y, st.r * (st.big ? 1.5 : 1), 0, Math.PI * 2);
+          ctx.fill();
+          if (st.big) {
+            ctx.globalAlpha = tw * 0.42 * inten;
+            ctx.fillRect(st.x - st.r * 5, st.y - 0.7, st.r * 10, 1.4);
+            ctx.fillRect(st.x - 0.7, st.y - st.r * 5, 1.4, st.r * 10);
+          }
+        }
+        ctx.globalAlpha = 1;
+        var gap = (C.BG_FX_PARTS.stars && C.BG_FX_PARTS.stars.shootGap) || 4800;
+        if (F.t * 1000 - F.lastShoot > gap && !F.shoot) {
+          F.shoot = { t: 0, x: W * (0.1 + fxRnd(F.t | 0) * 0.5), y: -40, len: 150 + fxRnd(F.t) * 110 };
+        }
+        if (F.shoot) {
+          F.shoot.t += dt;
+          F.shoot.x += 340 * dt; F.shoot.y += 480 * dt;
+          var sp = F.shoot;
+          var g2 = ctx.createLinearGradient(sp.x - sp.len, sp.y - sp.len * 1.4, sp.x, sp.y);
+          g2.addColorStop(0, 'rgba(255,255,255,0)');
+          g2.addColorStop(1, 'rgba(255,244,200,0.95)');
+          ctx.strokeStyle = g2; ctx.lineWidth = 3; ctx.lineCap = 'round';
+          ctx.beginPath(); ctx.moveTo(sp.x - sp.len, sp.y - sp.len * 1.4); ctx.lineTo(sp.x, sp.y); ctx.stroke();
+          if (sp.t > 2.2 || sp.y > H + 200) { F.shoot = null; F.lastShoot = F.t * 1000; }
+        }
+      } else if (def.mode === 'rain') {
+        /* 雨丝：斜向短线快速下落，深/浅底都靠 alpha 适配 */
+        var stepR = low ? 2 : 1;
+        ctx.lineCap = 'round';
+        for (var ri = 0; ri < n; ri += stepR) {
+          var dr = F.items[ri];
+          var ry = ((dr.y + F.t * dr.sp) % (H + 200)) - 100;
+          var rx = dr.x + dr.sway;
+          ctx.globalAlpha = dr.alpha * inten;
+          ctx.strokeStyle = state.darkFx ? 'rgba(196,220,255,0.9)' : 'rgba(120,160,210,0.75)';
+          ctx.lineWidth = dr.len > 52 ? 2.2 : 1.5;
+          ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx - dr.len * 0.28, ry + dr.len); ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      } else if (def.mode === 'bubbles' || def.mode === 'petals' || def.mode === 'geometric' ||
+                 def.mode === 'snow' || def.mode === 'firefly') {
+        var step = low ? 2 : 1;
+        for (var i = 0; i < n; i += step) {
+          var it = F.items[i];
+          var yy, xx;
+          if (def.mode === 'bubbles') {
+            yy = ((it.y - F.t * it.sp) % (H + 120) + (H + 120)) % (H + 120) - 60;
+            xx = it.x + Math.sin(F.t * 0.8 + it.ph) * it.sway;
+            ctx.globalAlpha = 0.46 * inten;
+            ctx.strokeStyle = 'rgba(255,255,255,0.92)'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(xx, yy, it.size, 0, Math.PI * 2); ctx.stroke();
+            var bg = ctx.createRadialGradient(xx - it.size * 0.3, yy - it.size * 0.3, 1, xx, yy, it.size);
+            bg.addColorStop(0, 'rgba(255,255,255,0.55)');
+            bg.addColorStop(0.7, hexA(it.color, 0.16));
+            bg.addColorStop(1, hexA(it.color, 0.34));
+            ctx.fillStyle = bg;
+            ctx.beginPath(); ctx.arc(xx, yy, it.size - 1, 0, Math.PI * 2); ctx.fill();
+            ctx.globalAlpha = 0.72 * inten; ctx.fillStyle = '#FFFFFF';
+            ctx.beginPath(); ctx.arc(xx - it.size * 0.32, yy - it.size * 0.32, Math.max(1.5, it.size * 0.14), 0, Math.PI * 2); ctx.fill();
+          } else if (def.mode === 'petals') {
+            yy = ((it.y + F.t * it.sp * 0.6) % (H + 100) + (H + 100)) % (H + 100) - 50;
+            xx = it.x + Math.sin(F.t * 0.9 + it.ph) * it.sway;
+            ctx.globalAlpha = 0.72 * inten;
+            ctx.save(); ctx.translate(xx, yy); ctx.rotate(it.rot + F.t * it.spin);
+            ctx.fillStyle = hexA(it.color, 0.92);
+            petalPath(ctx, it.size * 1.2); ctx.fill();
+            ctx.restore();
+          } else if (def.mode === 'snow') {
+            yy = ((it.y + F.t * it.sp) % (H + 100) + (H + 100)) % (H + 100) - 50;
+            xx = it.x + Math.sin(F.t * 1.1 + it.ph) * it.sway;
+            ctx.globalAlpha = 0.92 * inten; ctx.fillStyle = '#FFFFFF';
+            ctx.shadowColor = 'rgba(120,165,215,0.85)'; ctx.shadowBlur = 8;
+            ctx.beginPath(); ctx.arc(xx, yy, it.size * 0.5, 0, Math.PI * 2); ctx.fill();
+            ctx.shadowBlur = 0;
+            /* 冷色细描边：浅色背景上白点也有轮廓，雪才看得清 */
+            ctx.strokeStyle = 'rgba(140,175,215,0.5)'; ctx.lineWidth = 1.2; ctx.stroke();
+            if (it.size > 8) {
+              ctx.globalAlpha = 0.5 * inten; ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 1;
+              ctx.beginPath(); ctx.moveTo(xx - it.size, yy); ctx.lineTo(xx + it.size, yy);
+              ctx.moveTo(xx, yy - it.size); ctx.lineTo(xx, yy + it.size); ctx.stroke();
+            }
+          } else if (def.mode === 'firefly') {
+            yy = it.y + Math.sin(F.t * 0.5 + it.ph) * 40;
+            xx = it.x + Math.sin(F.t * 0.8 + it.ph * 1.6) * it.sway;
+            var fg = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(F.t * 2.2 + it.ph * 3));
+            ctx.globalAlpha = fg * inten;
+            ctx.fillStyle = it.color; ctx.shadowColor = it.color; ctx.shadowBlur = 16;
+            ctx.beginPath(); ctx.arc(xx, yy, it.size, 0, Math.PI * 2); ctx.fill();
+            ctx.shadowBlur = 0;
+          } else { // geometric
+            yy = ((it.y - F.t * it.sp * 0.5) % (H + 120) + (H + 120)) % (H + 120) - 60;
+            xx = it.x + Math.sin(F.t * 0.7 + it.ph) * it.sway;
+            ctx.globalAlpha = 0.42 * inten;
+            ctx.save(); ctx.translate(xx, yy); ctx.rotate(it.rot + F.t * it.spin * 0.5);
+            ctx.fillStyle = hexA(it.color, 0.95);
+            var sz = it.size * 1.15;
+            ctx.beginPath();
+            if (it.shape === 0) { ctx.moveTo(-sz, sz * 0.6); ctx.lineTo(sz, sz * 0.6); ctx.lineTo(0, -sz); }
+            else if (it.shape === 1) { ctx.rect(-sz * 0.7, -sz * 0.7, sz * 1.4, sz * 1.4); }
+            else { ctx.moveTo(-sz, sz * 0.5); ctx.lineTo(sz * 0.6, sz * 0.5); ctx.lineTo(sz, -sz * 0.5); ctx.lineTo(-sz * 0.6, -sz * 0.5); }
+            ctx.closePath(); ctx.fill();
+            ctx.lineWidth = 1.6; ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.stroke();
+            ctx.restore();
+          }
+        }
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+      }
+      ctx.restore();
+    }
+
+    /* 深色夜空底：深蓝 / 深紫渐变 + 顶部微光，铺在粒子之下、卡片之下 */
+    function drawFxDarkBase(mode) {
+      var W = C.DESIGN.w, H = C.DESIGN.h;
+      var g = ctx.createLinearGradient(0, 0, W * 0.3, H);
+      if (mode === 'nebula') {
+        g.addColorStop(0, '#1A1038'); g.addColorStop(0.55, '#120E2C'); g.addColorStop(1, '#070A1C');
+      } else if (mode === 'firefly') {
+        g.addColorStop(0, '#0C2230'); g.addColorStop(0.55, '#091C26'); g.addColorStop(1, '#05121A');
+      } else {
+        g.addColorStop(0, '#16234A'); g.addColorStop(0.55, '#0E1732'); g.addColorStop(1, '#070B1C');
+      }
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      var rg = ctx.createRadialGradient(W * 0.5, H * 0.12, 20, W * 0.5, H * 0.12, H * 0.62);
+      rg.addColorStop(0, 'rgba(150,180,255,0.14)'); rg.addColorStop(1, 'rgba(150,180,255,0)');
+      ctx.fillStyle = rg; ctx.fillRect(0, 0, W, H);
+    }
+
+    function petalPath(c, s) {
+      c.beginPath();
+      c.moveTo(0, -s);
+      c.bezierCurveTo(s * 0.9, -s * 0.5, s * 0.9, s * 0.6, 0, s);
+      c.bezierCurveTo(-s * 0.9, s * 0.6, -s * 0.9, -s * 0.5, 0, -s);
+      c.closePath();
+    }
+
+    /* #RRGGBB + alpha → rgba()，供粒子层复用（避免每处手写颜色字符串） */
+    function hexA(hex, a) {
+      var h = hex.replace('#', '');
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+      var v = parseInt(h, 16);
+      return 'rgba(' + ((v >> 16) & 255) + ',' + ((v >> 8) & 255) + ',' + (v & 255) + ',' + a + ')';
+    }
+
     function drawBg(withArt) {
       /* v0.6 底纹动效（纯 Canvas，零素材），两条背景路径共用：
        * 1) 有底图时做 Ken Burns——1.035 倍 + ±10px 极缓平移，静止底图有呼吸感；
@@ -3018,17 +3393,67 @@
     /* ---------------- 主界面 ---------------- */
     function renderHome() {
       drawBg(true);
+      /* v0.27：背景特效粒子层——画在底图之上、标题/装饰之下，不写热区不吞点击。
+       * 位置刻意放在 drawBg 之后，让粒子浮在木纹/色罩之上但不遮 UI（后续 UI 更高层）。 */
+      drawFxLayer(state.time / 1000, state.dt || 16);
       var t = state.time / 1000;
       var float = Math.sin(t * 1.4) * 3;
 
       /* v0.6：标题 / 副标题 / 装饰恒定，不随数据集联动。
        * 旧版标题写死「四巧 · 七巧」、装饰取当前数据集头 4 块，
        * 在下面点「七巧板」后上面 logo 跟着变，用户误以为点错了按钮。 */
-      text(C.BRAND.name, C.DESIGN.w / 2, 412 + float, 76, COL.text, 'center', '700');
+      /* v0.27 标题视觉增强：柔和外发光 + 浅色描边 + 轻微缩放呼吸，
+       * 让品牌名在动态背景上依然清晰、有质感（描边随皮肤主色走）。 */
+      var V = C.HOME_VFX || {};
+      ctx.save();
+      var titleScale = 1 + 0.012 * Math.sin(t * 1.6);
+      ctx.translate(C.DESIGN.w / 2, 412 + float);
+      ctx.scale(titleScale, titleScale);
+      if (V.titleGlow !== false) {
+        ctx.shadowColor = V.titleGlowColor || 'rgba(255,255,255,0.55)';
+        ctx.shadowBlur = 22;
+      }
+      /* v0.28：标题换成「华文彩云」字体 + 黑色描边 + 白色填充（用户指定）。
+       * 描边画两遍：先粗黑边，再内收一档提亮边缘，字体再花哨也压得住动态背景。 */
+      ctx.font = '700 78px ' + (V.titleFontFamily || '"STCaiyun","华文彩云",serif');
+      ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+      ctx.lineJoin = 'round';
+      if (V.titleStroke) {
+        ctx.lineWidth = V.titleStroke;
+        ctx.strokeStyle = V.titleStrokeColor || '#141821';
+        ctx.strokeText(C.BRAND.name, 0, 0);
+      }
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = V.titleFill || '#FFFFFF';
+      ctx.fillText(C.BRAND.name, 0, 0);
+      ctx.restore();
       text(C.BRAND.slogan, C.DESIGN.w / 2, 480 + float, 26, COL.textSub, 'center');
 
       /* 固定装饰：坐标见 config.HOME_DECO，四巧/七巧怎么切都不动一个像素 */
       var deco = C.HOME_DECO;
+      var decoX = C.DESIGN.w / 2 + deco.cxOff, decoY = deco.cy + float;
+      /* v0.27：帆船底座柔光晕 + 环绕星点，让主视觉「浮起来」并随呼吸变化 */
+      if (V.decoHalo !== false && !state.reduceMotion) {
+        ctx.save();
+        var halo = ctx.createRadialGradient(decoX, decoY + 20, 20, decoX, decoY + 20, 300);
+        halo.addColorStop(0, hexA(COL.gold || '#FFB93D', 0.16));
+        halo.addColorStop(1, hexA(COL.gold || '#FFB93D', 0));
+        ctx.fillStyle = halo;
+        ctx.fillRect(decoX - 320, decoY - 300, 640, 640);
+        var sn = V.decoSparkN || 10;
+        for (var q = 0; q < sn; q++) {
+          var qa = (q / sn) * Math.PI * 2 + t * 0.35;
+          var qr = 210 + Math.sin(t * 1.2 + q) * 22;
+          var qx = decoX + Math.cos(qa) * qr * 1.05;
+          var qy = decoY + Math.sin(qa) * qr * 0.52 + 20;
+          var qa2 = 0.35 + 0.5 * (0.5 + 0.5 * Math.sin(t * 2 + q * 1.7));
+          ctx.globalAlpha = qa2;
+          ctx.fillStyle = q % 2 ? '#FFFFFF' : (COL.gold || '#FFB93D');
+          var qs = q % 3 === 0 ? 4 : 2.4;
+          ctx.beginPath(); ctx.arc(qx, qy, qs, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.restore();
+      }
       for (var i = 0; i < deco.pieces.length; i++) {
         var d = deco.pieces[i];
         var bob = float + Math.sin(t * 1.1 + i * 0.9) * 3;
@@ -3066,8 +3491,12 @@
       var pwCoin = HU.padL + ctx.measureText(coinLabel).width + HU.padR;
       var pwEnergy = HU.padL + ctx.measureText(energyLabel).width + HU.plusPad;
       var pillW = Math.max(pwCoin, pwEnergy, HU.pillMinW);
+      /* v0.28：右移定位——整组胶囊的右沿贴 DESIGN.w - rightPad，图标仍压在胶囊左端外侧。 */
+      var hudIconX = HU.rightAnchor
+        ? (C.DESIGN.w - HU.rightPad - HU.pillDx - pillW)
+        : HU.iconX;
       function hudPill(iconName, iconColor, iconScale, label, rowY) {
-        var px = HU.iconX + HU.pillDx;
+        var px = hudIconX + HU.pillDx;
         var pw = pillW;
         var ph = HU.pillH;
         ctx.save();
@@ -3080,7 +3509,7 @@
         ctx.strokeStyle = HU.pillStroke;
         ctx.stroke();
         ctx.restore();
-        drawIcon(iconName, HU.iconX, rowY, iconColor, iconScale);
+        drawIcon(iconName, hudIconX, rowY, iconColor, iconScale);
         text(label, px + HU.padL, rowY + 1, HU.fontSize, HU.textColor, 'left', HU.fontWeight);
         return px + pw;
       }
@@ -3108,6 +3537,18 @@
        * 标签底(中心+78) 与下一图标顶(中心+98) 之间留 20px。 */
       var H = C.LAYOUT.HOME;
       function homeEntry(id, icon, label, ex, eyy, badge) {
+        /* v0.27：入口呼吸光晕——各入口按 y 位置错相，形成自上而下流动的点亮波，
+         * 让玩家一眼看到「这些按钮是活的」。低帧率/减少动效时跳过。 */
+        if (V.ringPulseMs && !state.reduceMotion) {
+          var ph2 = (state.time % V.ringPulseMs) / V.ringPulseMs;
+          var wave = 0.5 + 0.5 * Math.sin(ph2 * Math.PI * 2 - eyy / 90);
+          ctx.save();
+          ctx.shadowColor = hexA(COL.gold || '#FFB93D', 0.35 + wave * 0.3);
+          ctx.shadowBlur = 8 + wave * 14;
+          rr(ex - H.entryW / 2, eyy - H.entryW / 2, H.entryW, H.entryW, 24);
+          ctx.fillStyle = COL.card; ctx.fill();
+          ctx.restore();
+        }
         var eb = { id: id, x: ex, y: eyy, w: H.entryW, h: H.entryW, variant: 'tool', icon: icon };
         addHit(ex, eyy, H.entryW, H.entryW, id);
         drawButton(eb);
@@ -3118,11 +3559,11 @@
         }
       }
       var lx = H.entryX, rx = C.DESIGN.w - H.entryX, e0 = H.entryY0, eg = H.entryGap;
-      homeEntry('entry_desktop', 'desktop', '添加桌面', lx, e0);
-      homeEntry('entry_skin', 'skin', '皮肤', lx, e0 + eg);
-      homeEntry('entry_invite', 'invite', '邀请有礼', lx, e0 + eg * 2,
+      /* v0.28：用户要求去掉「添加桌面」入口，左列整体上移一格填补空位。 */
+      homeEntry('entry_skin', 'skin', '皮肤', lx, e0);
+      homeEntry('entry_invite', 'invite', '邀请有礼', lx, e0 + eg,
         state.save.inviteDay !== todayKey());
-      /* v0.16：左列第 4 格「任务」已下线（用户要求），左列只留 3 个入口。 */
+      /* v0.16：左列第 4 格「任务」已下线（用户要求）。 */
 
       /* 在线奖励：图标 + 上方气泡。
        * v0.15：气泡从「3 分钟倒计时」改成「今日累计时长」，有可领档位时变红显示「可领 N」。
@@ -3146,30 +3587,105 @@
       var b1 = { id: 'start', x: C.DESIGN.w / 2, y: H.startY, w: 420, h: 108, label: startLabel, variant: 'primary', size: 32 };
       addHit(b1.x, b1.y, b1.w, b1.h, 'start');
       drawButton(b1);
+      /* v0.27：主按钮周期流光——一道窄高光沿按钮内从左扫到右，
+       * Clip 在圆角内、不影响文字可读性；reduceMotion 时静止。 */
+      if (V.btnShineMs && !state.reduceMotion) {
+        var shinePh = (state.time % V.btnShineMs) / V.btnShineMs;
+        var sx0 = b1.x - b1.w / 2 - 90 + shinePh * (b1.w + 180);
+        ctx.save();
+        rr(b1.x - b1.w / 2, b1.y - b1.h / 2, b1.w, b1.h, b1.h / 2); ctx.clip();
+        var sg = ctx.createLinearGradient(sx0 - 60, 0, sx0 + 60, 0);
+        sg.addColorStop(0, 'rgba(255,255,255,0)');
+        sg.addColorStop(0.5, 'rgba(255,255,255,0.42)');
+        sg.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = sg;
+        ctx.save(); ctx.rotate(-0.14);
+        ctx.fillRect(sx0 - 80, b1.y - b1.h, 160, b1.h * 3);
+        ctx.restore();
+        ctx.restore();
+      }
 
-      /* ================= v0.6 两套拼图固定入口 =================
-       * 四巧板永远在上（y=1150）、七巧板永远在下（y=1250），编号 set_t4 / set_t7。
-       * 旧版是「当前集」+「另一个集」两个按钮，切换后文案互换 → 看起来按钮换了位置。
-       * 现在两个按钮各指一套，点谁进谁的关卡列表，当前那套加金色描边。 */
-      function setEntry(id, key, name, yy) {
-        var meta = SETS && SETS[key];
-        var n = meta && meta.levels ? meta.levels.length : 0;
-        var b = { id: id, x: C.DESIGN.w / 2, y: yy, w: 420, h: 88,
-          label: name + ' · ' + n + ' 关', variant: 'secondary', size: 28 };
-        addHit(b.x, b.y, b.w, b.h, id);
-        drawButton(b);
-        if (state.setKey === key) {
+      /* ================= v0.29 两套拼图入口：图案化质感卡片 =================
+       * 用户要求：①按钮做得更有质感；②「四巧板/七巧板 + 关数」文字换成图案；
+       * ③不再展示多少关。现在每个入口是一张立体卡片：左侧画 4/7 块彩色拼片图案
+       * （数量直观区分两套），当前那套金边 + 微光 +「进行中」小标，纯图案无文字。
+       * 位置仍固定：四巧板在上(set4Y)、七巧板在下(set7Y)，热区 id 不变。 */
+      var SET_PIECE_COLORS = ['#4FA8E0', '#63C88B', '#FF8A5B', '#A87BE8', '#F5C84D', '#EE7FA8', '#59C7C0'];
+      function setPiece(x, y, sz, color, shape) {
+        ctx.save(); ctx.translate(x, y);
+        var h = sz / 2;
+        ctx.beginPath();
+        if (shape === 0) ctx.rect(-h, -h, sz, sz);
+        else if (shape === 1) { ctx.moveTo(-h, h); ctx.lineTo(h, h); ctx.lineTo(0, -h); }
+        else if (shape === 2) { ctx.moveTo(-h, -h); ctx.lineTo(h, -h); ctx.lineTo(0, h); }
+        else if (shape === 3) { ctx.moveTo(-h, -h); ctx.lineTo(-h, h); ctx.lineTo(h, 0); }
+        else if (shape === 4) { ctx.moveTo(h, -h); ctx.lineTo(h, h); ctx.lineTo(-h, 0); }
+        else { ctx.moveTo(-h, h); ctx.lineTo(h * 0.4, h); ctx.lineTo(h, -h); ctx.lineTo(-h * 0.4, -h); }
+        ctx.closePath();
+        ctx.fillStyle = color; ctx.fill();
+        ctx.lineWidth = 1.6; ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.stroke();
+        ctx.restore();
+      }
+      function setPattern(kind, cx, cy, sc) {
+        ctx.save(); ctx.translate(cx, cy); ctx.scale(sc, sc);
+        if (kind === 't4') {
+          var s = 40, gp = 5;
+          setPiece(-s / 2 - gp, -s / 2 - gp, s, SET_PIECE_COLORS[0], 1);
+          setPiece(s / 2 + gp, -s / 2 - gp, s, SET_PIECE_COLORS[1], 4);
+          setPiece(-s / 2 - gp, s / 2 + gp, s, SET_PIECE_COLORS[2], 3);
+          setPiece(s / 2 + gp, s / 2 + gp, s, SET_PIECE_COLORS[3], 2);
+        } else {
+          /* 七巧板：3+3+1 紧凑排布，纵向总高 ≤ 卡片内高，绝不压住下方星星文字 */
+          var u = 23, ux = 30, uy = 21;
+          setPiece(-ux, -uy, u, SET_PIECE_COLORS[0], 1);
+          setPiece(0, -uy, u, SET_PIECE_COLORS[1], 0);
+          setPiece(ux, -uy, u, SET_PIECE_COLORS[2], 4);
+          setPiece(-ux, uy, u, SET_PIECE_COLORS[3], 3);
+          setPiece(0, uy, u, SET_PIECE_COLORS[4], 2);
+          setPiece(ux, uy, u, SET_PIECE_COLORS[5], 5);
+          setPiece(0, uy * 2.35, u * 0.82, SET_PIECE_COLORS[6], 0);
+        }
+        ctx.restore();
+      }
+      function setEntry(id, key, kind, yy) {
+        var sel = state.setKey === key;
+        var w = 440, h = 112, x = C.DESIGN.w / 2;
+        addHit(x, yy, w, h, id);
+        ctx.save();
+        /* 底部投影 + 选中态外发光 */
+        ctx.shadowColor = sel ? hexA(COL.gold || '#FFB93D', 0.5) : 'rgba(40,50,80,0.20)';
+        ctx.shadowBlur = sel ? 26 : 14; ctx.shadowOffsetY = 5;
+        var g = ctx.createLinearGradient(x - w / 2, yy - h / 2, x + w / 2, yy + h / 2);
+        if (sel) { g.addColorStop(0, '#FFFDF6'); g.addColorStop(1, '#FFE9C4'); }
+        else { g.addColorStop(0, '#FFFFFF'); g.addColorStop(1, '#EDF1FA'); }
+        rr(x - w / 2, yy - h / 2, w, h, 26); ctx.fillStyle = g; ctx.fill();
+        ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+        /* 顶部高光条：玻璃质感 */
+        ctx.save(); rr(x - w / 2 + 3, yy - h / 2 + 3, w - 6, h - 6, 23); ctx.clip();
+        var hl = ctx.createLinearGradient(0, yy - h / 2, 0, yy + h / 2);
+        hl.addColorStop(0, 'rgba(255,255,255,0.85)'); hl.addColorStop(0.45, 'rgba(255,255,255,0.05)');
+        hl.addColorStop(1, 'rgba(0,0,0,0.04)');
+        ctx.fillStyle = hl; ctx.fillRect(x - w / 2, yy - h / 2, w, h);
+        ctx.restore();
+        /* 描边：选中金色，未选中浅蓝灰 */
+        rr(x - w / 2, yy - h / 2, w, h, 26);
+        ctx.lineWidth = sel ? 4 : 2;
+        ctx.strokeStyle = sel ? (COL.goldEdge || '#E5962D') : 'rgba(150,168,205,0.55)'; ctx.stroke();
+        ctx.restore();
+        /* 拼片图案：占卡片中偏左，右侧留给「进行中」标记 */
+        setPattern(kind, x - 46, yy, 1);
+        if (sel) {
+          /* 右侧竖向三色进度点 + 进行中小灯，纯图形不写字 */
+          var px = x + w / 2 - 56;
           ctx.save();
-          rr(b.x - b.w / 2 - 4, b.y - b.h / 2 - 4, b.w + 8, b.h + 8, (b.h + 8) / 2);
-          ctx.lineWidth = 3;
-          ctx.strokeStyle = COL.gold;
-          ctx.stroke();
+          ctx.beginPath(); ctx.arc(px, yy, 13, 0, Math.PI * 2);
+          ctx.fillStyle = hexA(COL.gold || '#FFB93D', 0.22); ctx.fill();
+          drawIcon('check', px, yy, COL.goldEdge || '#E5962D', 0.52);
           ctx.restore();
         }
-        return b;
       }
-      setEntry('set_t4', 'tangram4', '四巧板', H.set4Y);
-      setEntry('set_t7', 'tangram7', '七巧板', H.set7Y);
+      setEntry('set_t4', 'tangram4', 't4', H.set4Y);
+      setEntry('set_t7', 'tangram7', 't7', H.set7Y);
 
       /* v0.7：设置从右上角挪到右列底部，样式与其它入口统一成「图标 + 下方小字」。
        * v0.16：左列「任务」下线后，右列仍保持 3 个入口（排行榜 / 在线奖励 / 设置）。 */
@@ -3223,6 +3739,8 @@
 
     function renderLevels() {
       drawBg(false);
+      /* v0.28：背景特效在关卡页同样生效，强度收敛到 0.55 不抢关卡格注意力 */
+      drawFxLayer(state.time / 1000, state.dt || 16, 0.55);
       var by = view.safeTop + 40;
       var bb = { id: 'back_home', x: 70, y: by + 8, w: 76, h: 76, variant: 'tool', icon: 'back' };
       addHit(bb.x, bb.y, bb.w, bb.h, 'back_home');
@@ -3344,7 +3862,9 @@
         if (wEach <= M.maxW || fsz <= M.minFontSize) break;
         fsz -= 2;
       }
-      var x = M.left, ph = M.pillH;
+      /* v0.28：右上角定位（与主页 HUD 一致）。倒计时胶囊居中不冲突。 */
+      var x = M.rightAnchor ? (C.DESIGN.w - M.rightPad - wEach) : M.left;
+      var ph = M.pillH;
       var subFs = Math.max(12, Math.round(fsz * ratio));
       for (var k = 0; k < rows.length; k++) {
         var r = rows[k], rowY = cy + (k - 0.5) * M.rowGap;
@@ -3568,11 +4088,12 @@
       ctx.restore();
       var bob = Math.sin(state.time / 260) * 3;
       drawTutIcon(kind, gx + T.iconR, gy + bob, T.iconR);
-      text(txt, gx + iconW, gy, size, COL.text, 'left', '600');
+      /* v0.28：教学文字压在固定浅色提示条上，深色特效下也要用深色墨，避免白字白底 */
+      text(txt, gx + iconW, gy, size, inkOnCard(false), 'left', '600');
 
       /* 跳过：卡纸右下角一行小字（教学是一次性的，必须留出口） */
       var sx = B.x + B.size - T.skipW / 2 - 12, sy = B.y + B.size - 34;
-      text(T.skipText, sx, sy, 22, COL.textSub, 'center', '500');
+      text(T.skipText, sx, sy, 22, inkOnCard(true), 'center', '500');
       ctx.save();
       ctx.strokeStyle = 'rgba(122,138,156,0.55)';
       ctx.lineWidth = 1.5;
@@ -3587,6 +4108,9 @@
     function renderPlay() {
       var lv = LEVELS[state.levelIdx];
       drawBg(false);
+      /* v0.28：背景特效进入对局页，强度更低（0.45）避免干扰拼图辨识；
+       * 画在底图之上、卡纸/板件之下，不写热区不吞点击。 */
+      drawFxLayer(state.time / 1000, state.dt || 16, 0.45);
 
       /* 顶栏 v0.9：关号靠左（关名放第二行），倒计时胶囊**居中**。
        * 旧版倒计时贴在右上角，和返回/关号同一水平线，玩家专注拼图时根本注意不到
@@ -3697,7 +4221,8 @@
         headTxt = hm + '…';
       }
       ctx.restore();
-      text(headTxt, B.x + 26, B.y + 32, 22, COL.textSub, 'left', '600');
+      /* v0.28：关号画在浅色卡纸上，固定深色墨（深色特效下 COL.textSub 会变浅） */
+      text(headTxt, B.x + 26, B.y + 32, 22, inkOnCard(true), 'left', '600');
 
       /* 目标轮廓（v0.3.1 A2 样式，v0.10 起固定不变）
        * 档1 虚线轮廓(3px,[8,6])+淡填充 / 档2 细实线轮廓(1.5px)+淡填充 / 档3 纯剪影无描边。
@@ -3861,42 +4386,140 @@
         ctx.closePath();
       }
 
+      var bb = G.bbox([pts]);
+      var px0 = placed ? mapX(bb[0]) : bb[0] * scale;
+      var px1 = placed ? mapX(bb[2]) : bb[2] * scale;
+      var py0 = placed ? mapY(bb[1]) : bb[1] * scale;
+      var py1 = placed ? mapY(bb[3]) : bb[3] * scale;
+      var pstyle = (state.save && state.save.pieceStyle) || 'classic';
+
       ctx.save();
       ctx.globalAlpha = alpha;
-      // 投影 + 填充
-      shadow(C.PIECE.shadowBlur, C.PIECE.shadowDy, COL.shadowPiece);
-      path();
-      ctx.fillStyle = def.color;
-      ctx.fill();
-      noShadow();
+      // 投影 + 填充（v0.27：随板件样式切换填充质感）
+      if (pstyle === 'neon') {
+        // 霓虹：深色底 + 同色外发光
+        ctx.shadowColor = def.color; ctx.shadowBlur = 18;
+        path(); ctx.fillStyle = shadeHex(def.color, -0.55); ctx.fill();
+        ctx.shadowBlur = 0;
+      } else if (pstyle === 'glow') {
+        // v0.28 荧光：亮色底 + 同色柔光（比 neon 亮、不压暗）
+        ctx.shadowColor = def.color; ctx.shadowBlur = 13;
+        path(); ctx.fillStyle = def.color; ctx.fill();
+        ctx.shadowBlur = 0;
+      } else {
+        shadow(C.PIECE.shadowBlur, C.PIECE.shadowDy, COL.shadowPiece);
+        path(); ctx.fillStyle = def.color; ctx.fill();
+        noShadow();
+      }
       ctx.restore();
 
       ctx.save();
       ctx.globalAlpha = alpha;
-      // 顶部内高光（裁剪在板内，用一段竖向渐变模拟受光的木块上缘）
-      var bb = G.bbox([pts]);
-      var top = placed ? mapY(bb[1]) : bb[1] * scale;
-      var bot = placed ? mapY(bb[3]) : bb[3] * scale;
+      // 样式化表面纹理（裁剪在板内）
       ctx.save();
       path(); ctx.clip();
-      var g = ctx.createLinearGradient(0, top, 0, Math.min(bot, top + 14 * Math.max(scale, 0.5)));
+      if (pstyle === 'candy' || pstyle === 'pastel') {
+        // 糖果/马卡龙：斜向明→暗渐变，顶部加一层柔亮
+        var cg = ctx.createLinearGradient(px0, py0, px1, py1);
+        if (pstyle === 'candy') {
+          cg.addColorStop(0, 'rgba(255,255,255,0.42)');
+          cg.addColorStop(0.45, 'rgba(255,255,255,0.02)');
+          cg.addColorStop(1, 'rgba(0,0,0,0.18)');
+        } else {
+          cg.addColorStop(0, 'rgba(255,255,255,0.30)');
+          cg.addColorStop(0.6, 'rgba(255,255,255,0)');
+          cg.addColorStop(1, 'rgba(255,255,255,0.12)');
+        }
+        ctx.fillStyle = cg; ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
+      } else if (pstyle === 'wood') {
+        // 原木：沿 y 方向的细密木纹条 + 顶部受光
+        var wg = ctx.createLinearGradient(px0, py0, px1, py0);
+        wg.addColorStop(0, 'rgba(120,72,32,0.16)');
+        wg.addColorStop(0.3, 'rgba(255,225,180,0.10)');
+        wg.addColorStop(0.6, 'rgba(120,72,32,0.10)');
+        wg.addColorStop(1, 'rgba(120,72,32,0.20)');
+        ctx.fillStyle = wg; ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
+        ctx.strokeStyle = 'rgba(90,52,20,0.10)'; ctx.lineWidth = 1;
+        for (var wy = py0 + 6; wy < py1; wy += 9) {
+          ctx.beginPath(); ctx.moveTo(px0, wy); ctx.lineTo(px1, wy); ctx.stroke();
+        }
+      } else if (pstyle === 'crystal') {
+        // v0.28 水晶：斜向高光带 + 棱面折线，玻璃通透感
+        var crg = ctx.createLinearGradient(px0, py0, px1, py1);
+        crg.addColorStop(0, 'rgba(255,255,255,0.72)');
+        crg.addColorStop(0.28, 'rgba(255,255,255,0.06)');
+        crg.addColorStop(0.55, 'rgba(255,255,255,0.30)');
+        crg.addColorStop(1, 'rgba(0,40,90,0.20)');
+        ctx.fillStyle = crg; ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
+        ctx.strokeStyle = 'rgba(255,255,255,0.42)'; ctx.lineWidth = 2;
+        var cmx = (px0 + px1) / 2, cmy = (py0 + py1) / 2;
+        ctx.beginPath(); ctx.moveTo(px0, cmy); ctx.lineTo(cmx, py0); ctx.lineTo(px1, cmy);
+        ctx.moveTo(cmx, py0); ctx.lineTo(cmx, py1); ctx.stroke();
+      } else if (pstyle === 'metal') {
+        // v0.28 金属：多档明暗横带模拟拉丝反光
+        var mg = ctx.createLinearGradient(px0, py0, px0, py1);
+        mg.addColorStop(0, 'rgba(255,255,255,0.55)');
+        mg.addColorStop(0.22, 'rgba(0,0,0,0.20)');
+        mg.addColorStop(0.46, 'rgba(255,255,255,0.28)');
+        mg.addColorStop(0.70, 'rgba(0,0,0,0.16)');
+        mg.addColorStop(1, 'rgba(255,255,255,0.34)');
+        ctx.fillStyle = mg; ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
+        ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = 1;
+        for (var my = py0 + 3; my < py1; my += 4) {
+          ctx.beginPath(); ctx.moveTo(px0, my); ctx.lineTo(px1, my); ctx.stroke();
+        }
+      } else if (pstyle === 'jade') {
+        // v0.28 玉石：柔和云纹 + 边缘内阴影，温润感
+        var jg = ctx.createRadialGradient(px0 + (px1 - px0) * 0.35, py0 + (py1 - py0) * 0.3, 4,
+          (px0 + px1) / 2, (py0 + py1) / 2, Math.max(px1 - px0, py1 - py0));
+        jg.addColorStop(0, 'rgba(255,255,255,0.42)');
+        jg.addColorStop(0.6, 'rgba(255,255,255,0)');
+        jg.addColorStop(1, 'rgba(10,70,50,0.22)');
+        ctx.fillStyle = jg; ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
+        ctx.strokeStyle = 'rgba(255,255,255,0.24)'; ctx.lineWidth = 2.2;
+        for (var jj = 0; jj < 3; jj++) {
+          var jy = py0 + (py1 - py0) * (0.3 + jj * 0.22);
+          ctx.beginPath(); ctx.moveTo(px0, jy);
+          ctx.bezierCurveTo(px0 + (px1 - px0) * 0.3, jy - 12,
+            px0 + (px1 - px0) * 0.6, jy + 12, px1, jy);
+          ctx.stroke();
+        }
+      }
+      // 通用顶部内高光（所有样式共用，保留原木块受光质感）
+      var g = ctx.createLinearGradient(0, py0, 0, Math.min(py1, py0 + 14 * Math.max(scale, 0.5)));
       g.addColorStop(0, C.PIECE.highlight);
       g.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.fillStyle = g;
-      ctx.fillRect(
-        placed ? mapX(bb[0]) : bb[0] * scale,
-        top,
-        (placed ? mapX(bb[2]) : bb[2] * scale) - (placed ? mapX(bb[0]) : bb[0] * scale),
-        Math.max(4, bot - top)
-      );
+      ctx.fillRect(px0, py0, px1 - px0, Math.max(4, py1 - py0));
       ctx.restore();
-      // 描边
+
+      // 描边（霓虹/荧光用亮色描边加深发光感，水晶用半透明白）
       path();
-      ctx.lineWidth = C.PIECE.strokeW;
-      ctx.strokeStyle = def.stroke || '#000000';
+      var glowing = pstyle === 'neon' || pstyle === 'glow';
+      ctx.lineWidth = glowing ? C.PIECE.strokeW + 0.6 : C.PIECE.strokeW;
+      ctx.strokeStyle = glowing ? def.color
+        : pstyle === 'crystal' ? 'rgba(255,255,255,0.85)'
+        : pstyle === 'metal' ? 'rgba(255,255,255,0.55)'
+        : (def.stroke || '#000000');
       ctx.lineJoin = 'round';
       ctx.stroke();
       ctx.restore();
+    }
+
+    /* v0.28：深色背景特效下，卡纸仍保持浅色纸纹（保证板件辨识度），
+     * 所以「画在浅色卡纸上的文字」必须固定用深色墨，不能跟随暗色板的浅字色。 */
+    function inkOnCard(sub) { return sub ? '#5A687C' : '#2C3A4B'; }
+
+    /* 颜色明暗调整：pct>0 提亮、pct<0 压暗（板件霓虹样式用） */
+    function shadeHex(hex, pct) {
+      if (!hex || hex.charAt(0) !== '#') return hex || '#000000';
+      var h = hex.slice(1);
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+      var v = parseInt(h, 16), isNaNV = isNaN(v);
+      if (isNaNV) return hex;
+      var r = (v >> 16) & 255, g = (v >> 8) & 255, b = v & 255;
+      function adj(c) { return Math.max(0, Math.min(255, Math.round(c + (pct > 0 ? (255 - c) * pct : c * pct)))); }
+      return 'rgb(' + adj(r) + ',' + adj(g) + ',' + adj(b) + ')';
     }
 
     /* v0.3.2 B1：选中板件角上的旋转手柄——半透明圆底 + ↻ 弧形箭头。
@@ -5073,43 +5696,290 @@
       adLayer();
     }
 
-    /* 添加桌面 */
-    function renderDesktop() {
-      var cy = sheetBg(620, 580);
-      sheetTitle('添加到桌面', cy, 580);
-      var top = cy - 580 / 2;
-      drawIcon('desktop', C.DESIGN.w / 2, top + 170, COL.goldDeep, 2.6);
-      var lines = ['① 点击右上角「···」', '② 选择「添加到桌面」', '③ 下次一键直达，不用再找'];
-      for (var i = 0; i < lines.length; i++) {
-        text(lines[i], C.DESIGN.w / 2, top + 300 + i * 54, 28, COL.text, 'center');
-      }
-      sheetClose(top + 640, 'close_sheet');
-    }
+    /* v0.28：renderDesktop「添加到桌面」面板已按用户要求删除 */
 
     /* 皮肤 */
+    /* v0.27 皮肤面板重构：4 个分类页签（配色 / 背景 / 板件 / 音效）。
+     * 三类新风格彼此独立、任选组合，全部为程序化预览，零图片。 */
     function renderSkin() {
-      var cy = sheetBg(660, 620);
-      sheetTitle('皮肤', cy, 620);
-      var top = cy - 620 / 2, cur = state.save.skin || 'warm';
-      var keys = ['warm', 'mint', 'night'];
-      for (var i = 0; i < keys.length; i++) {
-        var k = keys[i], sk = C.SKINS[k];
-        var x = 130 + i * 175, y = top + 260;
+      /* v0.28：背景 10 套 / 板件 9 套 / 音效 8 套，3 列布局最多 4 行。
+       * 按当前页签的选项数动态定卡片高度：2 行→720、3 行→860、4 行→1000，
+       * 避免最后一行掉出卡片，也避免少行页签下方空一大截。 */
+      var tab0 = state.skinTab || 0;
+      var cnt0 = tab0 === 0 ? Object.keys(C.SKINS).length
+        : tab0 === 1 ? Object.keys(C.BG_FX).length
+        : tab0 === 2 ? Object.keys(C.PIECE_STYLES).length
+        : Object.keys(C.SFX_STYLES).length;
+      var rows0 = Math.ceil(cnt0 / 3);
+      var CH = rows0 <= 2 ? 720 : (rows0 === 3 ? 860 : 1000);
+      var cy = sheetBg(660, CH);
+      sheetTitle('皮肤', cy, CH);
+      var top = cy - CH / 2;
+      var tab = tab0;
+      var TABS = [
+        { k: 'theme', label: '配色' },
+        { k: 'bg',    label: '背景' },
+        { k: 'piece', label: '板件' },
+        { k: 'sfx',   label: '音效' }
+      ];
+
+      /* --- 页签 --- */
+      var tabW = 140, tabGap = 12, tabY = top + 96;
+      var totalW = TABS.length * tabW + (TABS.length - 1) * tabGap;
+      var tabX0 = C.DESIGN.w / 2 - totalW / 2;
+      for (var ti = 0; ti < TABS.length; ti++) {
+        var tx = tabX0 + ti * (tabW + tabGap);
+        var active = ti === tab;
         ctx.save();
-        rr(x - 70, y - 70, 140, 140, 22);
-        ctx.fillStyle = sk.bg; ctx.fill();
-        ctx.lineWidth = (cur === k) ? 6 : 2;
-        ctx.strokeStyle = (cur === k) ? COL.goldEdge : COL.line; ctx.stroke();
-        ctx.restore();
-        // 色点预览
-        ctx.beginPath(); ctx.arc(x - 24, y - 18, 15, 0, Math.PI * 2); ctx.fillStyle = sk.gold; ctx.fill();
-        ctx.beginPath(); ctx.arc(x + 14, y - 18, 15, 0, Math.PI * 2); ctx.fillStyle = sk.text; ctx.fill();
-        if (cur === k) drawIcon('check', x, y + 34, COL.goldEdge, 1.1);
-        text(sk.name, x, y + 96, 24, COL.text, 'center', '600');
-        addHit(x, y, 150, 150, 'skin_' + k);
+        rr(tx, tabY - 34, tabW, 68, 20);
+        ctx.fillStyle = active ? COL.gold : COL.disabledBg;
+        if (active) shadow(8, 3, hexA(COL.goldDeep || '#FF9F1C', 0.35));
+        ctx.fill(); noShadow(); ctx.restore();
+        text(TABS[ti].label, tx + tabW / 2, tabY + 9, 27,
+          active ? COL.btnText : COL.textSub, 'center', active ? '700' : '500');
+        addHit(tx + tabW / 2, tabY, tabW, 68, 'skin_tab_' + ti);
       }
-      text('只换配色，不影响关卡与判定', C.DESIGN.w / 2, top + 520, 22, COL.textSub, 'center');
-      sheetClose(top + 660, 'close_sheet');
+
+      /* --- 内容区 --- */
+      var gridTop = top + 190;
+      if (tab === 0) {
+        var cur = state.save.skin || 'warm';
+        var keys = Object.keys(C.SKINS);
+        var cols = 3, cw = 178, ch = 176, gx = 14, gy = 18;
+        var rowN = Math.ceil(keys.length / cols);
+        var startX = C.DESIGN.w / 2 - (cols * cw + (cols - 1) * gx) / 2 + cw / 2;
+        for (var i = 0; i < keys.length; i++) {
+          var k = keys[i], sk = C.SKINS[k];
+          var col = i % cols, row = Math.floor(i / cols);
+          var x = startX + col * (cw + gx);
+          var y = gridTop + row * (ch + gy) + ch / 2;
+          skinOptionBox(x, y, cw - 8, ch - 8, cur === k);
+          // 预览：背景块 + 金色主色点 + 文字色点
+          rr(x - 52, y - 44, 104, 74, 12); ctx.fillStyle = sk.bg; ctx.fill();
+          ctx.lineWidth = 1; ctx.strokeStyle = sk.line || COL.line; ctx.stroke();
+          ctx.beginPath(); ctx.arc(x - 22, y - 18, 12, 0, Math.PI * 2); ctx.fillStyle = sk.gold; ctx.fill();
+          ctx.beginPath(); ctx.arc(x + 16, y - 18, 12, 0, Math.PI * 2); ctx.fillStyle = sk.text; ctx.fill();
+          ctx.fillStyle = sk.goldDeep; rr(x - 40, y + 14, 80, 8, 4); ctx.fill();
+          if (cur === k) skinCheck(x, y, 170, 160);
+          text(sk.name, x, y + ch / 2 - 18, 23, COL.text, 'center', '600');
+          addHit(x, y, cw, ch, 'skin_' + k);
+        }
+        text('只换配色，不影响关卡与判定', C.DESIGN.w / 2, top + CH - 92, 21, COL.textSub, 'center');
+
+      } else if (tab === 1) {
+        var curFx = state.save.bgFx || 'classic';
+        var fxKeys = Object.keys(C.BG_FX);
+        drawSkinGrid(fxKeys, gridTop, curFx, function (k, x, y, sel) {
+          var mode = C.BG_FX[k].mode;
+          rr(x - 54, y - 44, 108, 78, 12);
+          ctx.fillStyle = C.BG_FX[k].dark ? '#141C36'
+            : (mode === 'aurora' ? '#E8E2F7' : mode === 'snow' ? '#DCEBF5' : COL.card);
+          ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = COL.line; ctx.stroke();
+          ctx.save(); rr(x - 54, y - 44, 108, 78, 12); ctx.clip();
+          drawFxPreview(mode, x, y);
+          ctx.restore();
+          if (sel) skinCheck(x, y, 170, 160);
+          text(C.BG_FX[k].name, x, y + 46, 22, COL.text, 'center', '600');
+          text(C.BG_FX[k].desc, x, y + 68, 17, COL.textSub, 'center');
+        }, 'bgfx_');
+
+      } else if (tab === 2) {
+        var curPs = state.save.pieceStyle || 'classic';
+        var psKeys = Object.keys(C.PIECE_STYLES);
+        drawSkinGrid(psKeys, gridTop, curPs, function (k, x, y, sel) {
+          rr(x - 54, y - 44, 108, 78, 12); ctx.fillStyle = COL.card; ctx.fill();
+          ctx.lineWidth = 1; ctx.strokeStyle = COL.line; ctx.stroke();
+          // 用是否选中无关的预览色（固定色板，展示质感差异）
+          var demo = ['#4FA8E0', '#63C88B', '#FF8A5B'];
+          for (var pi = 0; pi < 3; pi++) {
+            var vx = x - 34 + pi * 34;
+            drawPreviewPiece(vx, y - 5, 26, demo[pi], k);
+          }
+          if (sel) skinCheck(x, y, 170, 160);
+          text(C.PIECE_STYLES[k].name, x, y + 46, 22, COL.text, 'center', '600');
+          text(C.PIECE_STYLES[k].desc, x, y + 68, 17, COL.textSub, 'center');
+        }, 'pstyle_');
+
+      } else {
+        var curSf = state.save.sfxStyle || 'wood';
+        var sfKeys = Object.keys(C.SFX_STYLES);
+        drawSkinGrid(sfKeys, gridTop, curSf, function (k, x, y, sel) {
+          rr(x - 54, y - 40, 108, 70, 12); ctx.fillStyle = COL.card; ctx.fill();
+          ctx.lineWidth = 1; ctx.strokeStyle = COL.line; ctx.stroke();
+          // 音符图标（自绘，不依赖图标表）
+          ctx.save();
+          ctx.fillStyle = COL.goldDeep;
+          ctx.beginPath(); ctx.ellipse(x - 8, y + 4, 6, 4.2, -0.4, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = COL.goldDeep; ctx.lineWidth = 2.6; ctx.lineCap = 'round';
+          ctx.beginPath(); ctx.moveTo(x - 3, y + 3); ctx.lineTo(x - 3, y - 14); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(x - 3, y - 14); ctx.quadraticCurveTo(x + 8, y - 15, x + 8, y - 7); ctx.stroke();
+          ctx.restore();
+          // 声波条
+          var wave = C.SFX_STYLES[k].wave;
+          var bars = wave === 'square' ? [8, 8, 18, 8, 18, 8] : (wave === 'triangle' ? [6, 12, 18, 12, 8, 5] : [4, 10, 20, 12, 7, 4]);
+          for (var bi = 0; bi < bars.length; bi++) {
+            ctx.fillStyle = hexA(COL.goldDeep || '#FF9F1C', 0.7);
+            ctx.fillRect(x - 40 + bi * 14, y + 14 - bars[bi] / 2, 8, bars[bi]);
+          }
+          if (sel) skinCheck(x, y, 170, 160);
+          text(C.SFX_STYLES[k].name, x, y + 46, 22, COL.text, 'center', '600');
+          text(C.SFX_STYLES[k].desc, x, y + 68, 17, COL.textSub, 'center');
+        }, 'sfx_');
+        text('点选即刻试听，可随时切换', C.DESIGN.w / 2, top + CH - 92, 21, COL.textSub, 'center');
+      }
+      sheetClose(top + CH - 34, 'close_sheet');
+    }
+
+    /* 皮肤面板通用网格（每行 3 列，自动多行） */
+    function drawSkinGrid(keys, gridTop, curKey, drawCell, idPrefix) {
+      var cols = 3, cw = 178, ch = 168, gx = 14, gy = 14;
+      var startX = C.DESIGN.w / 2 - (cols * cw + (cols - 1) * gx) / 2 + cw / 2;
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var col = i % cols, row = Math.floor(i / cols);
+        var x = startX + col * (cw + gx);
+        var y = gridTop + row * (ch + gy) + ch / 2;
+        skinOptionBox(x, y, cw - 8, ch - 8, curKey === k);
+        drawCell(k, x, y, curKey === k);
+        addHit(x, y, cw, ch, idPrefix + k);
+      }
+    }
+
+    function skinOptionBox(x, y, w, h, sel) {
+      ctx.save();
+      rr(x - w / 2, y - h / 2, w, h, 18);
+      ctx.fillStyle = COL.card; ctx.fill();
+      ctx.lineWidth = sel ? 5 : 1.5;
+      ctx.strokeStyle = sel ? COL.goldEdge : COL.line;
+      if (sel) shadow(8, 3, hexA(COL.goldDeep || '#FF9F1C', 0.3));
+      ctx.stroke(); noShadow();
+      ctx.restore();
+    }
+    function skinCheck(x, y, boxW, boxH) {
+      /* 选中对勾固定在卡片右上角内侧，避免压住名称/描述文字 */
+      var cx = x + (boxW || 170) / 2 - 22;
+      var cy = y - (boxH || 168) / 2 + 20;
+      ctx.save();
+      shadow(4, 2, 'rgba(44,58,75,0.25)');
+      ctx.beginPath(); ctx.arc(cx, cy, 16, 0, Math.PI * 2);
+      ctx.fillStyle = COL.gold; ctx.fill();
+      noShadow();
+      ctx.restore();
+      drawIcon('check', cx, cy, COL.btnText, 0.7);
+    }
+
+    /* 背景特效的静态预览缩略图（用几笔静态图形示意，不跑粒子动画） */
+    function drawFxPreview(mode, x, y) {
+      if (mode === 'glow') {
+        var g = ctx.createRadialGradient(x, y, 4, x, y, 62);
+        g.addColorStop(0, 'rgba(255,224,160,0.95)'); g.addColorStop(1, 'rgba(255,224,160,0)');
+        ctx.fillStyle = g; ctx.fillRect(x - 60, y - 55, 120, 110);
+      } else if (mode === 'aurora') {
+        var cols2 = ['#FFB38A', '#8EC9F5', '#9BE3C4'];
+        for (var a = 0; a < 3; a++) {
+          var g2 = ctx.createRadialGradient(x - 30 + a * 30, y, 4, x - 30 + a * 30, y, 34);
+          g2.addColorStop(0, hexA(cols2[a], 0.65)); g2.addColorStop(1, hexA(cols2[a], 0));
+          ctx.fillStyle = g2; ctx.fillRect(x - 60, y - 55, 120, 110);
+        }
+      } else if (mode === 'stars') {
+        for (var s = 0; s < 12; s++) {
+          var sx = x - 48 + fxRnd(s * 3 + 1) * 96, sy = y - 42 + fxRnd(s * 3 + 2) * 84;
+          ctx.fillStyle = s % 3 ? '#FFFFFF' : '#FFF4C8';
+          ctx.beginPath(); ctx.arc(sx, sy, s % 4 === 0 ? 2.6 : 1.4, 0, Math.PI * 2); ctx.fill();
+        }
+      } else if (mode === 'bubbles') {
+        for (var b = 0; b < 6; b++) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1.2;
+          ctx.beginPath(); ctx.arc(x - 42 + fxRnd(b * 5) * 84, y - 38 + fxRnd(b * 5 + 2) * 74, 5 + fxRnd(b * 5 + 3) * 9, 0, Math.PI * 2); ctx.stroke();
+        }
+      } else if (mode === 'petals') {
+        for (var p = 0; p < 5; p++) {
+          ctx.save(); ctx.translate(x - 38 + fxRnd(p * 7) * 76, y - 34 + fxRnd(p * 7 + 1) * 68);
+          ctx.rotate(fxRnd(p * 7 + 2) * 6); ctx.fillStyle = hexA('#FF9BB0', 0.85);
+          petalPath(ctx, 7); ctx.fill(); ctx.restore();
+        }
+      } else if (mode === 'geometric') {
+        var pc = ['#4FA8E0', '#FF8A5B', '#63C88B', '#A87BE8'];
+        for (var gi = 0; gi < 4; gi++) {
+          ctx.save(); ctx.translate(x - 36 + fxRnd(gi * 9) * 72, y - 32 + fxRnd(gi * 9 + 1) * 64);
+          ctx.rotate(fxRnd(gi * 9 + 2) * 6); ctx.fillStyle = hexA(pc[gi], 0.7);
+          ctx.beginPath(); ctx.moveTo(-11, 7); ctx.lineTo(11, 7); ctx.lineTo(0, -11); ctx.closePath(); ctx.fill();
+          ctx.restore();
+        }
+      } else if (mode === 'snow') {
+        for (var si = 0; si < 12; si++) {
+          var sxx = x - 48 + fxRnd(si * 5 + 1) * 96, syy = y - 42 + fxRnd(si * 5 + 2) * 84;
+          ctx.globalAlpha = 0.55 + fxRnd(si * 5 + 3) * 0.45; ctx.fillStyle = '#FFFFFF';
+          ctx.beginPath(); ctx.arc(sxx, syy, 1.6 + fxRnd(si * 5 + 4) * 2.6, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      } else if (mode === 'rain') {
+        ctx.strokeStyle = 'rgba(150,190,235,0.75)'; ctx.lineWidth = 1.6; ctx.lineCap = 'round';
+        for (var ri = 0; ri < 12; ri++) {
+          var rxx = x - 48 + fxRnd(ri * 4 + 1) * 96, ryy = y - 42 + fxRnd(ri * 4 + 2) * 84;
+          ctx.beginPath(); ctx.moveTo(rxx, ryy); ctx.lineTo(rxx - 5, ryy + 16 + fxRnd(ri * 4 + 3) * 10); ctx.stroke();
+        }
+      } else if (mode === 'firefly') {
+        for (var fi = 0; fi < 11; fi++) {
+          var fxx = x - 46 + fxRnd(fi * 6 + 1) * 92, fyy = y - 40 + fxRnd(fi * 6 + 2) * 80;
+          ctx.fillStyle = fi % 2 ? '#C8FF7A' : '#FFE98A';
+          ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 9;
+          ctx.beginPath(); ctx.arc(fxx, fyy, 2 + fxRnd(fi * 6 + 3) * 2, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+      } else if (mode === 'nebula') {
+        var nc = ['#7B5CE8', '#3E7FE0', '#C451D6', '#4BC6E8'];
+        for (var ni = 0; ni < 4; ni++) {
+          var nx = x - 28 + ni * 19, ny = y + Math.sin(ni * 2) * 16;
+          var ng = ctx.createRadialGradient(nx, ny, 2, nx, ny, 32);
+          ng.addColorStop(0, hexA(nc[ni], 0.7)); ng.addColorStop(1, hexA(nc[ni], 0));
+          ctx.fillStyle = ng; ctx.fillRect(nx - 32, ny - 32, 64, 64);
+        }
+      }
+    }
+
+    /* 板件样式预览：画一个三角块，套用对应质感（与 drawPolyPiece 视觉一致） */
+    function drawPreviewPiece(x, y, r, color, style) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.beginPath(); ctx.moveTo(0, -r); ctx.lineTo(r, r * 0.8); ctx.lineTo(-r, r * 0.8); ctx.closePath();
+      if (style === 'neon') {
+        ctx.shadowColor = color; ctx.shadowBlur = 10; ctx.fillStyle = shadeHex(color, -0.5);
+      } else if (style === 'glow') {
+        ctx.shadowColor = color; ctx.shadowBlur = 9; ctx.fillStyle = color;
+      } else ctx.fillStyle = color;
+      ctx.fill(); ctx.shadowBlur = 0;
+      ctx.save(); ctx.clip();
+      if (style === 'candy' || style === 'pastel') {
+        var g = ctx.createLinearGradient(-r, -r, r, r);
+        g.addColorStop(0, 'rgba(255,255,255,0.5)'); g.addColorStop(1, 'rgba(0,0,0,0.18)');
+        ctx.fillStyle = g; ctx.fillRect(-r, -r, r * 2, r * 2);
+      } else if (style === 'wood') {
+        ctx.strokeStyle = 'rgba(90,52,20,0.18)'; ctx.lineWidth = 1;
+        for (var yy = -r; yy < r; yy += 5) { ctx.beginPath(); ctx.moveTo(-r, yy); ctx.lineTo(r, yy); ctx.stroke(); }
+      } else if (style === 'crystal') {
+        var cg = ctx.createLinearGradient(-r, -r, r, r);
+        cg.addColorStop(0, 'rgba(255,255,255,0.7)'); cg.addColorStop(0.5, 'rgba(255,255,255,0.05)');
+        cg.addColorStop(1, 'rgba(0,40,90,0.2)'); ctx.fillStyle = cg; ctx.fillRect(-r, -r, r * 2, r * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.moveTo(-r, 0); ctx.lineTo(0, -r); ctx.lineTo(r, 0);
+        ctx.moveTo(0, -r); ctx.lineTo(0, r); ctx.stroke();
+      } else if (style === 'metal') {
+        var mg = ctx.createLinearGradient(0, -r, 0, r);
+        mg.addColorStop(0, 'rgba(255,255,255,0.6)'); mg.addColorStop(0.4, 'rgba(0,0,0,0.22)');
+        mg.addColorStop(1, 'rgba(255,255,255,0.4)'); ctx.fillStyle = mg; ctx.fillRect(-r, -r, r * 2, r * 2);
+      } else if (style === 'jade') {
+        var jg = ctx.createRadialGradient(-r * 0.3, -r * 0.3, 1, 0, 0, r * 2);
+        jg.addColorStop(0, 'rgba(255,255,255,0.45)'); jg.addColorStop(1, 'rgba(10,70,50,0.24)');
+        ctx.fillStyle = jg; ctx.fillRect(-r, -r, r * 2, r * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.moveTo(-r, 0); ctx.bezierCurveTo(-r * 0.3, -8, r * 0.3, 8, r, 0); ctx.stroke();
+      }
+      ctx.restore();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = (style === 'neon' || style === 'glow') ? color
+        : style === 'crystal' ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.25)';
+      ctx.stroke(); ctx.restore();
     }
 
     /* 轻提示（所有页面最上层） */
@@ -5155,7 +6025,7 @@
       else if (state.overlay === 'energy') renderEnergy();
       else if (state.overlay === 'online') renderOnline();
       else if (state.overlay === 'invite') renderInvite();
-      else if (state.overlay === 'desktop') renderDesktop();
+      /* v0.28：desktop 浮层已删除 */
       else if (state.overlay === 'skin') renderSkin();
       /* v0.6：结算面板打开期间的持续小花流——画在面板之上，但只在卡片上/下留白带，
        * 不遮挡「下一关 / 重玩 / 回列表」与星级文字。不写 hits，不吞点击。 */
@@ -5311,6 +6181,8 @@
         fireBtn: fireBtn, syncEnergy: syncEnergy, onlineClaim: onlineClaim,
         applySkin: applySkin, grantFreeEnergy: grantFreeEnergy,
         doRevive: doRevive,
+        /* v0.27：三类视觉风格切换，供截图/验收直接驱动 */
+        applyBgFx: applyBgFx, applyPieceStyle: applyPieceStyle, applySfxStyle: applySfxStyle,
         /* v0.15：在线奖励（6 档 / 每日 0 点清零）与查找道具 */
         onlineSecNow: onlineSecNow, onlineTierList: onlineTierList,
         onlineClaimCount: onlineClaimCount, onlineClock: onlineClock,

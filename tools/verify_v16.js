@@ -160,11 +160,12 @@ function placeAllSolved(game) {
   D.go('home');
   const homeTx = grab(function () { step(16); });
   check('主页不再出现「任务」', !/\|任务\|/.test('|' + homeTx + '|'), homeTx.slice(0, 240));
-  ['添加桌面', '皮肤', '邀请有礼', '排行榜', '在线奖励', '设置'].forEach(function (label) {
+  ['皮肤', '邀请有礼', '排行榜', '在线奖励', '设置'].forEach(function (label) {
     check('主页仍有「' + label + '」入口', homeTx.indexOf(label) >= 0);
   });
   const coreSrc = fs.readFileSync(path.join(ROOT, 'js/core.js'), 'utf8');
   check('源码里没有 entry_task 热区', coreSrc.indexOf('entry_task') < 0);
+  check('v0.28 添加桌面入口已下线', homeTx.indexOf('添加桌面') < 0 && !/homeEntry\('entry_desktop'/.test(coreSrc));
   check('源码里没有 task_t1/t2/t3 领取按钮', coreSrc.indexOf('task_t1') < 0);
   check('源码里没有 renderTasks / claimTask / taskList',
     coreSrc.indexOf('renderTasks') < 0 && coreSrc.indexOf('claimTask') < 0 &&

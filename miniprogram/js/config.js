@@ -9,7 +9,7 @@
   'use strict';
 
   return {
-    version: 'v0.26',
+    version: 'v0.29',
 
     /* ---------- 品牌（v0.6 改名「方寸巧拼」） ----------
      * 游戏名只在这里定义一次：主页标题、分享文案、工程名都从这里取，
@@ -101,7 +101,7 @@
       HOME: {
         entryX: 104, entryW: 88, entryY0: 430, entryGap: 142,
         labelDy: 68, labelSize: 20,
-        startY: 1010, set4Y: 1150, set7Y: 1250
+        startY: 1010, set4Y: 1148, set7Y: 1274
       },
       /* v0.7 HUD：巧币 / 体力做成带描边的胶囊（参考用户给的截图）。
        * 图标压在胶囊左端外侧，数字统一 fontSize/700 白字，两行间距 rowGap。
@@ -122,7 +122,11 @@
          * pillMinW 的最大值，巧币行与体力行永远同长（用户反馈一长一短）。
          * pillMinW 兜住数字位数少的场景，避免胶囊短到图标压字。 */
         pillMinW: 172,
-        coinScale: 1.45, energyScale: 1.32   // 图标直径 ≈ 胶囊高的 0.7~0.75，才压得住整条胶囊
+        coinScale: 1.45, energyScale: 1.32,  // 图标直径 ≈ 胶囊高的 0.7~0.75，才压得住整条胶囊
+        /* v0.28：用户要求把巧币/体力挪到右上角。rightAnchor=true 时整组按右边缘定位。
+         * 注意：真机右上角有微信原生胶囊（「···」「○」）。若真机被压住，
+         * 把 rightPad 调大（如 210）即可整组左移到原生胶囊下方，不必改绘制代码。 */
+        rightAnchor: true, rightPad: 24
       },
       /* v0.17 对局页 HUD：顶栏左侧常驻的巧币 / 体力余量（竖排两枚）。
        * 为什么在左侧：**真机右上角是微信原生胶囊按钮**（「···」和「○」，
@@ -147,7 +151,10 @@
         textColor: '#FFFFFF',
         pillFill: 'rgba(30,40,52,0.72)',  // 与主页 HUD 同款深底，白字对比度约 7:1
         pillStroke: 'rgba(255,255,255,0.62)',
-        coinScale: 0.78, energyScale: 0.70
+        coinScale: 0.78, energyScale: 0.70,
+        /* v0.28 用户要求：对局页巧币/体力也挪到右上角（与主页一致）。
+         * 倒计时胶囊居中（255..495），右上有空位，rightPad 控制距右边缘。 */
+        rightAnchor: true, rightPad: 24
       }
     },
 
@@ -617,7 +624,112 @@
         gold: '#8E7CEB', goldDeep: '#7A66DF', goldEdge: '#6350C4',
         card: '#FFFFFF', line: '#DEE4F7', lineDeep: '#C2CBEA',
         tint: 'rgba(112,98,205,0.24)'   // 夜空：叠淡紫罩
+      },
+      sunset: {
+        name: '落日',
+        bg: '#FCE6D4', bgDeep: '#F6CDB2', text: '#4A2C25', textSub: '#936A57',
+        gold: '#FF8A5B', goldDeep: '#F2703C', goldEdge: '#D4521F',
+        card: '#FFFFFF', line: '#F3DFD2', lineDeep: '#E4BFA8',
+        tint: 'rgba(242,112,60,0.14)'
+      },
+      ocean: {
+        name: '海岸',
+        bg: '#E4F2F6', bgDeep: '#C7E4EC', text: '#1D3D48', textSub: '#5E8896',
+        gold: '#3FB8B0', goldDeep: '#2A9E96', goldEdge: '#1C827A',
+        card: '#FFFFFF', line: '#D7E9EE', lineDeep: '#B4D6DE',
+        tint: 'rgba(63,184,176,0.14)'
       }
+    },
+
+    /* ===== v0.27 视觉升级 · 皮肤功能扩展 =====
+     * 三类可独立选择的风格，均存进存档（bgFx / pieceStyle / sfxStyle），
+     * 与配色 skin 彼此独立、任意组合。全部纯 Canvas / WebAudio 程序化绘制，
+     * 零新增素材、零包体增长。 */
+
+    /* ---------- 主页动态背景特效（Canvas 程序化，零图片） ----------
+     * classic 沿用原暖木光斑；其余为新增粒子特效，mode 决定绘制分支。
+     * 低帧率自动减半粒子（state.lowFps），reduceMotion 全停。 */
+    BG_FX: {
+      classic:   { name: '暖木微光', desc: '原版柔光',     mode: 'glow' },
+      aurora:    { name: '流光溢彩', desc: '极光缓缓流动', mode: 'aurora' },
+      /* v0.28：星夜流萤 / 星云流转改为深色夜空底，粒子才看得清（dark:true 由 drawFxLayer 铺深底） */
+      stars:     { name: '星夜流萤', desc: '深蓝夜空 + 流萤', mode: 'stars',   dark: true },
+      bubbles:   { name: '泡泡漂浮', desc: '彩色气泡上浮', mode: 'bubbles' },
+      petals:    { name: '花瓣飘落', desc: '花瓣随风飘落', mode: 'petals' },
+      geometric: { name: '几何轻舞', desc: '碎片漂浮旋转', mode: 'geometric' },
+      /* v0.28 新增 4 套：粒子更密、对比更强，主页 / 关卡 / 对局三处共用 */
+      snow:      { name: '初雪纷飞', desc: '白雪缓缓飘落', mode: 'snow' },
+      rain:      { name: '烟雨绵绵', desc: '雨丝斜落带涟漪', mode: 'rain' },
+      firefly:   { name: '萤火之森', desc: '夜色 + 点点萤火', mode: 'firefly', dark: true },
+      nebula:    { name: '星云流转', desc: '深紫星云缓缓旋转', mode: 'nebula',  dark: true }
+    },
+    BG_FX_PARTS: {
+      aurora:    { bands: 5, speed: 0.085 },
+      stars:     { count: 92, shootGap: 3200 },
+      bubbles:   { count: 32 },
+      petals:    { count: 28 },
+      geometric: { count: 22 },
+      snow:      { count: 62 },
+      rain:      { count: 60 },
+      firefly:   { count: 40 },
+      nebula:    { clouds: 6 }
+    },
+
+    /* ---------- 七巧板 / 四巧板 板件样式（只改绘制，不动几何/判定/热区） ---------- */
+    PIECE_STYLES: {
+      classic: { name: '经典', desc: '纯色白边' },
+      candy:   { name: '糖果', desc: '糖果渐变' },
+      wood:    { name: '原木', desc: '木质纹理' },
+      neon:    { name: '霓虹', desc: '暗底发光' },
+      pastel:  { name: '马卡龙', desc: '柔和粉彩' },
+      /* v0.28 新增 4 套质感 */
+      crystal: { name: '水晶', desc: '通透高光棱面' },
+      metal:   { name: '金属', desc: '拉丝银灰光泽' },
+      jade:    { name: '玉石', desc: '温润云纹玉质' },
+      glow:    { name: '荧光', desc: '亮色柔光描边' }
+    },
+
+    /* ---------- 交互音效风格（影响 game.js 合成音的音色） ----------
+     * pitch=频率倍率、decay=时值倍率、wave=振荡器类型、bell=是否加泛音层。
+     * wood 为当前默认音色；其余由两端 game.js 的 setSfxStyle 应用。 */
+    SFX_STYLES: {
+      wood:   { name: '木质', desc: '笃·笃·笃', wave: 'sine',     pitch: 1.00, decay: 1.00, bell: false },
+      bell:   { name: '铃铛', desc: '清脆铃音', wave: 'triangle', pitch: 1.62, decay: 1.30, bell: true  },
+      water:  { name: '水滴', desc: '叮咚水声', wave: 'sine',     pitch: 1.34, decay: 0.72, bell: true  },
+      retro:  { name: '复古', desc: '电子街机', wave: 'square',   pitch: 0.94, decay: 0.58, bell: false },
+      /* v0.28 新增 4 套音色 */
+      chime:  { name: '风铃', desc: '空灵悠长', wave: 'sine',     pitch: 1.90, decay: 1.85, bell: true  },
+      marimba:{ name: '木琴', desc: '圆润弹跳', wave: 'triangle', pitch: 1.15, decay: 0.62, bell: false },
+      bubble: { name: '泡泡', desc: '轻快啵啵', wave: 'sine',     pitch: 1.55, decay: 0.42, bell: true  },
+      synth:  { name: '合成器', desc: '未来电子', wave: 'sawtooth', pitch: 0.86, decay: 0.92, bell: false }
+    },
+
+    /* ---------- v0.28：深色背景特效自动切换的暗色调色板 ----------
+     * 当 bgFx 带 dark:true（星夜流萤 / 萤火之森 / 星云流转）时叠加在皮肤配色之上，
+     * 保证深色夜空里文字 / 卡片仍清晰。切换皮肤或背景时统一由 refreshPalette() 重算。 */
+    DARK_PAL: {
+      bg: '#101733', bgDeep: '#080D20', bgTop: '#1B2450',
+      text: '#F2F5FF', textSub: '#B9C6E6', textOn: '#FFFFFF', btnText: '#241700',
+      card: 'rgba(28,36,62,0.94)', cardEdge: 'rgba(170,190,235,0.28)', board: 'rgba(24,32,56,0.92)',
+      line: 'rgba(180,196,236,0.26)', lineDeep: 'rgba(180,196,236,0.45)',
+      gold: '#FFD166', goldDeep: '#FFB93D', goldEdge: '#E89B22',
+      disabledBg: 'rgba(255,255,255,0.08)', disabledIcon: 'rgba(200,212,240,0.35)',
+      targetFill: 'rgba(130,155,215,0.18)', targetEdge: '#A8BEF0', targetSilhouette: 'rgba(150,175,225,0.30)',
+      splitLine: 'rgba(190,208,245,0.65)', track: 'rgba(180,196,236,0.22)',
+      starOff: 'rgba(180,196,236,0.30)', slotBg: 'rgba(255,255,255,0.05)',
+      mask: 'rgba(6,10,24,0.68)', snapRing: 'rgba(255,255,255,0.98)',
+      shadow: 'rgba(0,0,0,0.32)', shadowPiece: 'rgba(0,0,0,0.40)'
+    },
+
+    /* ---------- 主页 UI 视觉增强参数 ---------- */
+    HOME_VFX: {
+      titleGlow: true, titleStroke: 9,      // 标题描边 + 柔光
+      ringPulseMs: 2600,                    // 入口按钮呼吸光周期
+      btnShineMs: 3200,                     // 主按钮流光扫过周期
+      decoHalo: true, decoSparkN: 10,        // 帆船光晕 + 环绕星点
+      /* v0.28：标题「华文彩云」字体 + 黑边白填充 */
+      titleFontFamily: '"STCaiyun","华文彩云","STKaiti","KaiTi",serif',
+      titleFill: '#FFFFFF', titleStrokeColor: '#141821', titleGlowColor: 'rgba(255,255,255,0.55)'
     },
 
     /* ---------- v0.11 真人 BGM（audio/ 下的 5 首 mp3，已压成 48kbps 单声道） ----------

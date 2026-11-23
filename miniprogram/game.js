@@ -148,20 +148,41 @@ function noiseBurst(dur, gain, filterFreq, delay) {
  * 现在：tap = 620→480Hz 短点；pick = 392→523Hz 上滑；snap = 196→147Hz
  * 加 98Hz 的"笃"（只留一丝 700Hz 木质接触声）；win 去掉原来 1568Hz 的高频
  * 冠音（最刺耳），低音补一层 C5 垫底，242ms 顶点仍与鲜花动效对齐。 */
-var synth = {
-  sfx_tap: function () { tone(620, 0.055, 'sine', 0.085, 0, 480); tone(1240, 0.022, 'sine', 0.028); },
-  sfx_pick: function () { tone(392, 0.075, 'sine', 0.115, 0, 523); tone(1046, 0.030, 'sine', 0.026); },
-  sfx_snap: function () { tone(196, 0.085, 'sine', 0.21, 0, 147); tone(98, 0.070, 'sine', 0.12); noiseBurst(0.020, 0.055, 700); },
-  sfx_win: function () {
-    tone(523.25, 0.14, 'triangle', 0.10, 0.000);  // C5 — 起苞
-    tone(659.25, 0.14, 'triangle', 0.10, 0.082);  // E5 — 卫星花区
-    tone(783.99, 0.15, 'triangle', 0.11, 0.162);  // G5 — 卫星花②
-    tone(1046.50, 0.24, 'sine', 0.13, 0.242);     // C6 — ★顶点，对齐主花峰值 242ms
-    tone(523.25, 0.62, 'sine', 0.07, 0.242);      // C5 — 低音垫底（参考视频低频厚）
-    tone(783.99, 0.52, 'sine', 0.06, 0.300);      // G5
-    tone(1046.50, 0.50, 'sine', 0.05, 0.340);     // C6
-  }
+/* v0.27 音效风格：默认木质（原音色）。setSfxStyle 会按 CONFIG.SFX_STYLES 的参数
+ * 重写三个操作音（tap/pick/snap）——pitch 改频率、decay 改时值、wave 改波形、
+ * bell 追加一层高八度泛音。sfx_win 通关曲保持原样（情绪表达不随风格破坏）。 */
+var SFX_BASE = {
+  tap:  { f: 620, d: 0.055, g: 0.085, to: 480, f2: 1240, d2: 0.022, g2: 0.028 },
+  pick: { f: 392, d: 0.075, g: 0.115, to: 523, f2: 1046, d2: 0.030, g2: 0.026 },
+  snap: { f: 196, d: 0.085, g: 0.21, to: 147, f2: 98, d2: 0.070, g2: 0.12 }
 };
+function buildSfxSynth(key) {
+  var st = (CONFIG.SFX_STYLES && CONFIG.SFX_STYLES[key]) || (CONFIG.SFX_STYLES && CONFIG.SFX_STYLES.wood) || { pitch: 1, decay: 1, wave: 'sine', bell: false };
+  var p = st.pitch, d = st.decay, w = st.wave, bell = !!st.bell;
+  function mk(b) {
+    return function () {
+      tone(b.f * p, b.d * d, w, b.g, 0, b.to ? b.to * p : 0);
+      tone(b.f2 * p, b.d2 * d, w, b.g2);
+      if (bell) tone(b.f2 * p * 1.5, b.d * d * 0.8, 'sine', b.g * 0.35, 0.008);
+    };
+  }
+  return {
+    sfx_tap: mk(SFX_BASE.tap),
+    sfx_pick: mk(SFX_BASE.pick),
+    sfx_snap: function () { mk(SFX_BASE.snap)(); noiseBurst(0.020, 0.055, 700); },
+    sfx_win: function () {
+      tone(523.25, 0.14, 'triangle', 0.10, 0.000);
+      tone(659.25, 0.14, 'triangle', 0.10, 0.082);
+      tone(783.99, 0.15, 'triangle', 0.11, 0.162);
+      tone(1046.50, 0.24, 'sine', 0.13, 0.242);
+      tone(523.25, 0.62, 'sine', 0.07, 0.242);
+      tone(783.99, 0.52, 'sine', 0.06, 0.300);
+      tone(1046.50, 0.50, 'sine', 0.05, 0.340);
+    }
+  };
+}
+var synth = buildSfxSynth('wood');
+var sfxStyleKey = 'wood';
 
 /* 包内路径：文件系统 API 不接受前导 './' */
 function pkgPath(name) {
@@ -530,20 +551,23 @@ function playSfx(name) {
   }
   var rate = 1 + (Math.random() * 0.10 - 0.05);
   var gain = (CONFIG.AUDIO.sfxGain[name] || 0.9) * (0.95 + Math.random() * 0.10);
-  if (buf[name] && AC) {
-    try {
-      var s = AC.createBufferSource();
-      s.buffer = buf[name];
-      s.playbackRate.value = rate;
-      var g = AC.createGain();
-      g.gain.value = gain;
-      s.connect(g); g.connect(masterGain);
-      if (name === 'sfx_snap') { snapVoices++; s.onended = function () { snapVoices--; }; }
-      s.start();
-      return;
-    } catch (e) { /* 落到下面 */ }
+  /* v0.27：非木质风格必须走合成（wav 缓冲是固定的木质录音，换风格听不出差别） */
+  if (sfxStyleKey === 'wood') {
+    if (buf[name] && AC) {
+      try {
+        var s = AC.createBufferSource();
+        s.buffer = buf[name];
+        s.playbackRate.value = rate;
+        var g = AC.createGain();
+        g.gain.value = gain;
+        s.connect(g); g.connect(masterGain);
+        if (name === 'sfx_snap') { snapVoices++; s.onended = function () { snapVoices--; }; }
+        s.start();
+        return;
+      } catch (e) { /* 落到下面 */ }
+    }
+    if (elementMode && playElement(name, rate, gain)) return;
   }
-  if (elementMode && playElement(name, rate, gain)) return;
   if (synth[name]) synth[name]();
 }
 
@@ -576,6 +600,11 @@ var audio = {
   },
   duck: function (on) { ducked = !!on; applyBgmGain(); },
   setScene: function (k) { bgmSetScene(k); },   // v0.5：主页 / 关卡多场景 BGM
+  setSfxStyle: function (key) {                  // v0.27：切换交互音效风格
+    if (!CONFIG.SFX_STYLES || !CONFIG.SFX_STYLES[key]) key = 'wood';
+    sfxStyleKey = key;
+    synth = buildSfxSynth(key);
+  },
   setVisible: function (v) {
     if (!v) {
       if (curCtx && curCtx._watch) { clearTimeout(curCtx._watch); curCtx._watch = null; }
