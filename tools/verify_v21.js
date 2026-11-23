@@ -101,12 +101,11 @@ function putSolved(S, lv, id) {
 
   /* ================= 2. 刷新不重置倒计时 ================= */
   section('2. 重开（工具栏刷新）不再重置倒计时');
+  /* v0.26：第 1 关永远是教学形式（冻结计时），这一节只想单独测计时，
+   * 所以临时关掉教学开关 env.tutorial（这是给验收脚本用的旁路，不是玩家可见的开关）。 */
+  env.tutorial = false;
   D.go('play'); D.setupLevel(0);
-  /* v0.25：教学是否出现改看"第 1 关通没通关"，不再看 tutDone。
-   * 这一节只想单独测计时，所以先把第 1 关标成已通关，把教学摘掉。 */
-  S.save.starOf['1'] = 3;
-  D.setupLevel(0);
-  check('进关 → 教学不出现（第 1 关已通关）', !S.tut);
+  check('关掉教学开关后进关 → 没有教学接管', !S.tut);
   S.timeLeft = 30; S.timeLimit = 195; S.elapsed = 12; S.reviveUsed = 1;
   S.hearts = D.heartsOf(30, 195);
   const hearts0 = S.hearts;
@@ -138,6 +137,7 @@ function putSolved(S, lv, id) {
 
   /* ================= 3. 教学只在每类第 1 关 ================= */
   section('3. 教学与关号 / 数据集的关系');
+  env.tutorial = true;          // v0.26：第 2 节临时关过，这里恢复
   store['tangram_save_v1'] = null; delete store['tangram_save_v1'];
   delete store['tangram7_save_v1'];
   const g2 = CORE(env); g2.init(); step(16);
@@ -199,7 +199,7 @@ function putSolved(S, lv, id) {
   putSolved(S2, L4, 'C');
   check('最后一块对了 → tutStep 返回 null（教学收尾）', D2.tutStep() === null);
 
-  section('5. 教学关的收尾：自动完成 / 跳过 / 不再打扰');
+  section('5. 教学关的收尾：自动完成 / 跳过 / 通关后仍是教学');
   {
     delete store['tangram_save_v1'];
     const g3 = CORE(env); g3.init(); step(16);
@@ -226,12 +226,14 @@ function putSolved(S, lv, id) {
     L3.solution.forEach(s => putSolved(S3, L3, s.id));
     step(16);
     check('全部摆对 → 教学自动收起', !S3.tut);
-    check('收起不写存档标记（判据已换成通关与否）', S3.save.tutDone === undefined,
+    check('收起不写存档标记（判据已换成"永远是教学"）', S3.save.tutDone === undefined,
       JSON.stringify(S3.save.tutDone));
     check('收尾有一句"教学完成"', S3.toast && /教学完成/.test(S3.toast.text), S3.toast && S3.toast.text);
-    S3.save.starOf['1'] = 1;                      // 视为已通关
+    /* v0.26：第 1 关永远是教学形式 —— 通关后重进来依然有虚影和指令。
+     * 这是用户明确要的（"不管是否通关都是教学的形式"）。 */
+    S3.save.starOf['1'] = 3;
     D3.setupLevel(0);
-    check('第 1 关通关后 → 再进不再出现', !S3.tut);
+    check('第 1 关通关（3 星）后重进 → 依然是教学形式', !!S3.tut, String(!!S3.tut));
 
     /* 跳过路径 */
     delete store['tangram_save_v1'];

@@ -331,7 +331,7 @@ async function main() {
   const coreSrc = fs.readFileSync(path.join(ROOT, 'js/core.js'), 'utf8');
   const code = coreSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   check('core 里不出现 wx.*', !/\bwx\./.test(code));
-  check('在线计时只在前台（onHide 停表）', /onHide[\s\S]{0,200}state\.onlineMark = 0/.test(coreSrc));
+  check('在线计时只在前台（onHide 停表）', /onHide[\s\S]{0,400}state\.onlineMark = 0/.test(coreSrc));
   check('onlineSec 用 writeLocal(true)（不上行、不动 updatedAt）',
     /function onlineTick[\s\S]{0,500}writeLocal\(true\)/.test(coreSrc));
   check('旧字段 onlineTs 不再参与逻辑', !/state\.save\.onlineTs/.test(code));

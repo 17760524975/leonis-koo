@@ -177,6 +177,8 @@ for (let i = 0; i < 3; i++) step(16);
 /* ---------- 4. 体力成本 2 ---------- */
 section('4. 每进一关扣 2 点体力');
 check('配置值 = 2', CFG.ECON.energyCostLevel === 2, 'cost=' + CFG.ECON.energyCostLevel);
+/* v0.26：第 1 关是教学关（不扣体力），用第 2 关测成本 */
+S.save.unlockedMax = 2; S.save.resume = null;
 S.save.energy = 8; S.save.energyTs = Date.now();
 const before = S.save.energy;
 game._debug.fireBtn('start');
@@ -184,6 +186,7 @@ check('进关扣 2 点', S.save.energy === before - 2, before + ' → ' + S.save
 check('已进入对局', S.page === 'play', S.page);
 check('体力不足时进不去（1 点被拦）', (function () {
   S.page = 'home'; S.overlay = null; S.save.energy = 1; S.save.energyTs = Date.now();
+  S.save.unlockedMax = 2; S.save.resume = null;
   for (let i = 0; i < 3; i++) step(16);
   game._debug.fireBtn('start');
   return S.page === 'home' && S.overlay === 'energy';

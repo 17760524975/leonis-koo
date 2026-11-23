@@ -293,7 +293,7 @@ tap(480 + 54, CFG.DESIGN.h / 2 + 40);
 for (let k = 0; k < 6; k++) step(16);
 check('音效开关可切换', S.settingsFx === false, 'sfx=' + S.settingsFx);
 check('设置已写入存档', S.save.settings.sfx === false && !!store[CFG.SAVE_KEY]);
-tap(375, CFG.DESIGN.h / 2 + 344);   // v0.24.1：底排改成「重看教程 / 重置进度」并排，关闭在 cy+344
+tap(375, CFG.DESIGN.h / 2 + 246);   // v0.26：设置页只剩一枚「关闭」，居中在 cy+246
 for (let k = 0; k < 6; k++) step(16);
 check('关闭设置', S.overlay === null, 'overlay=' + S.overlay);
 

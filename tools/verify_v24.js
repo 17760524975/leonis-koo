@@ -228,55 +228,56 @@ function hit(hits, id) { return hits.find(h => h.id === id); }
   frame(S, D, 2000);
   check('广告结束后热区恢复', D.hitList().length > 0, String(D.hitList().length));
 
-  /* ================= 9. 教学归位（v0.25）================= */
-  /* 用户反馈：「教学不该放在设置里，太深了；之前的实现是在每个游戏的第一关卡进行的教学」。
-   * v0.24.1 那枚「重看教程」删掉，判据从一次性标记 tutDone 改成"第 1 关通没通关"。
-   * 这一节把新规则的四种状态全跑一遍，防止以后退回"标记一次就永久失效"。 */
-  section('9. 教学归位：第 1 关就地教，不再藏进设置');
+  /* ================= 9. 设置页不放假操作 + 第 1 关永远教学（v0.26）================= */
+  /* 用户两条反馈：
+   *   ①「设置里面也不能有重置进度，玩家怎么能够直接把游戏重置了呢」；
+   *   ②「教学是四巧板和七巧板的第一关设置为教学的形式，不管是否通关都是教学的形式」。
+   * 这一节把设置页的热区白名单和第 1 关的四种星级状态都钉死。 */
+  section('9. 设置页无破坏性入口 / 第 1 关永远教学');
   env.tutorial = true;
 
-  /* ① 设置页没有教学入口了 */
+  /* ① 设置页：只剩「关闭」，没有任何重置/教学入口 */
   S.save.starOf = {}; S.save.coin = 100; S.save.energy = 10;
   S.overlay = 'settings'; S.resT = 0;
   rec.texts.length = 0; step(16);
-  check('设置页不再有「重看教程」', !rec.texts.some(t => t.s === '重看教程'),
-    rec.texts.map(t => t.s).filter(t => /教程|重置/.test(t)).join('|'));
-  check('「重置进度」还在（没被一起删掉）', rec.texts.some(t => t.s === '重置进度'),
-    rec.texts.map(t => t.s).filter(t => /教程|重置/.test(t)).join('|'));
-  const hReset = D.hitList().find(h => h.id === 'reset_progress');
-  check('「重置进度」回到本卡中轴居中（单枚，不再并排）',
-    !!hReset && Math.abs(hReset.x + hReset.w / 2 - DW / 2) < 1,
-    hReset ? `x=${(hReset.x + hReset.w / 2).toFixed(0)} 期望 ${DW / 2}` : 'missing');
-  check('设置页没有 replay_tut 热区', !D.hitList().some(h => h.id === 'replay_tut'),
-    D.hitList().map(h => h.id).join(','));
+  check('设置页没有「重置进度」', !rec.texts.some(t => t.s === '重置进度'),
+    rec.texts.map(t => t.s).filter(t => /重置|教程|关闭/.test(t)).join('|'));
+  check('设置页没有「重看教程」', !rec.texts.some(t => t.s === '重看教程'),
+    rec.texts.map(t => t.s).filter(t => /重置|教程|关闭/.test(t)).join('|'));
+  check('设置页仍有「关闭」', rec.texts.some(t => t.s === '关闭'),
+    rec.texts.map(t => t.s).filter(t => /重置|教程|关闭/.test(t)).join('|'));
+  const sIds = D.hitList().map(h => h.id);
+  check('热区里没有 reset_progress / replay_tut',
+    sIds.indexOf('reset_progress') < 0 && sIds.indexOf('replay_tut') < 0, sIds.join(','));
+  const hClose = D.hitList().find(h => h.id === 'close_settings');
+  check('「关闭」居中（两枚并排的痕迹已清）',
+    !!hClose && Math.abs(hClose.x + hClose.w / 2 - DW / 2) < 1,
+    hClose ? `x=${(hClose.x + hClose.w / 2).toFixed(0)} 期望 ${DW / 2}` : 'missing');
 
-  /* ② 第 1 关没通关 → 每次进来都教 */
+  /* ② 第 1 关永远是教学形式：0 / 1 / 3 星都一样 */
   S.overlay = null;
+  S.save.starOf = {};
   D.setupLevel(0);
-  check('第 1 关未通关 → 教学出现', !!S.tut, String(!!S.tut));
+  check('第 1 关（0 星）→ 教学', !!S.tut, String(!!S.tut));
+  S.save.starOf['1'] = 1;
   D.setupLevel(0);
-  check('未通关时退出重进 → 仍然教（不是"教过一次就没了"）', !!S.tut, String(!!S.tut));
+  check('第 1 关（1 星，已通关）→ 仍然教学', !!S.tut, String(!!S.tut));
+  S.save.starOf['1'] = 3;
+  D.setupLevel(0);
+  check('第 1 关（3 星，已通关）→ 仍然教学', !!S.tut, String(!!S.tut));
+  D.setupLevel(1);
+  check('第 2 关 → 不教学', !S.tut, String(!!S.tut));
+
+  /* ③ 跳过只关本次，不落任何标记 */
+  D.setupLevel(0);
   D.fireBtn('tut_skip'); step(16);
   check('点「跳过教学」→ 本次立刻收起', !S.tut, String(!!S.tut));
-  check('跳过不写任何存档标记', S.save.tutDone === undefined,
-    JSON.stringify(S.save.tutDone));
+  check('跳过不写存档标记', S.save.tutDone === undefined, JSON.stringify(S.save.tutDone));
   D.setupLevel(0);
-  check('跳过后再进（仍未通关）→ 还会教', !!S.tut, String(!!S.tut));
+  check('跳过后重进 → 还是教学', !!S.tut, String(!!S.tut));
 
-  /* ③ 通关过一次 → 不再打扰 */
-  S.save.starOf['1'] = 2;
-  D.setupLevel(0);
-  check('第 1 关已通关（2 星）→ 不再教学', !S.tut, String(!!S.tut));
-
-  /* ④ 重置进度 → 教学自己回来，不需要额外开关 */
-  S.overlay = 'settings'; step(16);
-  D.fireBtn('reset_progress'); step(16);
-  check('重置进度把星级清空', !(S.save.starOf['1'] > 0), JSON.stringify(S.save.starOf));
-  D.setupLevel(0);
-  check('重置进度后教学自动回来', !!S.tut, String(!!S.tut));
-
-  /* ⑤ 误判防御：棋盘还没建好（pieces 为空）时 tutStep() 会返回 null，
-   * 旧代码会当场判定"教学完成"并落档 —— 这是"教学凭空消失"的另一条路径。 */
+  /* ④ 误判防御：棋盘还没建好（pieces 为空）时 tutStep() 返回 null，
+   * 不能当成"教学完成"而静默收起。 */
   const keepPieces = S.pieces;
   S.pieces = [];
   for (let k = 0; k < 5; k++) step(16);

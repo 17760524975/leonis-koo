@@ -340,7 +340,12 @@
          * 靠这个集合在段内去重 —— 同一关一段里只计一次，重复刷不掉榜。 */
         streakSeen: [],
         /* v0.21 曾有 tutDone（已看过教学的玩法），v0.25 废弃：
-         * 教学是否出现改由"第 1 关通没通关"判断，不再需要一次性标记。 */
+         * 教学是否出现改由"第 1 关通没通关"判断，不再需要一次性标记。
+         * v0.26 再改：第 1 关永远是教学形式，连"通没通关"也不看（见 makeTutorial）。 */
+        /* v0.26：未通关关卡的中途快照。玩家玩一半返回，下次进来接着走 ——
+         * 不重复扣体力，倒计时也从剩余时间continue，不回满。
+         * 只保留最近一关（单槽）：玩家真正玩过的关才会写，进关立刻退出不覆盖。 */
+        resume: null,
         /* v0.14 玩家资料缓存：断网 / 云端不可用时也能显示自己的昵称头像 */
         profile: null,
         updatedAt: Date.now()        // v0.9：云端合并按这份时间戳判新旧
@@ -374,6 +379,9 @@
             s.onlineSec = (typeof o.onlineSec === 'number') ? o.onlineSec : 0;
             s.onlineGot = (o.onlineGot && typeof o.onlineGot === 'object') ? o.onlineGot : {};
             s.hintItems = (typeof o.hintItems === 'number') ? o.hintItems : 0;
+            /* v0.26：中途快照。老存档没有 → null（等于没有续玩状态） */
+            s.resume = (o.resume && typeof o.resume === 'object' && typeof o.resume.lv === 'number')
+              ? o.resume : null;
             /* v0.16：每日任务已下线，老存档里的 tasksDay/tasksClaimed/taskPlays 直接丢弃 */
             s.inviteCount = (typeof o.inviteCount === 'number') ? o.inviteCount : 0;
             s.inviteDay = o.inviteDay || '';
@@ -634,6 +642,9 @@
       out.onlineGot = a.onlineGot || {};
       /* v0.16：查找道具是消耗品：谁改得晚听谁的（updatedAt 已经判过新旧） */
       out.hintItems = (newer.hintItems || 0);
+      /* v0.26：续玩快照跟「较新的那份」走 —— 它记录的是这段设备上的当前局面，
+       * 取 max 或 union 都没有意义（两份快照拼不到一起）。 */
+      out.resume = newer.resume || null;
       out.updatedAt = Math.max(a.updatedAt || 0, b.updatedAt || 0);
       return out;
     }
@@ -1120,6 +1131,7 @@
       if (state.overlay === 'fail') return;
       var s = state.save;
       state.running = false;
+      clearResume();          // v0.26：时间耗尽 = 这局结束，不再有"续玩"
       state.overlay = 'fail';
       state.failT = 0;
       state.selId = null;
@@ -1198,6 +1210,7 @@
     function giveUp() {
       state.overlay = null;
       state.running = false;
+      clearResume();                           // v0.26：主动放弃 = 这局不要了
       state.save.streak = 0;                   // 放弃 → 连胜清零
       state.save.streakSeen = [];              // v0.19：本段集合同时清空
       state.streakBeforeFail = 0;
@@ -1265,6 +1278,9 @@
 
     /* ---------------- 页面切换 ---------------- */
     function go(page) {
+      /* v0.26：离开对局页且这局还没结束 → 先记一份续玩快照。
+       * 必须放在 state.page = page 之前，否则读到的已经是新页面。 */
+      if (state.page === 'play' && page !== 'play') saveResume();
       state.page = page;
       state.fade = 0;
       state.pageT = 0;
@@ -1285,6 +1301,75 @@
         var um = Math.max(1, Math.min(state.save.unlockedMax || 1, LEVELS.length));
         state.lvPage = Math.floor((um - 1) / CHAP_PER);
       }
+    }
+
+    /* ---------------- v0.26 中途续玩 ----------------
+     * 旧版有三种"退出即刷新"的漏洞，都会把倒计时变成摆设：
+     *   ① 玩到只剩 10 秒，返回列表再进来 → 时间回满，等于用"退出"续命；
+     *   ② 同一关每进去一次就扣一次体力，拼不上的人越试越穷；
+     *   ③ 拼了一半的板子全回托盘，之前的操作白做。
+     * 现在：离开未通关的关卡时留一份快照（剩余时间 / 用时 / 步数 / 复活次数 /
+     * 已在板上的块），下次从列表点同一关整份恢复，并且不再扣体力。
+     * 只在"真正动过手"时才写（步数 > 0 或有块在板上），所以点错关立刻退出
+     * 不会把上一关的快照冲掉。 */
+    function isTutLevel(idx) {
+      var T = C.TUTORIAL;
+      return !!(T && T.on && idx < (T.levels || 1));
+    }
+    function saveResume() {
+      var s = state.save, i = state.levelIdx;
+      if (state.page !== 'play') return;
+      if (!state.running || state.win || state.tut) return;
+      if (isTutLevel(i)) return;                        // 教学关每次重来，不留档
+      if ((s.starOf[String(i + 1)] || 0) > 0) return;   // 已通关的重玩不需要续
+      if (!(state.timeLeft > 0)) return;                // 时间耗尽 = 这局已结束
+      var pc = [], k;
+      for (k = 0; k < state.pieces.length; k++) {
+        var p = state.pieces[k];
+        if (p.onBoard) {
+          pc.push([p.id, Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10,
+            Math.round(p.angle), p.flipped ? 1 : 0]);
+        }
+      }
+      if (!pc.length && !state.steps) return;           // 没动过手 → 别冲掉上一关的快照
+      s.resume = {
+        lv: i, tl: state.timeLimit, left: Math.round(state.timeLeft * 100) / 100,
+        el: Math.round(state.elapsed || 0), st: state.steps || 0,
+        rv: state.reviveUsed || 0, pc: pc, at: Date.now()
+      };
+      persist();
+    }
+    function clearResume() {
+      if (!state.save.resume) return;
+      state.save.resume = null;
+      persist();
+    }
+    /* 能续玩吗：关卡号对上、还没通关、也不是教学关 */
+    function takeResume(idx) {
+      var r = state.save.resume;
+      if (!r || r.lv !== idx) return null;
+      if ((state.save.starOf[String(idx + 1)] || 0) > 0) return null;
+      if (isTutLevel(idx)) return null;
+      return r;
+    }
+    /* v0.26：所有"进关"入口统一走这里 —— 三件事必须一起判，不能两处各写一份：
+     *   ① 有快照 → 续玩（不扣体力、不回满时间）
+     *   ② 教学关 → 不扣体力（练习场，本就没有通关奖励，再收体力纯亏）
+     *   ③ 已通关 → 不扣体力（v0.23 口径：重复通关无奖励，再收就是罚）
+     * 只有"未通关 + 没快照 + 非教学关"才真正扣。 */
+    function openLevel(idx) {
+      var s = state.save;
+      var r = takeResume(idx);
+      var cleared = (s.starOf[String(idx + 1)] || 0) > 0;
+      if (!r && !cleared && !isTutLevel(idx) && !spendEnergy()) {
+        state.overlay = 'energy';     // 体力不足 → 免费体力弹窗
+        return false;
+      }
+      setupLevel(idx, r ? { resume: r } : null);
+      go('play');
+      /* v0.26：续玩时给一句提示 —— 否则玩家看到"时间不满 + 板上有块"会以为界面出错 */
+      if (r) toast('继续上次进度');
+      return true;
     }
 
     /* ---------------- 关卡初始化 ---------------- */
@@ -1335,7 +1420,31 @@
        * 现在只有「换关 / 结算后重玩」才重置；重开保留 timeLeft、生命值、
        * 已用复活次数与 elapsed，相当于「这一局还在继续，只是把板子放回托盘」。 */
       var tl = timeLimitOf(lv);
-      if (opts.keepTimer) {
+      if (opts.resume) {
+        /* v0.26：续玩 —— 时间、用时、步数、复活次数、已在板上的块全部照搬。
+         * 这里绝不能回满：否则"快没时间就返回再进"就是免费续命。 */
+        var r0 = opts.resume;
+        state.timeLimit = r0.tl || tl;
+        state.timeLeft = Math.max(0, r0.left || 0);
+        state.hearts = heartsOf(state.timeLeft, state.timeLimit);
+        state.reviveUsed = r0.rv || 0;
+        state.elapsed = Math.max(0, r0.el || 0);
+        state.steps = Math.max(0, r0.st || 0);
+        if (r0.pc && r0.pc.length) {
+          for (var qi = 0; qi < r0.pc.length; qi++) {
+            var it = r0.pc[qi];
+            for (var pi = 0; pi < state.pieces.length; pi++) {
+              var pp = state.pieces[pi];
+              if (pp.id !== it[0]) continue;
+              pp.onBoard = true;
+              pp.x = it[1]; pp.y = it[2];
+              pp.angle = it[3]; pp.dAngle = it[3];
+              pp.flipped = !!it[4]; pp.dFlipped = !!it[4];
+              break;
+            }
+          }
+        }
+      } else if (opts.keepTimer) {
         state.timeLimit = state.timeLimit || tl;
         state.timeLeft = Math.max(0, state.timeLeft);
         state.hearts = heartsOf(state.timeLeft, state.timeLimit || 1);
@@ -1364,18 +1473,11 @@
        * 它们要测的是提示、计时、榜单这些横向系统，第 1 关被教学接管会互相干扰。 */
       if (env.tutorial === false) return null;
       if (idx >= (T.levels || 1)) return null;   // 只有每类第 1 关教
-      if (opts.noTut) return null;
-      /* v0.25：判据从"存档里的一次性标记 tutDone"换成"这一关到底通没通关"。
-       *
-       * 为什么换：tutDone 一旦写入（通关、点跳过、教学跑完都会写）就永久失效，
-       * 而且它跟着云存档同步 —— 换机、清缓存、重装都会被云端拉回来，
-       * 新玩家在旧设备上玩过一次就再也看不到教学，只能跑去设置里找入口，
-       * 这既深又反直觉。改成看星级后，行为变成玩家能理解的规则：
-       *   第 1 关还没通关 → 每次进来都教（新手一定看得到）
-       *   第 1 关通过一次 → 不再重复打扰
-       * 顺带的好处：「重置进度」清空星级后，教学会自己回来，不用额外开关。 */
-      var star1 = state.save.starOf[String(idx + 1)] || 0;
-      if (star1 > 0) return null;
+      /* v0.26：第 1 关永远是教学形式，不再看"通没通关"。
+       * 用户原话：「不管是否通关都是教学的形式」。第 1 关就是练习场：
+       * 虚影 + 指令 + 冻结计时一直都在，通关后想再学一遍直接点进来即可，
+       * 不需要任何入口，也不会因为"教过"就消失。
+       * （noTut 一并去掉：它当初只为"重开时别再教"，而教学关重开本就该重新教。） */
       return { t: 0, done: false };
     }
     /* 教学关的下一条指令：按"下一块差什么"给动作，全部放对后返回 null
@@ -1494,6 +1596,7 @@
     function win() {
       var lv = LEVELS[state.levelIdx];
       state.running = false;
+      clearResume();          // v0.26：通关后这关的续玩快照作废
       state.win = { t: 0 };
       /* v0.21：通关即结束教学 —— 否则虚影和指令会透过结算面板继续飘 */
       if (state.tut) state.tut = null;
@@ -1900,11 +2003,7 @@
         case 'start': {
           var idx = Math.min((state.save.unlockedMax || 1) - 1, LEVELS.length - 1);
           if (idx < 0) idx = 0;
-          /* v0.23：已通关的关不扣体力 —— 重复通关没有巧币奖励，
-           * 再收 2 点体力就是纯罚（见 win() 的首通判定）。 */
-          var startCleared = (state.save.starOf[String(idx + 1)] || 0) > 0;
-          if (!startCleared && !spendEnergy()) { state.overlay = 'energy'; break; }   // 体力不足 → 免费体力弹窗
-          setupLevel(idx); go('play'); break;
+          openLevel(idx); break;
         }
         case 'to_levels': go('levels'); break;
         /* v0.6：两套拼图固定入口，点谁进谁的关卡列表（不再「当前集/另一集」逻辑换位）。
@@ -1927,8 +2026,7 @@
         case 'toggle_bgm':
           state.settingsBgm = !state.settingsBgm;
           state.save.settings.bgm = state.settingsBgm; persist(); applyAudio(); break;
-        case 'reset_progress':
-          state.save = defaultSave(); persist(); state.overlay = null; go('home'); break;
+        case 'close_settings': state.overlay = null; hideProfileButton(); break;
         case 'rot_ccw':
         case 'rot_cw': {
           var p = pieceOf(state.selId);
@@ -1971,7 +2069,11 @@
         case 'hint_coin': useHintCoin(); break;
         case 'hint_item': useHintItem(); break;
         case 'restart':
-          setupLevel(state.levelIdx, { keepTimer: true, noTut: true });
+          /* v0.26：重开只把板子放回托盘，时间不动；教学关会重新起一遍教学
+           * （noTut 已删）。快照同步刷成"空盘 + 当前剩余时间"，
+           * 免得下次续玩又摆回重开前那个盘面。 */
+          setupLevel(state.levelIdx, { keepTimer: true });
+          saveResume();
           /* v0.21：说一句，免得玩家以为按钮坏了（旧版这里是"时间回满"） */
           toast('已重排，倒计时继续');
           break;
@@ -2031,12 +2133,7 @@
           }
           if (id.indexOf('lvl_') === 0) {
             var n = +id.slice(4);
-            if (n <= state.save.unlockedMax) {
-              /* v0.23：已通关的关重玩不扣体力（理由同 start 分支） */
-              var lvlCleared = (state.save.starOf[String(n)] || 0) > 0;
-              if (!lvlCleared && !spendEnergy()) { state.overlay = 'energy'; break; }   // 体力不足 → 免费体力弹窗
-              setupLevel(n - 1); go('play');
-            }
+            if (n <= state.save.unlockedMax) openLevel(n - 1);
           }
       }
     }
@@ -4694,15 +4791,12 @@
        * （wx.createUserInfoButton 必须由用户点原生按钮才弹授权，画布手势不算）。 */
       syncProfileButton();
 
-      /* v0.25：删掉 v0.24.1 那枚「重看教程」—— 它把教学藏进了设置二级页，
-       * 新玩家根本不会点进来找。教学归位到每类游戏的第 1 关（见 makeTutorial），
-       * 判据是"这一关通没通关"，所以想过教程把第 1 关重玩一遍就行，不需要入口。 */
-      var r1b = { id: 'reset_progress', x: C.DESIGN.w / 2, y: cy + 246, w: 340, h: 84,
-        label: '重置进度', variant: 'secondary', size: 28 };
-      addHit(r1b.x, r1b.y, r1b.w, r1b.h, 'reset_progress');
-      drawButton(r1b);
-
-      var r2 = { id: 'close_settings', x: C.DESIGN.w / 2, y: cy + 350, w: 300, h: 92, label: '关闭', variant: 'primary', size: 32 };
+      /* v0.26：设置页不再提供「重置进度」。
+       * 玩家不该在设置里一键把整个游戏清零 —— 这是不可逆的破坏性操作，
+       * 放哪个层级都容易误触，误触一次等于从头再来。
+       * 教学也不再依赖它：第 1 关永远是教学形式（见 makeTutorial），
+       * 想复习直接点进第 1 关就行，不需要"重置"这种核弹。 */
+      var r2 = { id: 'close_settings', x: C.DESIGN.w / 2, y: cy + 246, w: 340, h: 92, label: '关闭', variant: 'primary', size: 32 };
       addHit(r2.x, r2.y, r2.w, r2.h, 'close_settings');
       drawButton(r2);
 
@@ -5183,6 +5277,9 @@
         });
       }
       if (env.onHide) env.onHide(function () {
+        /* v0.26：切后台/切小程序前先落一份续玩快照 —— 被系统回收也不丢进度。
+         * 必须在 running=false 之前，否则 saveResume() 会以为这局已经结束。 */
+        saveResume();
         state.running = false;
         /* v0.15：切后台停表 + 落一次盘（onlineSec 不 persist 到云端，只写本地） */
         onlineSync();
@@ -5232,6 +5329,11 @@
         hitList: function () { return hits.slice(); },
         /* v0.21：教学步骤 / 跳过，供 verify_v21 直接断言 */
         tutStep: tutStep, tutSkip: tutSkip,
+        /* v0.26：中途续玩 —— 快照的存 / 取 / 清，供 verify_v26 直接驱动 */
+        saveResume: saveResume, takeResume: takeResume, clearResume: clearResume,
+        openLevel: openLevel, isTutLevel: isTutLevel,
+        /* v0.26：直接跑一次判定 —— verify_v26 要用它触发"真的通关" */
+        runJudge: runJudge,
         mergeSave: mergeSave, collectCloud: collectCloud,
         /* v0.14：玩家资料 —— 供 verify_v14 直接驱动（授权 / 改名 / 云端覆盖） */
         meNick: meNick, applyProfile: applyProfile, profileStateText: profileStateText,

@@ -84,6 +84,9 @@ check('初始在主界面', S.page === 'home');
 check('默认皮肤 warm', S.save.skin === 'warm' && D.COLORS.bg === C.SKINS.warm.bg);
 
 console.log('\n==== 1. 进关：扣体力 + 倒计时初始化 ====');
+/* v0.26：第 1 关改成一贯的教学关（不扣体力），测体力成本要用第 2 关：
+ * unlockedMax=2 → start 会进第 2 关，那里才真的扣 2 点。 */
+S.save.unlockedMax = 2;
 const e0 = S.save.energy;
 D.fireBtn('start');
 check('进关扣 ' + C.ECON.energyCostLevel + ' 点体力', S.save.energy === e0 - C.ECON.energyCostLevel,
