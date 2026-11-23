@@ -55,6 +55,7 @@ const store = {};
 const shareLog = [];
 const env = {
   ctx: makeCtx(),
+  tutorial: false,   // v0.21：这些脚本专测横向系统，关掉第 1 关教学
   size: () => ({ w: 375, h: 812 }),
   dpr: () => 3,
   safeInsets: () => ({ top: 20, bottom: 0 }),
@@ -127,7 +128,9 @@ clearRec();
 for (let i = 0; i < 2; i++) step(16);
 
 const titleRec = rec.texts.find(r => r.s === '拼好了！');
-check('标题已缩小（30px，原 44px）', !!titleRec && /30px/.test(titleRec.font), titleRec && titleRec.font);
+check('标题已缩小（沿用 config.WIN.titleSize）',
+  !!titleRec && new RegExp(CFG.WIN.titleSize + 'px').test(titleRec.font),
+  titleRec && (titleRec.font + ' / want ' + CFG.WIN.titleSize));
 const streakTxt = rec.texts.find(r => r.s === '3/5');
 check('顶部连胜进度 3/5', !!streakTxt, streakTxt ? 'y=' + streakTxt.y : 'missing');
 check('连胜条在卡片顶部区域', streakTxt && streakTxt.y > 380 && streakTxt.y < 470, streakTxt && 'y=' + streakTxt.y);
@@ -138,7 +141,7 @@ const shownColors = new Set(rec.fills.map(c => String(c).toUpperCase()));
 check('成品图案按四块板原色绘制', pieceColors.every(c => shownColors.has(c.toUpperCase())),
   pieceColors.join('/'));
 check('有图案白底框', rec.fills.some(c => /rgba\(255,255,255,0\.94\)/.test(String(c))));
-check('星级缩小（半径 24）', rec.arcs.every(a => a.r !== 40) && CFG.WIN.starR === 24, 'r=' + CFG.WIN.starR);
+check('星级缩小（小于原来的 40）', rec.arcs.every(a => a.r !== 40) && CFG.WIN.starR < 40, 'r=' + CFG.WIN.starR);
 check('分享按钮已绘制', rec.texts.some(r => r.s === '分享图案'));
 check('排行榜按钮已绘制', rec.texts.some(r => r.s === '排行榜'));
 
@@ -173,8 +176,10 @@ check('关闭榜单退回结算页', S.overlay === 'result', 'overlay=' + S.over
 
 /* ---------- 4. 连胜奖励 ---------- */
 section('4. 连胜里程碑奖励');
-/* 直接走 win()，避免依赖判定时序（判定本身由 verify_levels / gestures 覆盖） */
+/* 直接走 win()，避免依赖判定时序（判定本身由 verify_levels / gestures 覆盖）
+ * v0.18：连胜只算「新推进」的关，重玩不计 → 先把这两关的星去掉，模拟首次通关。 */
 S.save.streak = 4;
+delete S.save.starOf['1'];
 let before = S.save.coin;
 game._debug.setupLevel(0);
 S.elapsed = 30; S.steps = 5; S.hintUsed = false;
@@ -182,15 +187,26 @@ game._debug.win();
 check('第 5 连胜时发放里程碑奖励', S.save.streak === 5 && S.save.coin - before >= CFG.STREAK.coin,
   `streak=${S.save.streak} coin ${before}→${S.save.coin} gain=${S.streakGain}`);
 check('里程碑奖励写进结算面板', S.streakGain === CFG.STREAK.coin, 'gain=' + S.streakGain);
+check('历史最高连胜同步刷新', S.save.bestStreak === 5, 'best=' + S.save.bestStreak);
 
 /* 非里程碑（第 6 连胜）不应再发 */
 S.save.streak = 5;
+delete S.save.starOf['2'];
 before = S.save.coin;
-game._debug.setupLevel(0);
+game._debug.setupLevel(1);
 S.elapsed = 30; S.steps = 5;
 game._debug.win();
-check('第 6 连胜不再发奖（按 5 的倍数）', S.save.streak === 6 && S.save.coin - before === CFG.ECON.coinClear3Star,
+/* v0.23：只发首通奖励（按星级 2/3/5），不再有里程碑之外的旧口径 coinClear3Star */
+check('第 6 连胜不再发里程碑奖（只给首通奖励）',
+  S.save.streak === 6 && S.save.coin - before === CFG.ECON.coinFirst[S.result.stars - 1],
   `streak=${S.save.streak} coin +${S.save.coin - before} gain=${S.streakGain}`);
+/* v0.18：重玩已通关的关不再刷连胜（旧版正是靠这个刷榜） */
+const sReplay = S.save.streak;
+game._debug.setupLevel(1);
+S.elapsed = 30; S.steps = 5;
+game._debug.win();
+check('重玩已通关的关：连胜不涨', S.save.streak === sReplay, `${sReplay}→${S.save.streak}`);
+check('重玩也不发里程碑', S.streakGain === 0, 'gain=' + S.streakGain);
 
 /* ---------- 5. 排行榜 ---------- */
 section('5. 排行榜');

@@ -50,6 +50,7 @@ const CORE = require(path.join(ROOT, 'js/core.js'));
 const store = {};
 const env = {
   ctx: makeCtx(),
+  tutorial: false,   // v0.21：这些脚本专测横向系统，关掉第 1 关教学
   size: () => ({ w: 375, h: 812 }),
   dpr: () => 3,
   safeInsets: () => ({ top: 20, bottom: 0 }),
@@ -91,7 +92,7 @@ function renderHomeClean() {
 /* ---------- 1. 版本 ---------- */
 section('1. 版本');
 /* v0.7.1 起带补丁位，v0.8 起为大版本：只要求 ≥ v0.7（本脚本验的是 v0.7 的行为，不是版本字符串） */
-check('版本号 ≥ v0.7', /^v0\.([7-9]|1\d)/.test(CFG.version), CFG.version);
+check('版本号 ≥ v0.7', /^v0\.([7-9]|1\d|2\d)/.test(CFG.version), CFG.version);
 
 /* ---------- 2. HUD 胶囊 ---------- */
 section('2. HUD：上移 + 同字号 + 底框描边');

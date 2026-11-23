@@ -86,6 +86,7 @@ const fakeCloud = {
 
 const env = {
   ctx: makeCtx(),
+  tutorial: false,   // v0.21：这些脚本专测横向系统，关掉第 1 关教学
   size: () => ({ w: 375, h: 812 }),
   dpr: () => 3,
   safeInsets: () => ({ top: 20, bottom: 0 }),
@@ -286,14 +287,20 @@ function tapD(x, y) {
   check('底部说明改为「全服实时榜」', rec.texts.some(t => /全服实时榜/.test(t.s)));
   check('不再出现「示例榜单」', !rec.texts.some(t => /示例榜单/.test(t.s)));
 
-  S.rankTab = 2; S.rankList = null;
-  game._debug.cloudRank(2);
+  /* v0.18：好友榜改走开放数据域；Node 环境没有 env.friend → 走降级文案。
+   * 关键是它不再动 state.rankList（旧版会把主线榜那份覆盖成空列表）。 */
+  const mainBefore = S.rankList;
+  game._debug.selectRankTab(2);
   await sleep(10);
   rec.texts.length = 0;
   step(16);
-  check('好友榜如实说明「暂未开通」', rec.texts.some(t => /好友榜暂未开通/.test(t.s)));
+  check('好友榜在无开放数据域时给出降级说明',
+    rec.texts.some(t => /好友榜要在微信小游戏里看/.test(t.s)),
+    rec.texts.map(t => t.s).filter(t => /好友/.test(t)).join('|'));
+  check('切到好友榜不会清掉主线榜缓存', S.rankList === mainBefore,
+    'same=' + (S.rankList === mainBefore));
 
-  S.rankTab = 0;
+  S.rankTab = 0; S.rankListTab = 0;
   S.rankList = { list: [], me: { nick: '巧手0921', v: 0, rank: 1 } };
   rec.texts.length = 0;
   step(16);

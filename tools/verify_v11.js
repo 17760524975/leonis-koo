@@ -71,6 +71,7 @@ const store = {};
 const sceneLog = [];
 const env = {
   ctx: makeCtx(),
+  tutorial: false,   // v0.21：这些脚本专测横向系统，关掉第 1 关教学
   size: () => ({ w: 375, h: 812 }),
   dpr: () => 3,
   safeInsets: () => ({ top: 20, bottom: 0 }),
@@ -124,11 +125,20 @@ function misplacePiece(i) {
   p.x = 380; p.y = 300; p.angle = 45; p.dAngle = 45;
   p.flipped = false; p.dFlipped = false;
 }
+/* v0.16：提示取消免费档 —— 统一走「发 1 个查找道具 → 开面板 → 用道具」，
+ * 这样本文件继续只验「选块/绘制层级」，付费路径交给 verify_v10 / verify_v16。 */
+function hintByItem() {
+  S.save.hintItems = (S.save.hintItems || 0) + 1;
+  D.fireBtn('hint');
+  D.fireBtn('hint_item');
+}
 function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'); }
 function walkSize(dir) {
   /* 微信主包 = miniprogram 根 - cloudfunctionRoot；云函数的 node_modules
-   * 既不进包体也不该入库（部署时云端安装依赖），这里一并跳过。 */
-  const SKIP = ['cloudfunctions', 'node_modules', '.cloudbase'];
+   * 既不进包体也不该入库（部署时云端安装依赖），这里一并跳过。
+   * v0.16：再跳过 .git —— 目录里曾出现一个误 init 的内嵌仓库（2.6MB），
+   * 它不是包体内容，不该把「主包 < 4MB」的断言顶爆。 */
+  const SKIP = ['cloudfunctions', 'node_modules', '.cloudbase', '.git'];
   let total = 0;
   for (const f of fs.readdirSync(dir)) {
     if (SKIP.indexOf(f) >= 0) continue;
@@ -192,7 +202,7 @@ section('4. 提示选块：先挑没上板的，再挑上板没放对的');
 playAt(0);
 placePieces(2);
 S.hintLv = 0; S.hint = null;
-D.fireBtn('hint');
+hintByItem();
 check('有未上板的块时指向它', !!(S.hint && S.hint.id) && !S.pieces.filter(p => p.id === S.hint.id)[0].onBoard,
   'hint=' + (S.hint && S.hint.id));
 
@@ -200,7 +210,7 @@ playAt(0);
 placePieces(S.pieces.length - 1);
 misplacePiece(S.pieces.length - 1);          // 全部上板，最后一块放歪
 S.hintLv = 0; S.hint = null;
-D.fireBtn('hint');
+hintByItem();
 check('全部上板时指向"放歪的那块"', !!(S.hint && S.hint.id) && S.hint.id === S.pieces[S.pieces.length - 1].id,
   'hint=' + (S.hint && S.hint.id) + ' 期望=' + S.pieces[S.pieces.length - 1].id);
 check('放歪时档位仍然前进', S.hintLv === 1, 'hintLv=' + S.hintLv);
@@ -208,8 +218,9 @@ check('放歪时档位仍然前进', S.hintLv === 1, 'hintLv=' + S.hintLv);
 playAt(0);
 placePieces(S.pieces.length);
 S.hintLv = 0; S.hint = null;
-D.fireBtn('hint');
+hintByItem();
 check('全部放对时不乱指（返回 null + 提示）', !S.hint, 'hint=' + JSON.stringify(S.hint));
+check('全部放对时不吞查找道具（先验后扣）', S.save.hintItems === 1, 'items=' + S.save.hintItems);
 
 section('5. 提示画在已上板件之上（本次核心修复）');
 playAt(0);
@@ -235,26 +246,29 @@ check('落点有「放这里」小牌', rec.texts.some(t => t.s === '放这里')
 playAt(0);
 placePieces(S.pieces.length - 1);
 misplacePiece(S.pieces.length - 1);
-S.hint = { id: S.pieces[S.pieces.length - 1].id, tier: 2, until: Date.now() + 1e6 };
+S.hint = { id: S.pieces[S.pieces.length - 1].id, t: 0 };   // v0.20：无 tier / until
 rec.ops.length = 0; rec.texts.length = 0;
 step(16);
 const golds = rec.ops.filter(o => o.k === 'stroke' && String(o.color).toLowerCase() === gold);
 check('放歪的块被金色虚线圈出', golds.length >= 1, 'gold strokes=' + golds.length);
-check('有「移到虚线处」小牌', rec.texts.some(t => t.s === '移到虚线处'), rec.texts.map(t => t.s).join('|').slice(0, 60));
+check('有「移到此处」小牌', rec.texts.some(t => t.s === '移到此处'), rec.texts.map(t => t.s).join('|').slice(0, 60));
 check('托盘里没有可标的块时不画「用这块」', !rec.texts.some(t => t.s === '用这块'));
 
-section('6. 档3 只淡显没放对的块');
+section('6. 第三档「全图淡显」已删除（v0.20 单档口径）');
 playAt(0);
 placePieces(2);
-S.hint = { id: S.pieces[0].id, tier: 3, until: Date.now() + 1e6 };
+const trayP = S.pieces.filter(p => !p.onBoard)[0];   // 指一块还在托盘里的
+S.hint = { id: trayP.id, t: 0 };
 rec.ops.length = 0; rec.texts.length = 0;
 step(16);
 const colors = S.pieces.map(p => (D.dataset.pieces[p.id].color || '').toLowerCase());
-/* 档3 的淡显 alpha≈0.29~0.34（ghostAlpha 0.34 ± 呼吸），板件本体是 1.0，据此区分 */
+/* 旧版第三档会把没放对的块按板件色淡显（alpha 0.29~0.34）；
+ * 现在只有单档提示，不应该再出现任何"板件色淡显"的填充 */
 const ghost = rec.ops.filter(o => o.k === 'fill' && colors.indexOf(String(o.color).toLowerCase()) >= 0 && o.a > 0.1 && o.a < 0.45);
-const unsolved = S.pieces.length - 2;
-check('淡显块数 = 还没放对的块数', ghost.length === unsolved, `ghost=${ghost.length} 未放对=${unsolved}`);
-check('放对的两块没有被盖一层', ghost.length < S.pieces.length, '总块=' + S.pieces.length);
+check('不再有整幅标准解淡显', ghost.length === 0, 'ghost=' + ghost.length);
+check('提示仍会标出「放这里」与「用这块」',
+  rec.texts.some(t => t.s === '放这里') && rec.texts.some(t => t.s === '用这块'),
+  rec.texts.map(t => t.s).filter(x => /这里|这块|此处/.test(x)).join('|'));
 
 section('7. 源码约束');
 for (const f of ['preview/js/game.js', 'miniprogram/game.js']) {

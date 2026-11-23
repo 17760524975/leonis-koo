@@ -193,6 +193,7 @@ const W = 375, H = 812, DPR = 3;
 let inputFn = null;
 const env = {
   ctx: makeCtx(),
+  tutorial: false,   // v0.21：这些脚本专测横向系统，关掉第 1 关教学
   size: () => ({ w: W, h: H }), dpr: () => DPR,
   safeInsets: () => ({ top: 20, bottom: 0 }),
   bindInput: fn => { inputFn = fn; },

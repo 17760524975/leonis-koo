@@ -138,7 +138,7 @@
     if (setKey === 'tangram7') game._debug.useSet('tangram7');
     var screen = (q.match(/screen=(\w+)/) || [])[1] || 'home';
     var placed = +(q.match(/placed=(\d+)/) || [])[1];
-    if (isNaN(placed)) placed = 2;
+    if (isNaN(placed)) placed = (screen === 'tut') ? 0 : 2;   // v0.21：教学关默认一块都不放
     var tier = +(q.match(/tier=(\d+)/) || [])[1];       // v0.3 A3：强制提示档 1/2/3（同关三档截图）
     var last = +(q.match(/last=(\d+)/) || [])[1] || 0;  // v0.3 A7：结算显示「全部完成」文案
 
@@ -149,7 +149,7 @@
       S.page = 'levels'; S.fade = 1; S.pageT = 9999;
       var pg = +(q.match(/page=(\d+)/) || [])[1];
       if (!isNaN(pg)) S.lvPage = pg;
-    } else if (screen === 'play' || screen === 'hint' || screen === 'result') {
+    } else if (screen === 'play' || screen === 'hint' || screen === 'result' || screen === 'tut') {
       // 用 core 当前数据集的关卡表（切 set 后是 60 关七巧板），不能再用全局 TANGRAM_DATA.levels
       var LIB = game._debug.LEVELS;
       var lvIdx = +(q.match(/level=(\d+)/) || [])[1] || 0;
@@ -157,6 +157,12 @@
       if (lvIdx >= LIB.length) lvIdx = LIB.length - 1;
       game._debug.setupLevel(lvIdx);
       S.page = 'play'; S.fade = 1; S.pageT = 9999; S.elapsed = 63.4; S.steps = 7;
+      /* v0.21：left=<秒> 指定倒计时余量，用来截「重开不重置倒计时」的对照图 */
+      var leftArg = +(q.match(/left=(\d+)/) || [])[1];
+      if (!isNaN(leftArg)) { S.timeLeft = leftArg; S.hearts = 1; }
+      /* v0.22：items=<n> 查找道具余量 —— 用来截工具栏角标（有几个显示几个） */
+      var itemArg = +(q.match(/items=(\d+)/) || [])[1];
+      if (!isNaN(itemArg)) S.save.hintItems = itemArg;
       if (!isNaN(tier) && tier >= 1 && tier <= 3) S.hintTier = tier;
       var lv = LIB[lvIdx];
       for (var i = 0; i < placed; i++) {
@@ -170,6 +176,22 @@
       // 覆盖率必须跑真实判定，不能手填（手填会截出「只放两块却 100%」的假象）
       var jr = game._debug.judgeNow();
       S.covFrom = jr.coverage; S.covTo = jr.coverage; S.cov = jr.coverage; S.covT = 1;
+      /* v0.21：教学关想截「翻面 / 转角度」那一步，得先让别的块都摆对、只留一块不对。
+       *   tutflip=N 第 N 块摆到位但翻面反了；tutrot=N 第 N 块摆到位但角度歪 40°。 */
+      var tflip = +(q.match(/tutflip=(\d+)/) || [])[1];
+      var trot = +(q.match(/tutrot=(\d+)/) || [])[1];
+      var tfix = !isNaN(tflip) ? tflip : trot;
+      if (!isNaN(tfix) && S.pieces[tfix]) {
+        var tp = S.pieces[tfix];
+        var ts = lv.solution.filter(function (x) { return x.id === tp.id; })[0];
+        if (ts) {
+          tp.onBoard = true; tp.x = ts.x; tp.y = ts.y;
+          tp.angle = ts.angle; tp.dAngle = ts.angle;
+          tp.flipped = !isNaN(tflip) ? !ts.flipped : ts.flipped;
+          tp.dFlipped = tp.flipped;
+          if (!isNaN(trot)) { tp.angle = (ts.angle + 40) % 360; tp.dAngle = tp.angle; S.selId = tp.id; }
+        }
+      }
       // v0.3.1 A3：sel=N 把第 N 块板放到棋盘中央并选中，用于旋转手柄截图
       var selArg = +(q.match(/sel=(\d+)/) || [])[1];
       if (!isNaN(selArg) && S.pieces[selArg]) {
@@ -181,23 +203,24 @@
         S.selId = sp2.id;
       } else {
         S.selId = S.pieces[2] && S.pieces[2].id;
+        if (screen === 'tut') S.selId = null;   // 教学截图不要旋转手柄来抢戏
       }
       if (screen === 'hint') {
-        /* v0.15：&items=<n> 提示卡数量（0/不传 = 没有卡，看「获取指引」文案） */
-        var hit0 = +(q.match(/items=(\d+)/) || [])[1];
+        /* v0.15：&items=<n> 提示卡数量（0/不传 = 没有卡，看「获取指引」文案） */        var hit0 = +(q.match(/items=(\d+)/) || [])[1];
         S.save.hintItems = isNaN(hit0) ? 0 : hit0;
-        /* v0.10：hinttier=1/2/3 指定「提示阶梯」的哪一档（与 tier= 的目标轮廓档不是一回事）
+        /* v0.20：提示只有一档（哪块 + 放哪），不再有 hinttier。
          * v0.11：hintbad=N 把第 N 块摆歪，用来截「已上板但没放对」的提示；
          *        不指定时按真实逻辑取第一块没上板的（旧版固定指 solution[0]，
          *        一旦那块已上板，截图里就只剩一句 toast、什么提示都看不到）。 */
-        var ht = +(q.match(/hinttier=(\d+)/) || [])[1];
-        if (isNaN(ht) || ht < 1) ht = 1;
-        if (ht > 3) ht = 3;
         var hbad = +(q.match(/hintbad=(\d+)/) || [])[1];
         var hid = null;
         if (!isNaN(hbad) && S.pieces[hbad]) {
           var hbp = S.pieces[hbad];
           hbp.onBoard = true;
+          /* 摆歪 = 在棋盘上但位置/角度不对：要先把它挪到棋盘里，
+           * 否则托盘坐标 (0,0) 上板后会画到左上角、压住 HUD（截图里就废了） */
+          var hbst = lv.solution.filter(function (ss) { return ss.id === hbp.id; })[0];
+          if (hbst) { hbp.x = hbst.x + 72; hbp.y = hbst.y + 56; }
           hbp.angle = (hbp.angle + 40) % 360; hbp.dAngle = hbp.angle;
           hid = hbp.id;
         } else {
@@ -206,33 +229,48 @@
           }
           if (!hid) hid = lv.solution[0] && lv.solution[0].id;
         }
-        S.hintLv = ht;
+        /* v0.20：单档常驻 —— 没有 tier、没有 until，toast 也只说"下一步" */
+        S.hintLv = 1;
         S.hintUsed = true;
-        S.hint = { id: hid, tier: ht, until: Date.now() + 1e6 };
-        S.msg = '提示 ' + ht + '/' + C.HINT.maxTier + ' · ' + C.HINT.names[ht - 1];
+        S.hint = { id: hid, t: 0 };
+        S.msg = '已标出下一步：圈起来的那块，放到虚线处';
         S.msgT = 1500;
       }
       if (screen === 'result') {
         S.overlay = 'result'; S.resT = 1000; S.starShown = 3;
-        S.result = { stars: 3, time: 63.4, steps: 9 };
+        /* v0.23：first=<0|1> 首通/重复、rw=<n> 首通奖励、ad=<0|1> 是否已看视频翻倍。
+         * 不传时保持老截图的默认（首通 3 星 +5 巧币、未翻倍）。 */
+        var rFirst = +(q.match(/first=(\d+)/) || [])[1];
+        var rGain = +(q.match(/rw=(\d+)/) || [])[1];
+        var rAd = +(q.match(/ad=(\d+)/) || [])[1];
+        S.result = {
+          stars: 3, time: 63.4, steps: 9,
+          first: isNaN(rFirst) ? true : !!rFirst,
+          gain: isNaN(rGain) ? 5 : rGain,
+          adUsed: isNaN(rAd) ? false : !!rAd
+        };
         S.win = { t: 2000 };
         /* v0.8：连胜条截图 —— stk=N 指定连胜数，gain=N 指定刚拿到的里程碑奖励 */
         var stk = +(q.match(/stk=(\d+)/) || [])[1];
         S.save.streak = isNaN(stk) ? 3 : stk;
+        /* v0.19：连胜 = 本段内已计过的关数，集合按 streak 补齐（截图用） */
+        S.save.streakSeen = [];
+        for (var si2 = 1; si2 <= S.save.streak; si2++) S.save.streakSeen.push(String(si2));
         var gain = +(q.match(/gain=(\d+)/) || [])[1];
         S.streakGain = isNaN(gain) ? 0 : gain;
       }
     } else if (screen === 'hintpanel') {
-      /* v0.10：提示面板（免费档用完后点提示按钮）。lv=1 表示已用 1 档 → 卖第 2 档。 */
-      game._debug.setupLevel(0);
+      /* v0.10：提示面板。v0.16 起每关不再送免费档，lv=0 就是「卖第 1 档」。
+       * v0.22：加 level=<n>，默认第 3 关 —— 第 1 关是教学关，面板会和教学指令叠在一起。 */
+      var hpLv = +(q.match(/level=(\d+)/) || [])[1];
+      game._debug.setupLevel(isNaN(hpLv) ? 2 : hpLv);
       S.page = 'play'; S.fade = 1; S.pageT = 9999;
+      /* v0.20：没有档位了，lv 只当"已经买过几次"的计数 */
       var hl = +(q.match(/(?:^|[&?])lv=(\d+)/) || [])[1];
-      if (isNaN(hl) || hl < 1) hl = 1;
-      if (hl > 2) hl = 2;
-      S.hintLv = hl; S.hintUsed = true;
+      S.hintLv = isNaN(hl) ? 0 : hl; S.hintUsed = true;
       var coinQ = +(q.match(/coin=(\d+)/) || [])[1];
       S.save.coin = isNaN(coinQ) ? 168 : coinQ;
-      /* v0.15：&items=<n> 提示卡数量（0/不传 = 没有卡） */
+      /* v0.16：&items=<n> 查找道具数量（0/不传 = 没有道具） */
       var itemQ = +(q.match(/items=(\d+)/) || [])[1];
       S.save.hintItems = isNaN(itemQ) ? 0 : itemQ;
       S.overlay = 'hint';
@@ -241,8 +279,19 @@
       S.page = 'home'; S.fade = 1; S.pageT = 9999; S.overlay = 'rank'; S.rankT = 999;
       S.save.starOf = { 1: 3, 2: 3, 3: 2, 4: 3, 5: 1, 6: 2, 7: 3, 8: 2, 9: 1, 10: 2, 11: 3, 12: 1 };
       S.save.streak = 7;
+      S.save.bestStreak = 7;                 // v0.18：连胜榜按历史最高排
+      /* v0.19：连胜口径改成「段内去重」，7 连胜 = 段内已计过 7 关 */
+      S.save.streakSeen = ['1', '2', '3', '4', '5', '6', '7'];
       var rtab = +(q.match(/tab=(\d+)/) || [])[1];
       if (!isNaN(rtab)) S.rankTab = rtab;
+      /* v0.18：好友榜在浏览器里没有开放数据域 → &friendmock=1 用示例好友验版式 */
+      if (/friendmock=1/.test(q)) { C.RANK.useMock = true; S.rankTab = 2; }
+      /* v0.18：&rankerr=1 复现「加载失败 + 重新加载」页 */
+      if (/rankerr=1/.test(q)) {
+        S.rankErr = '网络超时'; S.rankList = null;
+        S.rankCache = { 0: null, 1: null };
+        S.rankCache[0] = null;
+      }
       /* v0.9：ranklive=1 注入「云端已返回的一组真实形状」数据，
        * 因为浏览器预览没有云环境，默认会显示"未开启云同步" */
       if (/ranklive=1/.test(q)) {
@@ -268,21 +317,15 @@
     } else if (screen === 'settings') {
       if (/net=1/.test(q)) S.net = { on: true, ready: true, nick: '巧手0921', syncing: false, ts: 1, err: '' };
       S.page = 'home'; S.fade = 1; S.overlay = 'settings';
-    } else if (screen === 'energy' || screen === 'tasks' || screen === 'invite' ||
+    } else if (screen === 'energy' || screen === 'invite' ||
                screen === 'desktop' || screen === 'skin' || screen === 'online') {
-      /* v0.5：主页弹窗截图（体力/任务/邀请/桌面/皮肤） */
+      /* v0.5：主页弹窗截图（体力/邀请/桌面/皮肤）；v0.16 起「任务」已下线 */
       S.page = 'home'; S.fade = 1; S.pageT = 9999; S.overlay = screen;
       S.save.coin = 168; S.save.energy = 12;
       if (screen === 'energy') { S.save.freeEnergyDay = ''; S.save.freeEnergyUsed = 0; }
-      if (screen === 'tasks') {
-        var td = new Date();
-        S.save.tasksDay = td.getFullYear() + '-' + (td.getMonth() + 1) + '-' + td.getDate();
-        S.save.taskPlays = 3; S.save.tasksClaimed = {};
-        S.save.starOf = { 1: 3, 2: 2 };
-      }
       if (screen === 'invite') { S.save.inviteCount = 2; }
       if (screen === 'online') {
-        /* v0.15：&online=<秒> 今日累计时长；&ogot=1,2 已领档位；&items=<n> 提示卡数量 */
+        /* v0.15：&online=<秒> 今日累计时长；&ogot=1,2 已领档位；&items=<n> 查找道具数量 */
         var os = +(q.match(/online=(\d+)/) || [])[1];
         if (!isNaN(os)) S.save.onlineSec = os;
         var td2 = new Date();
@@ -294,14 +337,21 @@
         S.save.hintItems = isNaN(it) ? 0 : it;
       }
     } else if (screen === 'fail') {
-      /* v0.5：复活弹窗（倒计时归零） */
+      /* v0.5：复活弹窗（倒计时归零）
+       * v0.23：支持 level=<n> —— 第 1 关是教学关，教学指令会透过遮罩露在弹窗上方 */
       var LIBF = game._debug.LEVELS;
-      game._debug.setupLevel(0);
+      var fLv = +(q.match(/level=(\d+)/) || [])[1] || 0;
+      game._debug.setupLevel(fLv);
       S.page = 'play'; S.fade = 1; S.pageT = 9999;
-      S.timeLimit = game._debug.timeLimitOf(LIBF[0]);
+      S.timeLimit = game._debug.timeLimitOf(LIBF[fLv]);
       S.timeLeft = 0; S.hearts = 0;
       S.overlay = 'fail'; S.failT = 0;
-      S.save.streak = 1; S.save.coin = 210;
+      /* v0.18：失败时 streak 已经清零落盘，断点前的值放在 streakBeforeFail 里
+       * v0.19：连胜改成「段内去重」，断点集合也要一起恢复才画得对 */
+      S.save.streak = 0; S.streakBeforeFail = 7; S.save.bestStreak = 9;
+      S.save.streakSeen = [];
+      S.seenBeforeFail = ['1', '2', '3', '4', '5', '6', '7'];
+      S.save.coin = 210;
     }
     /* v0.15：主页也支持 &online=<秒>，用来看「可领 N」气泡与累计时长气泡 */
     var qOn = +(q.match(/online=(\d+)/) || [])[1];
@@ -380,6 +430,12 @@
       }
     }
     if (marks.length) overlayNote(lines, marks);
+    /* v0.17：&coin=<n>&energy=<n> 直接指定顶栏要显示的余量（对局页 HUD 截图验收用）。
+     * 放在最后统一覆盖，这样 fail 分支自己设的 210 也能被 &coin= 改掉做对照实验。 */
+    var qCoin = +(q.match(/(?:^|[&?])coin=(\d+)/) || [])[1];
+    if (!isNaN(qCoin)) S.save.coin = qCoin;
+    var qEn = +(q.match(/(?:^|[&?])energy=(\d+)/) || [])[1];
+    if (!isNaN(qEn)) S.save.energy = Math.min(qEn, S.save.energyMax);
     S.fade = 1;              // 截图时强制淡入完成，避免截到页面过渡中间态
     window.__ready = true;
   }

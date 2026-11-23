@@ -42,6 +42,7 @@ const store = {};
 const log = { play: [], scene: [], duck: [], enabled: [] };
 const env = {
   ctx: makeCtx(),
+  tutorial: false,   // v0.21：这些脚本专测横向系统，关掉第 1 关教学
   size: () => ({ w: 375, h: 812 }),
   dpr: () => 3,
   safeInsets: () => ({ top: 20, bottom: 0 }),
@@ -94,7 +95,7 @@ function drag(fromD, toD, steps) {
 /* ---------- 1. 版本与改名 ---------- */
 section('1. 版本与品牌名');
 /* v0.7 起版本号继续前滚，这里只要求「不低于 v0.6」 */
-check('版本号 ≥ v0.6', /^v0\.([6-9]|1\d)/.test(CFG.version), CFG.version);
+check('版本号 ≥ v0.6', /^v0\.([6-9]|1\d|2\d)/.test(CFG.version), CFG.version);
 check('品牌名 = 方寸巧拼', CFG.BRAND && CFG.BRAND.name === '方寸巧拼', CFG.BRAND && CFG.BRAND.name);
 /* 只判「当标题/分享名用」的旧名；config 的 slogan「四巧 · 七巧，拼出你的形状」
  * 与历史注释属于正常描述，不算残留。 */

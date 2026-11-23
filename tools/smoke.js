@@ -235,11 +235,23 @@ tap(375, CFG.WIN.primaryY);
 step(16);
 check('进入第 2 关', S.levelIdx === 1 && S.page === 'play', 'idx=' + S.levelIdx);
 
-// 提示
+// 提示（v0.16：每关不再白送 —— 先发 1 个查找道具；
+// v0.22：有道具时点按钮**直接使用**，不再弹面板；没道具才弹面板让玩家买/看视频）
+const SHEET_TOP = CFG.DESIGN.h / 2 - 450;
+S.save.hintItems = 1;
 tap(511, TOOL_Y);
 for (let k = 0; k < 10; k++) step(16);
-check('提示高亮生效', !!S.hint, 'hint=' + (S.hint && S.hint.id));
+check('有查找道具 → 点提示直接使用（不弹面板）', S.overlay === null && !!S.hint,
+  'overlay=' + S.overlay + ' hint=' + !!S.hint);
+check('查找道具扣 1 个', S.save.hintItems === 0, 'items=' + S.save.hintItems);
 check('提示只能一次', S.hintUsed === true);
+
+// 无道具时才弹面板
+S.hint = null; S.hintUsed = false; S.save.hintItems = 0; S.overlay = null;
+tap(511, TOOL_Y);
+for (let k = 0; k < 10; k++) step(16);
+check('没有查找道具 → 弹提示面板', S.overlay === 'hint', 'overlay=' + S.overlay);
+S.overlay = null;   // 收掉面板，后面的流程接着走
 
 // 重来
 tap(647, TOOL_Y);
@@ -281,9 +293,9 @@ tap(480 + 54, CFG.DESIGN.h / 2 + 40);
 for (let k = 0; k < 6; k++) step(16);
 check('音效开关可切换', S.settingsFx === false, 'sfx=' + S.settingsFx);
 check('设置已写入存档', S.save.settings.sfx === false && !!store[CFG.SAVE_KEY]);
-tap(375, CFG.DESIGN.h / 2 + 230);
+tap(375, CFG.DESIGN.h / 2 + 344);   // v0.24.1：底排改成「重看教程 / 重置进度」并排，关闭在 cy+344
 for (let k = 0; k < 6; k++) step(16);
-check('关闭设置', S.overlay === null);
+check('关闭设置', S.overlay === null, 'overlay=' + S.overlay);
 
 // 切后台/回来
 if (hideCb) hideCb();

@@ -2,7 +2,7 @@
  * 覆盖：
  *   V5 边吸附：平行偏移吸附生效 / 顶点优先级不被破坏
  *   V6 环形手势：环形区起点旋转、板内起点拖拽
- *   V4 提示三档：手动降级 1→2→3 单向、hint_used 星级封顶 ★★☆
+ *   V4 提示：面板付费入口（v0.20 起单档常驻、不再封顶星级）
  *   A3(0.3.1) 旋转手柄：点手柄转45° / 拖手柄绕圈
  *   v0.4 A1 双击翻转回归：同板件两次短 tap（<300ms、位移<10px）→ 翻转；
  *                        单击 / 超时 / 换板件 / 拖动 均不翻转；底部按钮翻转仍有效
@@ -54,6 +54,7 @@ const W = 375, H = 812, DPR = 3;
 let inputFn = null;
 const env = {
   ctx: makeCtx(),
+  tutorial: false,   // v0.21：这些脚本专测横向系统，关掉第 1 关教学
   size: () => ({ w: W, h: H }), dpr: () => DPR,
   safeInsets: () => ({ top: 20, bottom: 0 }),
   bindInput: fn => { inputFn = fn; },
@@ -474,20 +475,23 @@ console.log('\n==== v0.3.2 B2 选中高亮（含拖动中 / 托盘 / 成局隐�
   S.win = null;
 }
 
-/* ---------- V4 提示阶梯 + 星级（v0.10 重写：三档统一、第 1 档免费、第 2 档起弹面板） ---------- */
-console.log('\n==== V4 提示阶梯：免费 1 档 → 面板 → 广告/巧币（v0.10）====');
+/* ---------- V4 提示（v0.20：单档常驻）+ 星级 ---------- */
+console.log('\n==== V4 提示：面板 → 查找道具/广告/巧币（v0.20 单档）====');
 {
   const HX = 511, HY = CFG.LAYOUT.TOOLBAR.y + CFG.LAYOUT.TOOLBAR.h / 2;
   reset(0);
+  S.save.hintItems = 1;
   tapD(HX, HY);
-  check('V4 第 1 档免费直接给（不弹面板、不播广告）',
-    S.hintLv === 1 && !!S.hint && S.hint.tier === 1 && S.overlay !== 'hint' && S.hintUsed === true,
-    `hintLv=${S.hintLv} tier=${S.hint && S.hint.tier} overlay=${S.overlay}`);
-  tapD(HX, HY);
-  check('V4 第 2 档先弹提示面板（不偷加档、不静默播广告）',
-    S.overlay === 'hint' && S.hintLv === 1, `overlay=${S.overlay} hintLv=${S.hintLv}`);
-  check('V4 工具栏角标 = 剩余档位（3−已用）',
-    CFG.HINT.maxTier - S.hintLv === 2, 'left=' + (CFG.HINT.maxTier - S.hintLv));
+  /* v0.22：有道具时工具栏一点就用掉，不弹面板（面板只留给没道具的情形） */
+  check('V4 有查找道具 → 点一下直接发提示（不再白送第 1 档）',
+    S.overlay === null && S.hintLv === 1 && !!S.hint,
+    `hintLv=${S.hintLv} hint=${!!S.hint} overlay=${S.overlay}`);
+  check('V4 提示是单档（没有 tier 字段）且写入 hintUsed',
+    S.hint.tier === undefined && S.hintUsed === true,
+    `tier=${S.hint.tier} used=${S.hintUsed}`);
+  check('V4 工具栏不再有档位角标（v0.20 取消次数上限）',
+    CFG.HINT.maxTier === undefined);
+  check('V4 道具扣 1 个', S.save.hintItems === 0, 'items=' + S.save.hintItems);
   check('V4 hint_used 已写入本数据集存档（只作历史标记）',
     !!S.save.hintUsed['1'] ||
     !!(JSON.parse(store['tangram7_save_v1'] || '{}').hintUsed || {})['1'] === true,
@@ -517,7 +521,8 @@ console.log('\n==== V4 提示阶梯：免费 1 档 → 面板 → 广告/巧币�
   const rNo = winWith(false);
   const rYes = winWith(true);
   check('A3 星级：未用提示可达 ★★★', rNo && rNo.stars === 3, JSON.stringify(rNo));
-  check('A3 星级：用提示封顶 ★★☆', rYes && rYes.stars === 2, JSON.stringify(rYes));
+  /* v0.20：取消「用提示封顶 ★★」——文案删了规则必须一起删 */
+  check('A3 星级：用提示也能 ★★★（封顶已取消）', rYes && rYes.stars === 3, JSON.stringify(rYes));
 }
 
 console.log('\n' + (fail === 0 ? 'V4/V5/V6 交互实测全部通过' : `!! ${fail} 项未通过`));

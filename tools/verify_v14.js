@@ -123,6 +123,7 @@ global.wx = WX;
 function mkEnv(cloudImpl, profileImpl, store) {
   return {
     ctx: makeCtx(),
+  tutorial: false,   // v0.21：这些脚本专测横向系统，关掉第 1 关教学
     size: () => ({ w: 375, h: 812 }),
     dpr: () => 3,
     safeInsets: () => ({ top: 20, bottom: 0 }),
@@ -149,7 +150,7 @@ const SCALE = Math.min(375 / CFG.DESIGN.w, 812 / CFG.DESIGN.h);
 
 async function main() {
   console.log('v0.14 验收：微信登录态 + 玩家资料（昵称/头像）');
-  check('版本号 v0.14+', /^v0\.1[4-9](\.\d+)?$/.test(CFG.version), CFG.version);
+  check('版本号 v0.14+', /^v0\.(1[4-9]|2\d)(\.\d+)?$/.test(CFG.version), CFG.version);
 
   /* ================= 1. 平台层：wxprofile ================= */
   section('1. 平台层 wxprofile（四种真实情况）');
@@ -379,7 +380,7 @@ async function main() {
       a.slice(0, 8));
   }
   function walkSize(dir) {
-    const SKIP = ['cloudfunctions', 'node_modules', '.cloudbase'];
+    const SKIP = ['cloudfunctions', 'node_modules', '.cloudbase', '.git'];
     let total = 0;
     for (const f of fs.readdirSync(dir)) {
       if (SKIP.indexOf(f) >= 0) continue;

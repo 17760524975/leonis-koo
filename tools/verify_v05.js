@@ -42,6 +42,7 @@ let inputFn = null;
 function makeEnv() {
   return {
     ctx: makeCtx(),
+  tutorial: false,   // v0.21：这些脚本专测横向系统，关掉第 1 关教学
     size: () => ({ w: W, h: H }), dpr: () => DPR,
     safeInsets: () => ({ top: 20, bottom: 0 }),
     bindInput: fn => { inputFn = fn; },
@@ -93,7 +94,9 @@ check('倒计时 = 关卡时限且落在 [90,240]',
   limit >= C.TIMER.minSec && limit <= C.TIMER.maxSec && S.timeLeft === limit,
   'limit=' + limit + 's left=' + S.timeLeft.toFixed(1));
 check('初始 3 心', S.hearts === C.TIMER.hearts);
-check('进关累加任务局数', S.save.taskPlays >= 1, 'plays=' + S.save.taskPlays);
+/* v0.16：每日任务下线，进关不再累加 taskPlays */
+check('进关不再写 taskPlays（任务已下线）', S.save.taskPlays === undefined,
+  'plays=' + S.save.taskPlays);
 
 console.log('\n==== 2. 倒计时递减 → 生命值 ====');
 const t0 = S.timeLeft;
@@ -113,22 +116,30 @@ const coinBefore = S.save.coin, usedBefore = S.reviveUsed;
 D.doRevive(true);                            // 看广告复活
 check('广告复活：补 1/3 时间', S.timeLeft > 0 && Math.abs(S.timeLeft - limit / 3) < 1,
   'left=' + S.timeLeft.toFixed(1));
-check('广告复活：+90 巧币', S.save.coin === coinBefore + 90, coinBefore + '→' + S.save.coin);
+/* v0.23：看广告复活不再给巧币（旧版 +90，比付费复活还划算，
+ * 最优策略变成"故意失败看广告"，与"别失败"的设计意图相反） */
+check('广告复活：巧币不变', S.save.coin === coinBefore, coinBefore + '→' + S.save.coin);
 check('复活后关闭弹窗并继续', S.overlay === null && S.running === true);
 check('复活次数 +1', S.reviveUsed === usedBefore + 1);
 
-console.log('\n==== 4. 巧币复活 + 次数上限 ====');
+console.log('\n==== 4. 巧币复活 + 不设次数上限 ====');
 S.timeLeft = 0.004; step(20);
+S.save.coin = 400;                           // v0.23：初始只有 50，不够一次 80
 const cb2 = S.save.coin;
-D.doRevive(false);                           // 花 100 巧币
-check('巧币复活：-100 巧币', S.save.coin === cb2 - C.ECON.coinRevive, cb2 + '→' + S.save.coin);
-check('本关已复活 2 次（上限 ' + C.ECON.reviveMaxPerLevel + '）',
-  S.reviveUsed === C.ECON.reviveMaxPerLevel);
-S.timeLeft = 0.004; step(20);
-const cb3 = S.save.coin, used3 = S.reviveUsed;
-D.doRevive(true);
-check('超过上限不再复活（巧币/次数均不变）',
-  S.save.coin === cb3 && S.reviveUsed === used3 && S.overlay === 'fail');
+D.doRevive(false);                           // 花 80 巧币
+check('巧币复活：-' + C.ECON.coinRevive + ' 巧币',
+  S.save.coin === cb2 - C.ECON.coinRevive, cb2 + '→' + S.save.coin);
+check('复活次数累加到 2', S.reviveUsed === 2, 'used=' + S.reviveUsed);
+/* v0.23：取消每关 2 次上限 —— 想连着复活就一直复活得下去 */
+for (let ri = 0; ri < 3; ri++) {
+  S.timeLeft = 0.004; step(20);
+  D.doRevive(true);
+}
+check('第 3~5 次复活仍然成功（不再有"次数已用完"）',
+  S.reviveUsed === 5 && S.overlay === null && S.running === true,
+  'used=' + S.reviveUsed + ' overlay=' + S.overlay);
+check('复活上限字段已从配置移除', C.ECON.reviveMaxPerLevel === undefined,
+  String(C.ECON.reviveMaxPerLevel));
 
 console.log('\n==== 5. 体力不足 → 免费体力弹窗 ====');
 S.overlay = null; S.page = 'home';
@@ -181,8 +192,10 @@ const coinW = S.save.coin, streakW = S.save.streak || 0, bgmW = S.save.bgmIdx ||
 })();
 check('通关后有结算结果', !!S.result, S.result ? ('stars=' + S.result.stars) : 'null');
 const gained = S.save.coin - coinW;
-check('通关奖励巧币（3 星 ' + C.ECON.coinClear3Star + ' / 普通 ' + C.ECON.coinClear + '）',
-  gained === C.ECON.coinClear3Star || gained === C.ECON.coinClear, '+' + gained);
+/* v0.23：首通按星级 2/3/5，重复通关 0 */
+const wantGain = S.result.first ? C.ECON.coinFirst[S.result.stars - 1] : 0;
+check('通关奖励巧币（首通按星级 ' + C.ECON.coinFirst.join('/') + '，重复 0）',
+  gained === wantGain, '+' + gained + ' first=' + S.result.first + ' stars=' + S.result.stars);
 check('连胜 +1', S.save.streak === streakW + 1, streakW + '→' + S.save.streak);
 /* v0.11 变更：BGM 改为真人 mp3，按「关卡序号 / 每 5 关」取曲。
  * 一关之内不换曲、结算页也不换——所以这里断言"通关没有触发任何切曲"。
@@ -190,21 +203,15 @@ check('连胜 +1', S.save.streak === streakW + 1, streakW + '→' + S.save.strea
 check('通关不切曲（一关一首，结算页沿用）', S.save.bgmIdx === bgmW && sceneLog.indexOf('win') < 0,
   'bgmIdx=' + S.save.bgmIdx + ' scenes=' + sceneLog.join(','));
 
-console.log('\n==== 9. 每日任务 ====');
-S.save.taskPlays = C.ECON.taskPlays;
-S.save.tasksDay = dayKey();
-S.save.tasksClaimed = {};
-const tasks = D.taskList();
-check('任务①完成1关 / ③玩3局 达成',
-  tasks.find(t => t.id === 't1').done && tasks.find(t => t.id === 't3').done);
-const cTask = S.save.coin;
-D.claimTask('t1');
-check('领取任务① +' + C.ECON.taskCoin + ' 巧币',
-  S.save.coin === cTask + C.ECON.taskCoin && S.save.tasksClaimed.t1 === true,
-  cTask + '→' + S.save.coin);
-const cTask2 = S.save.coin;
-D.claimTask('t1');
-check('重复领取无效', S.save.coin === cTask2);
+console.log('\n==== 9. 每日任务（v0.16 已下线，完整用例见 verify_v16） ====');
+/* 用户 v0.16 要求：主页「任务」入口整块去掉。
+ * 这里只留最小回归：存档不再带任务字段、调试接口不再暴露任务函数。 */
+check('存档默认值不再含 tasksDay / tasksClaimed / taskPlays',
+  S.save.tasksDay === undefined && S.save.tasksClaimed === undefined && S.save.taskPlays === undefined);
+check('调试接口不再暴露 claimTask / taskList',
+  D.claimTask === undefined && D.taskList === undefined);
+check('配置里任务奖励字段已移除',
+  C.ECON.taskCoin === undefined && C.ECON.taskCoin3 === undefined && C.ECON.taskPlays === undefined);
 
 console.log('\n==== 10. 在线奖励（v0.15 起改为 6 档累计，完整用例见 verify_v15） ====');
 /* 旧的「每 3 分钟领 10 巧币」已被按累计时长解锁的 6 档取代。

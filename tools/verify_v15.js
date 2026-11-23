@@ -1,13 +1,13 @@
-/* v0.15 专项验收：每日在线奖励（6 档 / 累计时长 / 每日 0 点清零）+ 提示卡
+/* v0.15 专项验收：每日在线奖励（6 档 / 累计时长 / 每日 0 点清零）+ 查找道具
  * 用法：node tools/verify_v15.js
  *
  * 覆盖：
  *   1) 配置：6 档门槛与奖励数值（对着需求逐项核）；
  *   2) 计时：前台累计、单次结算上限（防时钟跳变）、跨天清零、15 秒落盘节流；
- *   3) 领取：未到点 / 已放弃重复领 / 体力溢出 / 提示卡入账；
+ *   3) 领取：未到点 / 已放弃重复领 / 体力溢出 / 查找道具入账；
  *   4) 主页入口：气泡「可领 N」与累计时长、点击进页面（不再是一点就领）；
  *   5) 页面版式：累计时长、进度条、6 行档位、三种按钮态；
- *   6) 提示卡在关卡提示面板里的入口与消耗；
+ *   6) 查找道具在关卡提示面板里的入口与消耗（v0.16 起无免费档）；
  *   7) 三端一致 / 源码约束 / 包体。
  */
 const fs = require('fs');
@@ -75,6 +75,7 @@ function grab(fn) { rec.texts.length = 0; fn(); return texts(); }
 function mkEnv(store) {
   return {
     ctx: makeCtx(),
+  tutorial: false,   // v0.21：这些脚本专测横向系统，关掉第 1 关教学
     size: () => ({ w: 375, h: 812 }),
     dpr: () => 3,
     safeInsets: () => ({ top: 20, bottom: 0 }),
@@ -103,8 +104,8 @@ function boot() {
 function freeze(S) { S.onlineMark = 0; S.onlineSaveT = 0; }
 
 async function main() {
-  console.log('v0.15 验收：每日在线奖励（6 档）+ 提示卡');
-  check('版本号 v0.15+', /^v0\.1[5-9]/.test(CFG.version), CFG.version);
+  console.log('v0.15 验收：每日在线奖励（6 档）+ 查找道具');
+  check('版本号 v0.15+', /^v0\.(1[5-9]|2\d)/.test(CFG.version), CFG.version);
 
   /* ================= 1. 配置数值 ================= */
   section('1. 配置：6 档门槛与奖励（对着需求逐项核）');
@@ -122,7 +123,7 @@ async function main() {
   ];
   for (let i = 0; i < 6; i++) {
     const t = T[i], e = spec[i];
-    check(`${t.label}：体力 +${e.energy} 巧币 +${e.coin}` + (e.hint ? ` 提示卡 +${e.hint}` : ''),
+    check(`${t.label}：体力 +${e.energy} 巧币 +${e.coin}` + (e.hint ? ` 查找道具 +${e.hint}` : ''),
       t.energy === e.energy && t.coin === e.coin && (t.hint || 0) === e.hint,
       `实际 ${t.energy}/${t.coin}/${t.hint || 0}`);
   }
@@ -187,7 +188,7 @@ async function main() {
   })());
 
   /* ================= 3. 领取 ================= */
-  section('3. 领取：未到点 / 重复领 / 体力溢出 / 提示卡');
+  section('3. 领取：未到点 / 重复领 / 体力溢出 / 查找道具');
   const b = boot();
   await delay(20);
   freeze(b.S);
@@ -216,14 +217,14 @@ async function main() {
   b.S.save.energy = CFG.ECON.energyMax;             // 满体力
   check('60 分钟档体力可溢出上限', b.D.onlineClaim('o6') === true &&
     b.S.save.energy === CFG.ECON.energyMax + 20, 'energy=' + b.S.save.energy);
-  check('60 分钟档巧币 +10 提示卡 +1',
+  check('60 分钟档巧币 +10 查找道具 +1',
     b.S.save.coin === cBefore + 15 && b.S.save.hintItems === 1,
     'coin=' + b.S.save.coin + ' hint=' + b.S.save.hintItems);
 
   freeze(b.S);
   b.S.save.onlineSec = 2400;
   b.D.onlineClaim('o5');
-  check('40 分钟档：体力 +6 提示卡 +1（无巧币）',
+  check('40 分钟档：体力 +6 查找道具 +1（无巧币）',
     b.S.save.hintItems === 2 && b.S.save.energy === CFG.ECON.energyMax + 20 + 6,
     'hint=' + b.S.save.hintItems + ' energy=' + b.S.save.energy);
 
@@ -267,7 +268,7 @@ async function main() {
   check('已领档显示「已领取」', /已领取/.test(tx));
   check('到点档显示「领取」', /领取/.test(tx));
   check('未到档显示「差 mm:ss」', /差 \d\d:\d\d/.test(tx), tx.slice(0, 400));
-  check('底部提示卡余额', /提示卡 ×\d+/.test(tx));
+  check('底部查找道具余额', /查找道具 ×\d+/.test(tx), tx.slice(0, 300));
 
   /* 页面内点领取（走 switch 的 online_o 前缀分支） */
   const coinP = h.S.save.coin;
@@ -290,31 +291,36 @@ async function main() {
   tx = grab(() => step(16));
   check('下一档未到点：显示还差 08:20', /距「20 分钟」还差 08:20/.test(tx), tx.slice(0, 300));
 
-  /* ================= 6. 提示卡 ================= */
-  section('6. 提示卡：关卡提示面板可用');
+  /* ================= 6. 查找道具 ================= */
+  section('6. 查找道具：关卡提示面板可用（v0.16 起每关不再白送）');
   const p = boot();
   await delay(20);
   freeze(p.S);
   p.D.setupLevel(0);
   p.D.go('play');
-  p.S.hintLv = 1;                                  // 免费档已用完，进入付费档
+  p.S.hintLv = 0;                                  // v0.16：第 1 档也要付费
   p.S.overlay = 'hint';
   p.S.save.hintItems = 2;
   tx = grab(() => step(16));
-  check('有卡时提示面板出现「用提示卡 · 剩 2」', /用提示卡 · 剩 2/.test(tx), tx.slice(0, 300));
+  check('有道具时提示面板出现「用查找道具 · 剩 2」', /用查找道具 · 剩 2/.test(tx), tx.slice(0, 300));
   check('仍保留看视频 / 巧币两条路', /看视频/.test(tx) && /巧币/.test(tx));
 
   p.D.fireBtn('hint_item');
-  check('用卡后数量 -1', p.S.save.hintItems === 1, 'n=' + p.S.save.hintItems);
-  check('用卡后提示档位 +1（等价付费档）', p.S.hintLv === 2, 'lv=' + p.S.hintLv);
-  check('用卡不扣巧币', p.S.save.coin >= 0);
+  check('用道具后数量 -1', p.S.save.hintItems === 1, 'n=' + p.S.save.hintItems);
+  check('用道具后提示档位 +1（第 1 档也要付）', p.S.hintLv === 1, 'lv=' + p.S.hintLv);
+  check('用道具不扣巧币', p.S.save.coin >= 0);
 
-  p.S.hintLv = 1;
+  p.S.hintLv = 0;
   p.S.overlay = 'hint';
   p.S.save.hintItems = 0;
   tx = grab(() => step(16));
-  check('没卡时给出获取指引', /没有提示卡/.test(tx) && !/用提示卡 · 剩/.test(tx), tx.slice(0, 300));
-  check('没卡点用卡被拒（不出现负库存）', (function () {
+  /* v0.22：没道具时面板不再画道具按钮 —— 有道具时工具栏一点就用，面板只留巧币/视频 */
+  check('没道具时面板不画道具按钮',
+    !/查找道具/.test(tx), tx.slice(0, 300));
+  /* v0.20：面板上「道具来源 / 巧币余量 / 用提示最高 ★★」两行小字已按需求删除 */
+  check('面板不再写道具来源与星级封顶（v0.20 删除）',
+    !/在线奖励 40\/60 分钟/.test(tx) && !/最高 ★★/.test(tx), tx.slice(0, 300));
+  check('没道具时点用道具被拒（不出现负库存）', (function () {
     const n0 = p.S.save.hintItems;
     p.D.useHintItem();
     return p.S.save.hintItems === n0;
@@ -340,7 +346,7 @@ async function main() {
       a.slice(0, 8));
   }
   function walkSize(dir) {
-    const SKIP = ['cloudfunctions', 'node_modules', '.cloudbase'];
+    const SKIP = ['cloudfunctions', 'node_modules', '.cloudbase', '.git'];
     let total = 0;
     for (const f of fs.readdirSync(dir)) {
       if (SKIP.indexOf(f) >= 0) continue;
