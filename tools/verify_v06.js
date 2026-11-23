@@ -116,8 +116,8 @@ check('网页标题已改', /方寸巧拼/.test(fs.readFileSync(path.join(ROOT, 
 
 /* ---------- 2. BGM 链路（v0.11 起改为真人 mp3，不再走合成） ---------- */
 section('2. BGM：真人 mp3 与音量');
-/* v0.12：主页改回合成和弦（配置里 home 留空、pad 有和弦表），不再用 mp3 */
-check('主页走合成和弦（不配 mp3）', CFG.AUDIO.bgm.home === '', "'" + CFG.AUDIO.bgm.home + "'");
+/* v0.29.2：用户试听通过后，主页换成新曲「晨光微语」（旧版是合成和弦） */
+check('主页使用新曲 bgm_dawn.mp3', CFG.AUDIO.bgm.home === 'bgm_dawn.mp3', "'" + CFG.AUDIO.bgm.home + "'");
 /* v0.13：主页换成 8 小节轻音乐（四声部），谱表在 AUDIO.home */
 check('主页谱表已配（8 小节和声）', (CFG.AUDIO.home.prog || []).length === 8,
   'prog=' + (CFG.AUDIO.home.prog || []).length);

@@ -1338,6 +1338,10 @@
         if (page === 'home' || page === 'levels') env.audio.setScene('home');
         else if (page === 'play') env.audio.setScene(bgmSceneKey());
       }
+      /* v0.29.2：新 BGM 由「页面」决定曲目（setScene 仍保留旧调用给老版本音频层），
+       * setMix 驱动对局动态混音的平静 / 专注预设。老音频层没有这些方法时静默跳过。 */
+      if (env.audio.setPage) env.audio.setPage(page);
+      if (env.audio.setMix) env.audio.setMix(page === 'play' ? 'play' : 'calm');
       if (page !== 'play') { state.running = false; }
       /* v0.14：切页就撤掉盖在画布上的原生授权按钮，别让它留在别的页面上 */
       if (state.overlay !== 'settings') hideProfileButton();
@@ -1629,6 +1633,9 @@
       if (r.overlaps.length) {
         state.overlapT = 400;
         flashMsg('有两块压在一起了');
+        /* v0.29.2：用户要求补「拼接失败」音效。只在真实重叠时响，
+         * 不绑「没吸附上」——那可能只是靠近一点点的正常微调，会太吵。 */
+        env.audio.play('sfx_fail');
         return;
       }
       if (r.coverage >= C.JUDGE.passCoverage && r.overflow < C.JUDGE.passOverflow &&
@@ -1650,6 +1657,7 @@
       if (state.tut) state.tut = null;
       state.flower = { t: 0 };   // v0.3.4 A4a：鲜花与音乐共用这一时刻起算
       env.audio.play('sfx_win');
+      if (env.audio.setMix) env.audio.setMix('win');   // v0.29.2：全声部齐鸣
       /* 星级沿用策划 5.7 原规则（三星=时限+步数；二星=时限内）。
        * v0.3 A3 变更点：用提示（hint_used）从「只给 1 星」放宽为「封顶 ★★☆」。
        * v0.20：取消这条封顶 —— 提示从「三档作弊（含看全图）」收窄成「指一步」，
@@ -2404,6 +2412,13 @@
         if (state.timeLeft > 0 && !tutFreeze) {
           state.timeLeft = Math.max(0, state.timeLeft - dt / 1000);
           state.hearts = heartsOf(state.timeLeft, state.timeLimit || 1);
+          /* v0.29.2：倒计时进入最后 20% → 紧张层淡入，鼓点与低音顶上来。
+           * setMix 内部会去重，逐帧调用不会反复重排程；结算/教学不抢 win 预设。 */
+          var MX = C.AUDIO && C.AUDIO.mix;
+          if (MX && env.audio.setMix && !state.win) {
+            var leftRatio = state.timeLimit ? state.timeLeft / state.timeLimit : 1;
+            env.audio.setMix(leftRatio <= (MX.tenseAt || 0.2) ? 'tense' : 'play');
+          }
           if (state.timeLeft <= 0) failLevel();
         }
         /* v0.21 教学：每帧看"下一块还差什么"，全部放对就自动收尾 */
@@ -3491,7 +3506,7 @@
       var pwCoin = HU.padL + ctx.measureText(coinLabel).width + HU.padR;
       var pwEnergy = HU.padL + ctx.measureText(energyLabel).width + HU.plusPad;
       var pillW = Math.max(pwCoin, pwEnergy, HU.pillMinW);
-      /* v0.28：右移定位——整组胶囊的右沿贴 DESIGN.w - rightPad，图标仍压在胶囊左端外侧。 */
+      /* v0.29.1：回到左上角默认左锚定（iconX）；rightAnchor 仅保留为可选开关。 */
       var hudIconX = HU.rightAnchor
         ? (C.DESIGN.w - HU.rightPad - HU.pillDx - pillW)
         : HU.iconX;
@@ -3605,46 +3620,51 @@
         ctx.restore();
       }
 
-      /* ================= v0.29 两套拼图入口：图案化质感卡片 =================
-       * 用户要求：①按钮做得更有质感；②「四巧板/七巧板 + 关数」文字换成图案；
-       * ③不再展示多少关。现在每个入口是一张立体卡片：左侧画 4/7 块彩色拼片图案
-       * （数量直观区分两套），当前那套金边 + 微光 +「进行中」小标，纯图案无文字。
-       * 位置仍固定：四巧板在上(set4Y)、七巧板在下(set7Y)，热区 id 不变。 */
+      /* ================= v0.29.2 两套拼图入口：一个图案 + 华文彩云汉字 =================
+       * 用户反馈纯拼片图案「太丑」。改回「一个拼片徽章 + 四巧板 / 七巧板」，
+       * 文字用主页标题同款华文彩云（titleFontFamily）；卡片保留玻璃质感与选中金边，
+       * 不再显示关数。位置仍固定：四巧板在上(set4Y)、七巧板在下(set7Y)，热区 id 不变。 */
       var SET_PIECE_COLORS = ['#4FA8E0', '#63C88B', '#FF8A5B', '#A87BE8', '#F5C84D', '#EE7FA8', '#59C7C0'];
-      function setPiece(x, y, sz, color, shape) {
-        ctx.save(); ctx.translate(x, y);
-        var h = sz / 2;
+      function setFacet(pts, color) {
         ctx.beginPath();
-        if (shape === 0) ctx.rect(-h, -h, sz, sz);
-        else if (shape === 1) { ctx.moveTo(-h, h); ctx.lineTo(h, h); ctx.lineTo(0, -h); }
-        else if (shape === 2) { ctx.moveTo(-h, -h); ctx.lineTo(h, -h); ctx.lineTo(0, h); }
-        else if (shape === 3) { ctx.moveTo(-h, -h); ctx.lineTo(-h, h); ctx.lineTo(h, 0); }
-        else if (shape === 4) { ctx.moveTo(h, -h); ctx.lineTo(h, h); ctx.lineTo(-h, 0); }
-        else { ctx.moveTo(-h, h); ctx.lineTo(h * 0.4, h); ctx.lineTo(h, -h); ctx.lineTo(-h * 0.4, -h); }
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
         ctx.closePath();
         ctx.fillStyle = color; ctx.fill();
-        ctx.lineWidth = 1.6; ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.stroke();
+        ctx.lineWidth = 1.6; ctx.lineJoin = 'round';
+        ctx.strokeStyle = 'rgba(255,255,255,0.92)'; ctx.stroke();
+      }
+      /* 一个完整徽章：四巧板是四色菱形，七巧板是 7 面方形拼图，
+       * 不再是散落的小碎片，远看就是一个整块图案。 */
+      function setBadge(kind, cx, cy, s) {
+        var r = s / 2;
+        ctx.save(); ctx.translate(cx, cy);
+        ctx.beginPath(); rr(-r - 8, -r - 8, s + 16, s + 16, 14);
+        ctx.fillStyle = 'rgba(255,255,255,0.82)'; ctx.fill();
+        ctx.lineWidth = 1.6; ctx.strokeStyle = 'rgba(150,168,205,0.45)'; ctx.stroke();
+        if (kind === 't4') {
+          setFacet([[0, -r], [r, 0], [0, 0]], SET_PIECE_COLORS[0]);
+          setFacet([[0, -r], [-r, 0], [0, 0]], SET_PIECE_COLORS[1]);
+          setFacet([[-r, 0], [0, r], [0, 0]], SET_PIECE_COLORS[2]);
+          setFacet([[r, 0], [0, r], [0, 0]], SET_PIECE_COLORS[3]);
+        } else {
+          setFacet([[-r, -r], [0, -r], [-r, 0]], SET_PIECE_COLORS[0]);
+          setFacet([[0, -r], [0, 0], [-r, 0]], SET_PIECE_COLORS[1]);
+          setFacet([[0, -r], [r, -r], [r, 0]], SET_PIECE_COLORS[2]);
+          setFacet([[0, -r], [r, 0], [0, 0]], SET_PIECE_COLORS[3]);
+          setFacet([[-r, 0], [0, 0], [-r, r]], SET_PIECE_COLORS[4]);
+          setFacet([[0, 0], [0, r], [-r, r]], SET_PIECE_COLORS[5]);
+          setFacet([[0, 0], [r, 0], [r, r], [0, r]], SET_PIECE_COLORS[6]);
+        }
         ctx.restore();
       }
-      function setPattern(kind, cx, cy, sc) {
-        ctx.save(); ctx.translate(cx, cy); ctx.scale(sc, sc);
-        if (kind === 't4') {
-          var s = 40, gp = 5;
-          setPiece(-s / 2 - gp, -s / 2 - gp, s, SET_PIECE_COLORS[0], 1);
-          setPiece(s / 2 + gp, -s / 2 - gp, s, SET_PIECE_COLORS[1], 4);
-          setPiece(-s / 2 - gp, s / 2 + gp, s, SET_PIECE_COLORS[2], 3);
-          setPiece(s / 2 + gp, s / 2 + gp, s, SET_PIECE_COLORS[3], 2);
-        } else {
-          /* 七巧板：3+3+1 紧凑排布，纵向总高 ≤ 卡片内高，绝不压住下方星星文字 */
-          var u = 23, ux = 30, uy = 21;
-          setPiece(-ux, -uy, u, SET_PIECE_COLORS[0], 1);
-          setPiece(0, -uy, u, SET_PIECE_COLORS[1], 0);
-          setPiece(ux, -uy, u, SET_PIECE_COLORS[2], 4);
-          setPiece(-ux, uy, u, SET_PIECE_COLORS[3], 3);
-          setPiece(0, uy, u, SET_PIECE_COLORS[4], 2);
-          setPiece(ux, uy, u, SET_PIECE_COLORS[5], 5);
-          setPiece(0, uy * 2.35, u * 0.82, SET_PIECE_COLORS[6], 0);
-        }
+      function setEntryLabel(label, x, y, sel) {
+        ctx.save();
+        ctx.font = '700 42px ' + (V.titleFontFamily || '"STCaiyun","华文彩云",serif');
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.lineWidth = 3; ctx.lineJoin = 'round';
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.strokeText(label, x, y);
+        ctx.fillStyle = sel ? '#7A4A00' : '#3E4C60'; ctx.fillText(label, x, y);
         ctx.restore();
       }
       function setEntry(id, key, kind, yy) {
@@ -3672,10 +3692,10 @@
         ctx.lineWidth = sel ? 4 : 2;
         ctx.strokeStyle = sel ? (COL.goldEdge || '#E5962D') : 'rgba(150,168,205,0.55)'; ctx.stroke();
         ctx.restore();
-        /* 拼片图案：占卡片中偏左，右侧留给「进行中」标记 */
-        setPattern(kind, x - 46, yy, 1);
+        setBadge(kind, x - 146, yy, 64);
+        setEntryLabel(kind === 't4' ? '四巧板' : '七巧板', x - 80, yy + 1, sel);
         if (sel) {
-          /* 右侧竖向三色进度点 + 进行中小灯，纯图形不写字 */
+          /* 右侧「进行中」小灯，纯图形不写字 */
           var px = x + w / 2 - 56;
           ctx.save();
           ctx.beginPath(); ctx.arc(px, yy, 13, 0, Math.PI * 2);
@@ -3862,12 +3882,12 @@
         if (wEach <= M.maxW || fsz <= M.minFontSize) break;
         fsz -= 2;
       }
-      /* v0.28：右上角定位（与主页 HUD 一致）。倒计时胶囊居中不冲突。 */
+      /* v0.29.1：回到左上角（返回按钮 108 与倒计时 255 之间）；topShift 让两枚胶囊再上移一点。 */
       var x = M.rightAnchor ? (C.DESIGN.w - M.rightPad - wEach) : M.left;
       var ph = M.pillH;
       var subFs = Math.max(12, Math.round(fsz * ratio));
       for (var k = 0; k < rows.length; k++) {
-        var r = rows[k], rowY = cy + (k - 0.5) * M.rowGap;
+        var r = rows[k], rowY = cy - (M.topShift || 0) + (k - 0.5) * M.rowGap;
         ctx.save();
         shadow(8, 3, 'rgba(44,58,75,0.20)');
         rr(x, rowY - ph / 2, wEach, ph, ph / 2);

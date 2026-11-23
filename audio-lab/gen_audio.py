@@ -276,6 +276,20 @@ def build_fanfare():
     return finish(buf, peak=0.90, fade_ms=8)
 
 
+# =====================================================================
+# 拼接失败音：低沉、短促、不带惩罚感的 "没吸上" 提示
+# 失败音刻意比成功音更轻更钝，避免玩家反复试错时被刺耳声劝退。
+# =====================================================================
+def build_fail():
+    dur = 0.26
+    buf = [0.0] * int(dur * SR)
+    add_note(buf, 0.00, 0.20, 220.0, 0.16, 'sine', 0.004, 0.16, True)
+    add_note(buf, 0.02, 0.18, 164.8, 0.13, 'sine', 0.004, 0.15, True)
+    add_note(buf, 0.00, 0.11, 329.6, 0.05, 'tri', 0.003, 0.09, True)
+    add_noise(buf, 0.00, 0.045, 0.022, 500)
+    return finish(buf, peak=0.68, fade_ms=6)
+
+
 def main():
     print('Generating candidates...')
     write_wav('bgm_dawn.wav', build_dawn())
@@ -287,6 +301,7 @@ def main():
         write_wav('stem_flow_%s.wav' % k, finish(list(L[k]), peak=0.80))
     write_wav('layer_tension.wav', build_tension())
     write_wav('sfx_win_fanfare.wav', build_fanfare())
+    write_wav('sfx_fail.wav', build_fail())
     print('DONE ->', OUT)
 
 

@@ -49,6 +49,11 @@
   var unlocked = false, buffersReady = false, loadedOk = 0, elementMode = false;
   var bgmStarted = false;
   var bgmScene = 'home';
+  /* v0.29.2 新 BGM：单曲（主页 / 关卡列表）与对局动态混音两套链路。
+   * 所有声部都在同一个 WebAudio 时钟上排程，避免多播放器漂移。 */
+  var pageKey = 'home', mixPreset = 'calm';
+  var singleSrc = null, singleNode = null, singleFile = '';
+  var mixSrcs = [], mixGains = {}, mixActive = false;
 
   function initAudio() {
     if (AC) return;
@@ -146,6 +151,12 @@
       sfx_tap: mk(SFX_BASE.tap),
       sfx_pick: mk(SFX_BASE.pick),
       sfx_snap: function () { mk(SFX_BASE.snap)(); noise(0.020, 0.055, 700); },
+      /* v0.29.2：拼接失败——低沉短促的「没吸上」，比成功音轻，避免试错时烦躁 */
+      sfx_fail: function () {
+        tone(220 * p, 0.16 * d, w, 0.10, 0, 165 * p);
+        tone(330 * p, 0.08 * d, 'sine', 0.035, 0.005);
+        noise(0.035, 0.028, 500);
+      },
       sfx_win: function () {
         tone(523.25, 0.14, 'triangle', 0.10, 0.000);
         tone(659.25, 0.14, 'triangle', 0.10, 0.082);
@@ -171,9 +182,17 @@
       startBgm();
       return;
     }
-    var names = [], k;
-    for (k in C.AUDIO.files) names.push(k);
-    var left = names.length;
+    var loads = [], k, seen = {};
+    function addLoad(key, file) {
+      if (!file || seen[file]) return;
+      seen[file] = 1; loads.push({ key: key, file: file });
+    }
+    for (k in C.AUDIO.files) addLoad(k, C.AUDIO.files[k]);
+    /* v0.29.2：三首新 BGM + 5 条 stem + 紧张层也一起解码，切场景不用等网络。 */
+    var A = C.AUDIO, M = A.mix || {};
+    addLoad('bgm_dawn', A.bgm.home); addLoad('bgm_starlit', A.bgm.levels); addLoad('bgm_flow', A.bgm.play);
+    for (k in M.stems) addLoad(M.stems[k], M.stems[k]);
+    var left = loads.length;
     if (!left) { buffersReady = true; elementMode = true; return; }
     function settle(ok) {
       if (ok) loadedOk++;
@@ -182,15 +201,15 @@
       elementMode = loadedOk === 0;       // 全部失败（典型：file:// 双击打开）→ 元素池
       startBgm();
     }
-    names.forEach(function (name) {
-      fetch(C.AUDIO.base + C.AUDIO.files[name], { cache: 'force-cache' })
+    loads.forEach(function (it) {
+      fetch(C.AUDIO.base + it.file, { cache: 'force-cache' })
         .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
         .then(function (ab) {
           return new Promise(function (res, rej) {
             try { AC.decodeAudioData(ab, res, rej); } catch (e) { rej(e); }
           });
         })
-        .then(function (b) { buf[name] = b; settle(true); })
+        .then(function (b) { buf[it.key] = b; if (it.key !== it.file) buf[it.file] = b; settle(true); })
         .catch(function () { settle(false); });
     });
   }
@@ -416,15 +435,83 @@
       } catch (e) {}
     }
   }
+  /* ---- v0.29.2：WebAudio 单曲 / 多 stem 混音总线 ---- */
+  function rampGain(g, to, ms) {
+    if (!g || !AC) return;
+    try {
+      if (g.gain.cancelScheduledValues) g.gain.cancelScheduledValues(AC.currentTime);
+      g.gain.setValueAtTime(g.gain.value, AC.currentTime);
+      g.gain.linearRampToValueAtTime(to, AC.currentTime + (ms || 200) / 1000);
+    } catch (e) { try { g.gain.value = to; } catch (e2) {} }
+  }
+  function stopBgmSources(ms) {
+    var dead = [];
+    if (singleSrc) { dead.push({ s: singleSrc, g: singleNode }); singleSrc = null; singleNode = null; }
+    if (mixActive) {
+      for (var k in mixSrcs) dead.push({ s: mixSrcs[k], g: mixGains[k] });
+      mixSrcs = []; mixGains = {}; mixActive = false;
+    }
+    singleFile = '';
+    if (!dead.length) return;
+    ms = ms || 180;
+    for (var i = 0; i < dead.length; i++) {
+      rampGain(dead[i].g, 0, ms);
+      (function (s) { setTimeout(function () { try { s.stop(); } catch (e) {} }, ms + 40); })(dead[i].s);
+    }
+  }
+  function playSingleFile(file) {
+    if (!file || !buf[file] || !AC) return false;
+    stopBgmSources(160);
+    var s = AC.createBufferSource(), g = AC.createGain();
+    s.buffer = buf[file]; s.loop = true; g.gain.value = 0;
+    s.connect(g); g.connect(bgmGain);
+    s.start();
+    singleSrc = s; singleNode = g; singleFile = file;
+    rampGain(g, trimOf(file), 260);
+    return true;
+  }
+  function applyMix(preset, immediate) {
+    var M = C.AUDIO.mix || {}, p = (M.presets || {})[preset] || (M.presets || {}).play || {};
+    var trim = typeof M.trim === 'number' ? M.trim : 0.42;
+    var ms = immediate ? 0 : (M.fadeMs || 280);
+    for (var k in mixGains) rampGain(mixGains[k], (p[k] || 0) * trim, ms);
+  }
+  function startMix() {
+    var M = C.AUDIO.mix || {}, stems = M.stems || {};
+    var keys = [], k;
+    for (k in stems) if (buf[stems[k]]) keys.push(k);
+    if (!keys.length || !AC) return false;
+    stopBgmSources(160);
+    var t0 = AC.currentTime + 0.04;              // 同一时刻起播，声部之间不会错拍
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i], s = AC.createBufferSource(), g = AC.createGain();
+      s.buffer = buf[stems[key]]; s.loop = true; g.gain.value = 0;
+      s.connect(g); g.connect(bgmGain);
+      s.start(t0);
+      mixSrcs.push(s); mixGains[key] = g;
+    }
+    mixActive = true; singleFile = 'bgm_flow';
+    applyMix(mixPreset, true);
+    return true;
+  }
+
   function bgmPlay(key) {
-    var file = bgmFile(key);
-    if (!file) {                                  // 主页/关卡列表：合成轻音乐
-      pauseAll(null);
-      curEl = null; bgmFileNow = '';
-      homeStart();
+    var A = C.AUDIO;
+    homeStop(true);
+    /* 新链路：WebAudio 已解码完成 → 单曲 / 动态混音，不再依赖 <audio> 元素。 */
+    if (!elementMode && AC && buffersReady) {
+      pauseAll(null); curEl = null; bgmFileNow = '';   // 解码前的元素池兜底先停掉
+      if (pageKey === 'play') {
+        if (!startMix()) playSingleFile(A.bgm.play);
+      } else {
+        playSingleFile(pageKey === 'levels' ? A.bgm.levels : A.bgm.home);
+      }
+      applyBgmGain();
       return;
     }
-    homeStop(true);                               // 进关卡：主页曲淡出 150ms 让位给 mp3
+    /* file:// 预览等场景的兜底：元素池按页面选一首全混曲。 */
+    var file = pageKey === 'levels' ? A.bgm.levels : (pageKey === 'play' ? A.bgm.play : bgmFile(key));
+    if (!file) { homeStart(); return; }
     preloadBgm();
     var el = elFor(file);
     /* 同一首已经在放就别重头开始——1~5 关都是 lv1，换关不该把音乐倒回去 */
@@ -474,8 +561,12 @@
   }
   function playSfx(name) {
     if (!enabled.sfx) return;
-    // v0.3.4 A4b：通关 sting 强制走合成，避免既有 sfx_win.mp3 抢先播旧三音
-    if (name === 'sfx_win') { if (synth.sfx_win) synth.sfx_win(); return; }
+    /* v0.29.2：新版胜利音走试听通过的文件；木质风格才有对应采样，其它风格沿用合成。
+     * 失败音同理：木质用 sfx_fail.wav，其它风格用 buildSfxSynth 的同款低沉音。 */
+    if (name === 'sfx_win' && sfxStyleKey !== 'wood') {
+      if (synth.sfx_win) synth.sfx_win();
+      return;
+    }
     if (name === 'sfx_snap' && snapVoices >= C.AUDIO.snapVoices) return;
     if (name === 'sfx_tap') {                 // 连点丢帧，避免机关枪
       var t = Date.now();
@@ -488,10 +579,11 @@
     /* v0.27：非木质风格必须走合成（wav 缓冲是固定的木质录音，换风格听不出差别）。
      * wood 保持原优先级（buffer → element → synth），零回归。 */
     if (sfxStyleKey === 'wood') {
-      if (buf[name] && AC) {
+      var fkey = name === 'sfx_win' ? 'sfx_win_fanfare' : name;
+      if (buf[fkey] && AC) {
         try {
           var s = AC.createBufferSource();
-          s.buffer = buf[name];
+          s.buffer = buf[fkey];
           s.playbackRate.value = rate;
           var g = AC.createGain();
           g.gain.value = gain;
@@ -518,13 +610,26 @@
       if (!bgm) {
         /* 先撤看门狗再停，否则 320ms 后的补播会把刚关掉的又放起来 */
         if (curEl && curEl._watch) { clearTimeout(curEl._watch); curEl._watch = null; }
-        pauseAll(null); curEl = null; bgmFileNow = '';   // 关卡 mp3
+        pauseAll(null); curEl = null; bgmFileNow = '';   // 关卡 mp3（元素池兜底）
         homeStop();                               // 主页轻音乐（同时清掉已排程的音）
+        stopBgmSources(0);                        // v0.29.2：单曲 / stem 混音
       } else if (unlocked) bgmPlay(bgmScene);
       applyBgmGain();
     },
     duck: function (on) { ducked = !!on; applyBgmGain(); },
     setScene: function (k) { bgmSetScene(k); },   // v0.5：主页 / 关卡多场景 BGM
+    /* v0.29.2：页面决定曲目，设定决定混音预设；老版本音频层没有这两个方法。 */
+    setPage: function (p) {
+      if (!p || pageKey === p) return;
+      pageKey = p;
+      mixPreset = p === 'play' ? 'play' : 'calm';   // 进对局先用专注预设，倒计时再由 setMix 接管
+      if (unlocked && enabled.bgm) bgmPlay(bgmScene);
+    },
+    setMix: function (preset) {
+      if (!preset || mixPreset === preset) return;
+      mixPreset = preset;
+      if (mixActive) applyMix(preset);
+    },
     setSfxStyle: function (key) {                  // v0.27：切换交互音效风格
       if (!C.SFX_STYLES || !C.SFX_STYLES[key]) key = 'wood';
       sfxStyleKey = key;
@@ -534,6 +639,7 @@
       if (!v) {
         if (curEl && curEl._watch) { clearTimeout(curEl._watch); curEl._watch = null; }
         pauseAll(null); homeStop();               // 切后台：两边都停，别继续排程
+        stopBgmSources(0);
       } else if (unlocked && enabled.bgm) {
         bgmPlay(bgmScene);
       }
@@ -550,9 +656,14 @@
       scene: bgmScene, home: !!homeSeq, gain: (bgmGain && bgmGain.gain) ? bgmGain.gain.value : null,
       gate: (homeGate && homeGate.gain) ? homeGate.gain.value : null,
       preloaded: !!bgmPreloaded, els: Object.keys(EL).length, ac: AC ? AC.state : null,
-      playing: (function () { var n = 0; for (var k in EL) if (EL[k] && !EL[k].paused) n++; return n; })()
+      playing: (function () { var n = 0; for (var k in EL) if (EL[k] && !EL[k].paused) n++; return n; })() +
+        (singleSrc || mixActive ? 1 : 0),
+      /* v0.29.2：新链路状态，供 verify_audio / audio_probe 读取 */
+      page: pageKey, mix: mixPreset, mode: mixActive ? 'mix' : (singleSrc ? 'single' : (homeSeq ? 'home' : 'none')),
+      file: singleFile || bgmFileNow, sources: mixSrcs.length,
+      gains: (function () { var o = {}; for (var k in mixGains) o[k] = mixGains[k].gain.value; return o; })()
     };
-    if (curEl) {
+    if (curEl && !singleSrc && !mixActive) {
       info.src = curEl.src; info.file = bgmFileNow;
       info.volume = curEl.volume; info.paused = curEl.paused; info.loop = curEl.loop;
       info.ready = curEl.readyState;                 // 4 = 预载完成，切过来能立刻响

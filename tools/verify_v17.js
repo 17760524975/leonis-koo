@@ -119,11 +119,11 @@ const BACK_R = 108;                               // 返回按钮右沿（按钮
  * 它是系统层 UI，盖在画布之上：画在那儿的 HUD 会被压掉一半。 */
 const WX_MENU_L = 556;
 const VIEW_SAFE_TOP = Math.max(CFG.SAFE.top, 20 / SCALE);
-const BY = VIEW_SAFE_TOP + 40;                    // 顶栏中线
 const M = CFG.LAYOUT.HUD_MIN;
-/* v0.28：HUD 右对齐——右沿 = DESIGN.w - rightPad，左沿 = 右沿 - maxW */
-const HUD_R = CFG.DESIGN.w - M.rightPad;
-const HUD_L = HUD_R - M.maxW;
+/* v0.29.1：HUD 回到左上角（返回按钮右沿 108 之后），并整体上移 topShift。 */
+const BY = VIEW_SAFE_TOP + 40 - (M.topShift || 0); // 顶栏中线（含上移量）
+const HUD_L = M.left;
+const HUD_R = HUD_L + M.maxW;
 
 const TB = CFG.LAYOUT.TOOLBAR;
 const TOOL_TOTAL = 5 * TB.w + 4 * TB.gap;
@@ -155,19 +155,21 @@ function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).dig
   section('1. 配置与几何净空');
   check('版本号 v0.17 起（含后续补丁版）', /^v0\.(1[7-9]|2\d)(\.\d+)?$/.test(CFG.version), CFG.version);
   check('HUD_MIN 存在且关键值符合设计',
-    !!M && M.pillH === 36 && M.rowGap === 44 && M.maxW === 127 && M.rightAnchor === true && M.rightPad === 24,
-    M ? `pillH=${M.pillH} rowGap=${M.rowGap} maxW=${M.maxW} rightPad=${M.rightPad}` : 'missing');
+    !!M && M.pillH === 36 && M.rowGap === 44 && M.maxW === 127 && M.left === 120
+      && M.topShift === 8 && M.rightAnchor === false,
+    M ? `left=${M.left} pillH=${M.pillH} rowGap=${M.rowGap} maxW=${M.maxW} topShift=${M.topShift}` : 'missing');
   const hudTop = BY - (M.rowGap + M.pillH) / 2;
   const hudBot = BY + (M.rowGap + M.pillH) / 2;
-  check('两枚胶囊竖排：上不越安全区、下不撞广告位',
-    hudTop >= VIEW_SAFE_TOP && hudBot < CFG.LAYOUT.AD.y,
-    `${hudTop} ≥ ${VIEW_SAFE_TOP} 且 ${hudBot} < ${CFG.LAYOUT.AD.y}`);
-  check('HUD 右沿在屏幕内、不越设计宽度',
-    HUD_R <= CFG.DESIGN.w && HUD_L >= CAP_R + 8, `left=${HUD_L} right=${HUD_R}`);
+  check('两枚胶囊竖排：略贴安全区上沿、下不撞广告位',
+    hudTop >= VIEW_SAFE_TOP - (M.topShift || 0) && hudBot < CFG.LAYOUT.AD.y,
+    `${hudTop} ≥ ${VIEW_SAFE_TOP - (M.topShift || 0)} 且 ${hudBot} < ${CFG.LAYOUT.AD.y}`);
+  check('HUD 在返回按钮右侧、不越设计宽度',
+    HUD_L >= BACK_R + 8 && HUD_R <= CFG.DESIGN.w, `left=${HUD_L} right=${HUD_R}`);
   check('最宽情况下仍与倒计时胶囊留出 ≥8 净空',
-    HUD_L - CAP_R >= 8, `hudLeft=${HUD_L} capRight=${CAP_R} 净空=${HUD_L - CAP_R}`);
-  check('v0.28 用户要求：HUD 已挪到右上角（rightPad 可调避让原生胶囊）',
-    HUD_R === CFG.DESIGN.w - M.rightPad, `right=${HUD_R} designW=${CFG.DESIGN.w}`);
+    CAP_L - HUD_R >= 8, `hudRight=${HUD_R} capLeft=${CAP_L} 净空=${CAP_L - HUD_R}`);
+  check('v0.29.1 用户更正：HUD 已回到左上角并上移 8px',
+    M.rightAnchor === false && M.left === 120 && M.topShift === 8,
+    `left=${M.left} topShift=${M.topShift}`);
 
   /* ================= 2. 对局页：数字真的画出来了 ================= */
   section('2. 对局页画出两枚余量胶囊');
@@ -183,9 +185,9 @@ function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).dig
   check('倒计时仍在、没被挤出屏幕', tx.some(t => /^\d\d:\d\d$/.test(t.s)),
     textsOf(tx.filter(t => /^\d\d:\d\d$/.test(t.s))));
   const coinT = hud.filter(t => t.s === '128')[0];
-  check('巧币数字位于顶栏右侧（在倒计时胶囊右边）',
-    !!coinT && coinT.x > CAP_R && coinT.x < CFG.DESIGN.w,
-    coinT ? `x=${coinT.x.toFixed(0)} ∈ (${CAP_R}, ${CFG.DESIGN.w})` : 'not found');
+  check('巧币数字位于顶栏左侧（返回按钮与倒计时之间）',
+    !!coinT && coinT.x > BACK_R && coinT.x < CAP_L,
+    coinT ? `x=${coinT.x.toFixed(0)} ∈ (${BACK_R}, ${CAP_L})` : 'not found');
   check('数字不越出胶囊右沿',
     !!coinT && coinT.x + 40 <= HUD_R, coinT ? `x=${coinT.x.toFixed(0)} ≤ ${HUD_R}` : '');
   /* v0.17：关号让位到卡纸内（顶栏塞不下四组元素），但仍必须看得见 */
@@ -275,8 +277,8 @@ function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).dig
   D.go('home');
   tx = grab(() => step(16));
   const homeE = tx.filter(t => /^\d+\/16$/.test(t.s))[0];
-  check('主页右上角仍是原来的整条「N/16」单行文字（不是拆成两段）',
-    !!homeE && homeE.x > CFG.DESIGN.w / 2, homeE ? `"${homeE.s}" x=${homeE.x.toFixed(0)}` : textsOf(tx).slice(0, 80));
+  check('主页左上角仍是原来的整条「N/16」单行文字（不是拆成两段）',
+    !!homeE && homeE.x < CFG.DESIGN.w / 2, homeE ? `"${homeE.s}" x=${homeE.x.toFixed(0)}` : textsOf(tx).slice(0, 80));
   check('主页该显示当前体力 2/16', !!homeE && homeE.s === '2/16', homeE && homeE.s);
 
   /* ================= 8. 三端同步 ================= */

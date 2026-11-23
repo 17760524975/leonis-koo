@@ -101,7 +101,8 @@ check('HUD 版式进配置', !!HU && typeof HU.y0 === 'number');
 const v06Y0 = 58;
 check('巧币行比 v0.6 上移', HU.y0 < v06Y0, `y0=${HU.y0}（v0.6=${v06Y0}，上移 ${v06Y0 - HU.y0}px）`);
 const pillTop = HU.y0 - HU.pillH / 2;
-check('胶囊顶仍在安全区内', pillTop >= 6, `距安全区顶 ${pillTop.toFixed(1)}px`);
+/* v0.29.1：用户要求再往上挪，胶囊允许略入安全区上沿 8px（左上角没有微信原生胶囊）。 */
+check('胶囊顶贴近安全区上沿（最多入内 8px）', pillTop >= -8, `距安全区顶 ${pillTop.toFixed(1)}px`);
 const coinCenter = CFG.SAFE.top + HU.y0;
 const energyCenter = coinCenter + HU.rowGap;
 check('两行不重叠', HU.rowGap >= HU.pillH + 6, `间距 ${HU.rowGap} / 胶囊高 ${HU.pillH}`);

@@ -9,7 +9,7 @@
   'use strict';
 
   return {
-    version: 'v0.29',
+    version: 'v0.29.2',
 
     /* ---------- 品牌（v0.6 改名「方寸巧拼」） ----------
      * 游戏名只在这里定义一次：主页标题、分享文案、工程名都从这里取，
@@ -108,7 +108,7 @@
        * 验收脚本读这组数据算净空，不再抄魔数。 */
       HUD: {
         iconX: 96,                        // 图标中心 x
-        y0: 38,                           // 巧币行中心距安全区顶（v0.6=58，上移 20）
+        y0: 20,                           // 巧币行中心距安全区顶（v0.6=58→v0.7=38→v0.29.1=20，再上移 18）
         rowGap: 66,                       // 两行中心间距
         pillH: 56, pillDx: 6,             // 胶囊高 / 左端相对图标中心的偏移
         padL: 34, padR: 26,               // 胶囊内左右留白（左侧要容下压在端头的图标）
@@ -123,10 +123,10 @@
          * pillMinW 兜住数字位数少的场景，避免胶囊短到图标压字。 */
         pillMinW: 172,
         coinScale: 1.45, energyScale: 1.32,  // 图标直径 ≈ 胶囊高的 0.7~0.75，才压得住整条胶囊
-        /* v0.28：用户要求把巧币/体力挪到右上角。rightAnchor=true 时整组按右边缘定位。
-         * 注意：真机右上角有微信原生胶囊（「···」「○」）。若真机被压住，
-         * 把 rightPad 调大（如 210）即可整组左移到原生胶囊下方，不必改绘制代码。 */
-        rightAnchor: true, rightPad: 24
+        /* v0.29.1：用户更正——位置应是**左上角**。回到 iconX 左锚定；
+         * y0 再上移 18，胶囊顶落在安全区上沿之上 8px（左侧没有微信原生胶囊，不会遮挡）。
+         * rightAnchor 保留为开关，默认关闭；如以后真要回右上角，设 true 并补 rightPad 即可。 */
+        rightAnchor: false
       },
       /* v0.17 对局页 HUD：顶栏左侧常驻的巧币 / 体力余量（竖排两枚）。
        * 为什么在左侧：**真机右上角是微信原生胶囊按钮**（「···」和「○」，
@@ -152,9 +152,9 @@
         pillFill: 'rgba(30,40,52,0.72)',  // 与主页 HUD 同款深底，白字对比度约 7:1
         pillStroke: 'rgba(255,255,255,0.62)',
         coinScale: 0.78, energyScale: 0.70,
-        /* v0.28 用户要求：对局页巧币/体力也挪到右上角（与主页一致）。
-         * 倒计时胶囊居中（255..495），右上有空位，rightPad 控制距右边缘。 */
-        rightAnchor: true, rightPad: 24
+        /* v0.29.1 用户更正：回到左上角——返回按钮右沿 108 之后、倒计时胶囊 255 之前（120..247）。
+         * topShift=8：两枚胶囊整体上移 8px，顶沿同样贴近安全区上沿；rightAnchor 默认关闭。 */
+        topShift: 8, rightAnchor: false
       }
     },
 
@@ -741,11 +741,11 @@
      * 之所以按「关卡序号」而不是「通关次数」算：同一个关卡每次进来听同一首，
      * 玩家对关卡与音乐的对应关系是稳定的；重玩旧关也不会跳曲。 */
     BGM: {
-      home: { name: '主页·暖阳' },
-      lv1: { name: '关卡 1 · Monkeys Spinning Monkeys' },
-      lv2: { name: '关卡 2 · Carefree' },
-      lv3: { name: '关卡 3 · we never（千年之后）' },
-      lv4: { name: '关卡 4 · Cheery Monday' },
+      home: { name: '主页 · 晨光微语' },
+      lv1: { name: '对局 · 巧思时刻（动态混音）' },
+      lv2: { name: '对局 · 巧思时刻（动态混音）' },
+      lv3: { name: '对局 · 巧思时刻（动态混音）' },
+      lv4: { name: '对局 · 巧思时刻（动态混音）' },
       scenes: ['lv1', 'lv2', 'lv3', 'lv4'],
       levelsPerTrack: 5,      // 每 5 关换一首
       /* 换曲淡出/淡入时长（ms）。真机 InnerAudioContext 不支持采样级淡变，
@@ -780,15 +780,37 @@
       files: {
         sfx_pick: 'sfx_pick.wav',
         sfx_snap: 'sfx_snap.wav',
-        sfx_win: 'sfx_win.mp3',
-        sfx_tap: 'sfx_tap.wav'
+        sfx_tap: 'sfx_tap.wav',
+        /* v0.29.2：用户试听通过后启用的新版胜利音与拼接失败音。 */
+        sfx_win_fanfare: 'sfx_win_fanfare.mp3',
+        sfx_fail: 'sfx_fail.wav'
       },
-      /* 主页 / 关卡四首（顺序即文件名数字顺序）
-       * v0.12：主页不再用 mp3 —— home 留空表示"走下面的合成和弦"（pad）。
-       * 关卡仍是真人 mp3，一关一首、每 5 关换一首。 */
+      /* v0.29.2：三首新曲替换旧的 5 首 BGM。
+       *   主页 = 晨光微语（dawn），关卡列表 = 星海漫游（starlit），
+       *   对局 = 巧思时刻（flow）的 5 条 stem 动态混音。
+       * lv 数组仅为兼容旧场景键 / file:// 元素池兜底，四项都指向 flow 全混。 */
       bgm: {
-        home: '',
-        lv: ['bgm_lv1.mp3', 'bgm_lv2.mp3', 'bgm_lv3.mp3', 'bgm_lv4.mp3']
+        home: 'bgm_dawn.mp3',
+        levels: 'bgm_starlit.mp3',
+        play: 'bgm_flow.mp3',
+        lv: ['bgm_flow.mp3', 'bgm_flow.mp3', 'bgm_flow.mp3', 'bgm_flow.mp3']
+      },
+      /* v0.29.2 动态混音：5 条 stem + 紧张层，增益与 audio-lab/试听.html 的预设一致。
+       * 同一时刻 start() 排程，避免微信 InnerAudioContext 多路播放的时钟漂移。 */
+      mix: {
+        trim: 0.42,                        // 5 路叠加后的总线衰减，给软限幅留余量
+        stems: {
+          pad: 'stem_flow_pad.mp3', arp: 'stem_flow_arp.mp3', bass: 'stem_flow_bass.mp3',
+          perc: 'stem_flow_perc.mp3', lead: 'stem_flow_lead.mp3', tension: 'layer_tension.mp3'
+        },
+        presets: {
+          calm:  { pad: 0.70, arp: 0.55, bass: 0.60, perc: 0.08, lead: 0.35, tension: 0 },
+          play:  { pad: 0.55, arp: 0.60, bass: 0.65, perc: 0.45, lead: 0.70, tension: 0 },
+          tense: { pad: 0.45, arp: 0.15, bass: 0.80, perc: 0.85, lead: 0.10, tension: 0.55 },
+          win:   { pad: 0.75, arp: 0.80, bass: 0.55, perc: 0.55, lead: 0.95, tension: 0 }
+        },
+        fadeMs: 280,
+        tenseAt: 0.20                      // 剩余时间 < 20% 切紧张层
       },
       /* ---------- v0.13 主页轻音乐（纯合成，零音频文件） ----------
        * v0.12 那版是四个正弦长音慢起慢落，实测听感像风琴/嗡鸣（"难听"），
@@ -842,11 +864,11 @@
        * 不处理的话，同一音量下第 3、4 首会突然变响，主页又显得很轻。
        * 这里把每首乘一个系数拉到约 -20 dBFS（trim = 10^((-20 - RMS)/20)）。
        * 系数直接乘在音量上，峰值仍有余量（最热的 lv4：-0.2dBFS × 0.52 × 0.55 ≈ -11dBFS）。 */
-      trim: { home: 1.70, bgm_lv1: 1.53, bgm_lv2: 1.66, bgm_lv3: 0.65, bgm_lv4: 0.52 },
+      trim: { home: 1.00, bgm_dawn: 1.00, bgm_starlit: 0.92, bgm_flow: 0.88, bgm_lv1: 0.88, bgm_lv2: 0.88, bgm_lv3: 0.88, bgm_lv4: 0.88 },
       sfxVolume: 1.0,
       /* v0.20：音效整体重做成"低频为主"的木质感（见 game.js 的 synth 注释），
        * 三个短音的响度重新配平：吸附最响（反馈最重要）、点击最轻。 */
-      sfxGain: { sfx_snap: 1.00, sfx_win: 0.95, sfx_pick: 0.85, sfx_tap: 0.70 },
+      sfxGain: { sfx_snap: 1.00, sfx_win: 0.95, sfx_pick: 0.85, sfx_tap: 0.70, sfx_fail: 0.55, sfx_win_fanfare: 0.85 },
       fadeMs: 220,
       tapGuardMs: 40,
       snapVoices: 2
