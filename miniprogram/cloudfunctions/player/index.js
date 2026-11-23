@@ -4,10 +4,12 @@
  *   login  建档 + 发昵称，返回 openid（客户端不落地 openid，只用于显示）
  *   load   拉我自己的存档（saves 集合，_id = openid）
  *   sync   上行存档 + 刷新名次数据（players 集合）
- *   rank   全服榜（tab 0 通关数 / 1 连胜；tab 2 好友榜需开放数据域，本期返回 note）
+ *   rank   全服榜（tab 0 通关数 / 1 历史最高连胜；tab 2 好友榜走开放数据域，这里只回 note）
  *
  * 集合约定（云开发控制台手动建，见 docs 指南）：
  *   players  { _id, openid, nick, avatar, src, auth, stars, cleared, streak, updatedAt }
+ *            v0.18 起 streak = 历史最高连胜（客户端取两个数据集里最高的那份）
+ *            streakV = 口径版本号（2 = 最高连胜；0/缺省 = 老数据，首次上行覆盖一次）
  *   saves    { _id: openid, sets: { saveKey: save }, updatedAt, nick }
  *
  * v0.14 玩家资料（昵称/头像）：
@@ -72,7 +74,7 @@ async function ensurePlayer(openid) {
 }
 
 async function rankOf(openid, tab, player) {
-  /* 主线榜按「通关关数」排（前端显示 N 关），连胜榜按连胜场次 */
+  /* 主线榜按「通关关数」排（前端显示 N 关），连胜榜按历史最高连胜 */
   const field = tab === 1 ? 'streak' : 'cleared';
   let list = [];
   try {
@@ -149,9 +151,16 @@ exports.main = async (event, context) => {
 
       const p = await ensurePlayer(OPENID);
       const now = Date.now();
-      const stars = Math.max(0, Math.min(9999, stats.stars | 0));
-      const cleared = Math.max(0, Math.min(999, stats.cleared | 0));
-      const streak = Math.max(0, Math.min(9999, stats.streak | 0));
+      /* v0.18：三项都是「只增不减」的进度量，取 max 而不是直接覆盖。
+       * 换设备登录、旧版本客户端晚到的上行，都不会把成绩改小。
+       * streak 从 v0.18 起语义 = 历史最高连胜（榜单口径），失败不影响它。 */
+      const stars = Math.max(p.stars | 0, Math.max(0, Math.min(9999, stats.stars | 0)));
+      const cleared = Math.max(p.cleared | 0, Math.max(0, Math.min(999, stats.cleared | 0)));
+      /* 口径迁移：老数据的 streak 是「当前连胜」，还被重玩刷过，数值不可信。
+       * streakV 为 0 的行第一次上行时直接按新口径覆盖一次，之后才走 max —— 
+       * 否则那次虚高的数字会被 max 永久钉在榜上。 */
+      const sent = Math.max(0, Math.min(9999, stats.streak | 0));
+      const streak = (p.streakV | 0) >= 2 ? Math.max(p.streak | 0, sent) : sent;
 
       /* v0.14：昵称头像跟着存档一起上行（一次往返，不额外加请求） */
       const prof = event.profile || {};
@@ -166,7 +175,7 @@ exports.main = async (event, context) => {
       if (prof.auth !== undefined) auth = !!prof.auth;
 
       await db.collection(PLAYERS).doc(p._id).update({
-        data: { stars, cleared, streak, nick, avatar, src, auth, updatedAt: now }
+        data: { stars, cleared, streak, streakV: 2, nick, avatar, src, auth, updatedAt: now }
       });
       try {
         await db.collection(SAVES).doc(OPENID).set({
@@ -186,8 +195,8 @@ exports.main = async (event, context) => {
     }
 
     if (action === 'rank') {
-      const tab = event.tab === 1 ? 1 : 0;
-      if (tab === 2 || event.tab === 2) {
+      const tab = event.tab | 0;
+      if (tab === 2) {
         /* 好友榜要开放数据域（开放数据域里 wx.getFriendCloudStorage），
          * 云开发拿不到好友关系，返回 note 让前端显示正确文案。 */
         return { ok: true, list: [], me: null, note: 'friend' };

@@ -1,5 +1,5 @@
 {
-  "description": "方寸巧拼 v0.15（四巧板 30 关 + 七巧板 60 关 + 云开发 + 微信昵称头像 + 主页轻音乐/关卡真人 BGM）",
+  "description": "方寸巧拼 v0.24.1（四巧板 30 关 + 七巧板 60 关 + 云开发 + 微信昵称头像 + 在线奖励/查找道具 + 局内余量 + 好友榜 + 连胜段内计数 + 单档常驻提示 + 音效重做 + 每类第 1 关教学 + 道具角标直用 + 首通奖励与看视频×5 + 复活不限次 + 结算按钮并排与图案发光 + 重看教程）",
   "appid": "wxde70724064c8f819",
   "projectname": "fangcun-qiaopin",
   "compileType": "game",
@@ -33,7 +33,11 @@
     "condition": false
   },
   "packOptions": {
-    "ignore": [],
+    "ignore": [
+      { "type": "folder", "value": ".git" },
+      { "type": "folder", "value": ".cloudbase" },
+      { "type": "file", "value": "project.private.config.json" }
+    ],
     "include": []
   },
   "condition": {},

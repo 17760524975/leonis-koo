@@ -241,9 +241,8 @@
       running: false,
       steps: 0,
       hintUsed: false,      // v0.10：本局是否用过提示（只看本局，不再从存档恢复）
-      hintLv: 0,            // v0.10：本关已用到第几档（0..HINT.maxTier）
-      hintPaid: 0,          // v0.10：本关已为提示付过费（广告/巧币）的次数
-      hintTipShown: false,  // v0.10：本次运行是否已提示过「用提示最高 ★★」（只说一次）
+      hintLv: 0,            // v0.20：本关买过几次提示（只做计数，不再有档位上限）
+      hintPaid: 0,          // v0.20：本关已为提示付过费（广告/巧币）的次数
       hintTier: 2,          // 目标轮廓样式档（只读，取关卡数据 hintTier）
       covFrom: 0, covTo: 0, covT: 1, cov: 0,
       msg: '', msgT: 0,
@@ -281,15 +280,30 @@
        *   custom 玩家自己起的名字
        * auth 只表示「微信资料已授权」，与 src=wx 不完全等价（授权后改过名仍是 auth=true）。 */
       me: { nick: '', avatar: '', src: 'auto', auth: false, err: '', busy: false },
-      rankList: null,         // null=未拉取；{list,me}=云榜结果
+      rankList: null,         // null=未拉取；{list,me}=云榜结果（只放「当前页签」那一份）
       rankErr: '',
       rankLoading: false,
+      /* v0.18：三个页签各自的最后一次成功结果。切回某个页签时先显缓存、
+       * 再后台刷新 —— 不能像旧版那样把 rankList 清空，否则网络一抖就只剩「加载失败」。 */
+      rankCache: { 0: null, 1: null },
+      rankListTab: -1,        // rankList 属于哪个页签（乱序响应据此丢弃）
+      rankSeq: 0,             // 请求序号（只认最后一次发出的请求）
+      /* v0.18：失败（计时归零）会把当前连胜清零，但复活要能恢复 →
+       * 断点前停在 state 里，不写盘；玩家强杀进程也不会把旧的连胜留下来。
+       * v0.19：连胜的计数单位变成「本段内成功的一局」，所以除了数值，
+       * 「这一段已经计过哪些关」也必须一起断点 —— 否则复活后重打刚失败的那关
+       * 会被当成新关再计一次，一段连胜就能靠复活刷高。 */
+      streakBeforeFail: 0,
+      seenBeforeFail: [],     // v0.19：失败瞬间的 streakSeen 快照（复活时接回来）
+      friendT: 0,             // 好友榜开放数据域是否已把画布摆好（0=未请求）
       bgmDuck: false,
       /* ---- v0.5：倒计时 / 经济 / 浮层 ---- */
       timeLimit: 0,         // 本关总时限（秒）
       timeLeft: 0,          // 剩余秒数（倒计）
       hearts: 3,            // 由 timeLeft 映射的 3/2/1 心
       reviveUsed: 0,        // 本关已复活次数
+      /* v0.21：教学关状态（null = 不在教学）。{ t } —— 指令内容每帧由 tutStep() 算 */
+      tut: null,
       toast: null,          // { text, t } 轻提示
       adSim: null,          // { kind, t } 模拟广告进度（无广告位时的兜底演示）
       adWait: null,         // v0.9 正在拉激励视频：存 kind，回调里发奖
@@ -313,12 +327,20 @@
         freeEnergyUsed: 0, freeEnergyDay: '',
         /* v0.15：每日在线奖励 —— 当日累计秒数 / 当天已领档位（每日 0 点清空） */
         onlineDay: '', onlineSec: 0, onlineGot: {},
-        hintItems: 0,             // 提示卡（在线奖励 40/60 分钟给），跨天不清
-        tasksDay: '', tasksClaimed: {}, taskPlays: 0,
+        hintItems: 0,             // v0.16：查找道具（在线奖励 40/60 分钟、邀请有礼给），跨天不清
         inviteCount: 0, inviteDay: '',
         skin: 'warm',
         bgmIdx: 0,
         streak: 0,
+        /* v0.18：历史最高连胜。榜单按它排（当前连胜会因一次失手归零，
+         * 拿它上榜等于「一次手滑就前功尽弃」，不是排行榜该有的口径）。 */
+        bestStreak: 0,
+        /* v0.19：本段连胜里「已经计过关」的关卡号（String(idx+1)）。
+         * 计数单位从「首次通关的关」改成「本段内成功完成的一局」，
+         * 靠这个集合在段内去重 —— 同一关一段里只计一次，重复刷不掉榜。 */
+        streakSeen: [],
+        /* v0.21 曾有 tutDone（已看过教学的玩法），v0.25 废弃：
+         * 教学是否出现改由"第 1 关通没通关"判断，不再需要一次性标记。 */
         /* v0.14 玩家资料缓存：断网 / 云端不可用时也能显示自己的昵称头像 */
         profile: null,
         updatedAt: Date.now()        // v0.9：云端合并按这份时间戳判新旧
@@ -352,9 +374,7 @@
             s.onlineSec = (typeof o.onlineSec === 'number') ? o.onlineSec : 0;
             s.onlineGot = (o.onlineGot && typeof o.onlineGot === 'object') ? o.onlineGot : {};
             s.hintItems = (typeof o.hintItems === 'number') ? o.hintItems : 0;
-            s.tasksDay = o.tasksDay || '';
-            s.tasksClaimed = o.tasksClaimed || {};
-            s.taskPlays = (typeof o.taskPlays === 'number') ? o.taskPlays : 0;
+            /* v0.16：每日任务已下线，老存档里的 tasksDay/tasksClaimed/taskPlays 直接丢弃 */
             s.inviteCount = (typeof o.inviteCount === 'number') ? o.inviteCount : 0;
             s.inviteDay = o.inviteDay || '';
             /* v0.14：老存档没有 profile，留 null 让登录后由云端补 */
@@ -362,6 +382,19 @@
             s.skin = o.skin || 'warm';
             s.bgmIdx = (typeof o.bgmIdx === 'number') ? o.bgmIdx : 0;
             s.streak = (typeof o.streak === 'number') ? o.streak : 0;
+            /* v0.18：老存档没有 bestStreak —— 用当前连胜兜底（宁可少不能凭空多），
+             * 之后只在真正刷新纪录时才往上写。 */
+            s.bestStreak = (typeof o.bestStreak === 'number')
+              ? o.bestStreak : Math.max(0, s.streak);
+            /* v0.19：老存档没有 streakSeen —— 一律迁成空数组。
+             * 严禁用 starOf 反推「已计过的关」：升级后第一段连胜会被整段判成
+             * 「全都计过了」而永不增长，玩家会以为连胜榜又坏了。 */
+            s.streakSeen = Array.isArray(o.streakSeen)
+              ? o.streakSeen.map(String) : [];
+            /* v0.21：已看过的教学数据集（tangram4 / tangram7）。
+             * v0.25 起废弃：是否再教改由"这一关通没通关"决定（见 makeTutorial），
+             * 老存档里的这个字段直接忽略，不再迁移 —— 它本来就是个一次性开关，
+             * 迁过来只会让老玩家继续看不到教学。 */
           }
         } catch (e) { /* 存档损坏 → 用默认值，静默降级 */ }
       }
@@ -373,6 +406,17 @@
       for (var k in s.starOf) {
         if (!(Number(k) >= 1 && Number(k) <= maxLv)) delete s.starOf[k];
       }
+      /* v0.19：streakSeen 里的关卡号同样要收敛（数据集关卡数可能变少），
+       * 顺便去重并丢掉非数字项，避免脏存档把「段内已计」判错。 */
+      var seen = [], seenMap = {};
+      for (var si = 0; si < s.streakSeen.length; si++) {
+        var sk2 = String(s.streakSeen[si]);
+        if (!(Number(sk2) >= 1 && Number(sk2) <= maxLv)) continue;
+        if (seenMap[sk2]) continue;
+        seenMap[sk2] = 1;
+        seen.push(sk2);
+      }
+      s.streakSeen = seen;
       return s;
     }
     /* keepTs=true：只落盘、不刷新 updatedAt。
@@ -573,13 +617,22 @@
       for (lv in (a.starOf || {})) out.starOf[lv] = a.starOf[lv] || 0;
       for (lv in (b.starOf || {})) out.starOf[lv] = Math.max(out.starOf[lv] || 0, b.starOf[lv] || 0);
       out.unlockedMax = Math.max(a.unlockedMax || 1, b.unlockedMax || 1);
-      out.streak = Math.max(a.streak || 0, b.streak || 0);
+      /* v0.18：当前连胜跟「较新的那份」走。旧版取 Math.max 会出大问题：
+       * 这一局输了把 streak 清零并上行，下次启动合并云端旧值时又被 max 复活，
+       * 玩家会觉得「输了也没断」——连胜榜数字就是这么假的。
+       * 历史最高才是单调量，取两者的最大值。 */
+      out.streak = (newer.streak || 0);
+      /* v0.19：streakSeen 必须与 streak 同步跟「较新的那份」走。
+       * 若按 starOf 那套 union 合并，两段连胜的集合会串在一起 ——
+       * 合并出来的 streak 与集合对不上，玩家重打已经断开过的关时会被误判成「本段计过」。 */
+      out.streakSeen = (newer.streakSeen || []).slice();
+      out.bestStreak = Math.max(a.bestStreak || 0, b.bestStreak || 0);
       /* v0.15：在线时长是「这台设备今天待了多久」，不能拿云端那份覆盖本机，
        * 否则换设备一登录就凭空多出几小时、白领一轮奖励；已领记录同源，一并保留本地。 */
       out.onlineDay = a.onlineDay || '';
       out.onlineSec = a.onlineSec || 0;
       out.onlineGot = a.onlineGot || {};
-      /* 提示卡是消耗品：谁改得晚听谁的（updatedAt 已经判过新旧） */
+      /* v0.16：查找道具是消耗品：谁改得晚听谁的（updatedAt 已经判过新旧） */
       out.hintItems = (newer.hintItems || 0);
       out.updatedAt = Math.max(a.updatedAt || 0, b.updatedAt || 0);
       return out;
@@ -592,22 +645,43 @@
         var o = readSaveByKey(ks[i]);
         if (o) sets[ks[i]] = o;
       }
-      var stars = 0, cleared = 0, sk, lv;
+      var stars = 0, cleared = 0, best = state.save.bestStreak || 0, sk, lv;
       for (sk in sets) {
         for (lv in (sets[sk].starOf || {})) {
           var v = sets[sk].starOf[lv] || 0;
           if (v > 0) { cleared++; stars += v; }
         }
+        /* v0.18：连胜榜按「两个数据集里最高的历史连胜」排。
+         * 旧版直接发当前数据集的 streak，切到七巧板就换了个数，
+         * 同一个人在不同时刻上榜值不同 —— 这就是「统计不对」的来源之一。 */
+        if ((sets[sk].bestStreak || 0) > best) best = sets[sk].bestStreak || 0;
       }
       return {
         sets: sets,
-        stats: { stars: stars, cleared: cleared, streak: state.save.streak || 0 },
+        stats: { stars: stars, cleared: cleared, streak: best },
         /* v0.14：昵称头像跟着存档一起上行，players 集合里存的就是排行榜展示的那一份 */
         profile: { nick: meNick(), avatar: meAvatarUrl(), src: state.me.src, auth: !!state.me.auth }
       };
     }
 
-    var pushTimer = null, pushing = false;
+    /* v0.18 好友榜：把成绩写进「微信托管数据」（与云开发是两套东西）。
+     * 开放数据域只能读 wx.getFriendCloudStorage，读不到 players 集合。 */
+    function friendStats() {
+      var ks = saveKeys(), i, cleared = 0, best = state.save.bestStreak || 0;
+      for (i = 0; i < ks.length; i++) {
+        var o = readSaveByKey(ks[i]);
+        if (!o) continue;
+        for (var lv in (o.starOf || {})) if ((o.starOf[lv] || 0) > 0) cleared++;
+        if ((o.bestStreak || 0) > best) best = o.bestStreak || 0;
+      }
+      return { cleared: cleared, streak: best, stars: starsOfSave(state.save) };
+    }
+    function publishFriend() {
+      if (!env.friend || !env.friend.publish) return;
+      try { env.friend.publish(friendStats()); } catch (e) { /* 静默：不影响游戏 */ }
+    }
+
+    var pushTimer = null, pushing = false, pushAgain = false;
     function cloudPush(immediate) {
       if (!cloudOn() || !state.net.ready) return;
       if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; }
@@ -615,12 +689,18 @@
       pushTimer = setTimeout(doCloudPush, C.CLOUD.pushDebounceMs || 3500);
     }
     function doCloudPush() {
-      if (!cloudOn() || pushing || !state.net.ready) return;
+      if (!cloudOn() || !state.net.ready) return;
+      /* v0.19：上行即时化以后，「通关 → 马上失败」这种连着的两次即时上行
+       * 会撞上上一次还在途。旧写法直接 return 把它吞掉（防抖定时器又已经被清掉），
+       * 这一次的变化就永远发不出去 —— 榜上看不到刚变化的值。改成记一笔、回调里补发。 */
+      if (pushing) { pushAgain = true; return; }
       pushing = true;
       state.net.syncing = true;
       CLOUD.save(collectCloud(), function (err, res) {
         pushing = false;
         state.net.syncing = false;
+        /* 在途期间又被要求即时上行 → 用它补一次（此时 pushing 已复位，不会递归） */
+        if (pushAgain) { pushAgain = false; cloudPush(true); }
         if (err) { state.net.err = String((err && err.msg) || err); return; }
         state.net.err = '';
         state.net.ts = Date.now();
@@ -649,22 +729,74 @@
         }
         /* 合并结果回写一次云端：首次登录时把本地存档"认领"到账号下，
          * 之后两端不一致也会在这一步收敛（幂等，一次调用）。 */
+        publishFriend();     // v0.18：好友榜的数据源是微信托管数据，合并完再写一次
         cloudPush(true);
       });
     }
+    /* v0.18：拉某个页签的榜。
+     * 旧版两个毛病（用户实测「切好友榜再切回主线榜，直接加载失败」就是它俩）：
+     *   ① 好友榜也走 state.rankList，把主线榜那份数据覆盖成空列表；
+     *   ② 只有 state.rankErr 一个错误位，且失败时把 rankList 置 null ——
+     *      切回去的瞬间没有数据可画，只能显示「加载失败」。
+     * 现在：按页签各自缓存 + 请求序号丢弃迟到回调，失败时绝不清掉已有缓存。 */
     function cloudRank(tab) {
       if (!cloudOn()) { state.rankLoading = false; return; }
+      var seq = ++state.rankSeq;
       state.rankLoading = true;
-      state.rankErr = '';
+      if (state.rankTab === tab) state.rankErr = '';
       CLOUD.rank(tab, function (err, res) {
-        state.rankLoading = false;
-        if (err) {
-          state.rankErr = (err && err.msg) || '网络异常';
-          state.rankList = null;
+        if (seq !== state.rankSeq) {
+          /* 用户已经切走：结果只补缓存（且只补空白页签，不覆盖更新的那份），
+           * 下次切回这个页签就能直接看到，不用再等一次网络。 */
+          if (!err && res && !state.rankCache[tab]) state.rankCache[tab] = res;
           return;
         }
-        state.rankList = res || { list: [], me: null };
+        state.rankLoading = false;
+        if (err) {
+          /* 有缓存就继续用缓存渲染，只在「一份旧数据都没有」时才让玩家看到失败 */
+          if (state.rankTab === tab) {
+            state.rankErr = (err && err.msg) || '网络异常';
+            if (!state.rankCache[tab]) { state.rankList = null; state.rankListTab = tab; }
+          }
+          return;
+        }
+        var data = res || { list: [], me: null };
+        state.rankCache[tab] = data;
+        if (state.rankTab === tab) { state.rankList = data; state.rankListTab = tab; }
       });
+    }
+
+    /* 切页签：先把缓存摆上去，再后台刷新。好友榜不走云开发。 */
+    function selectRankTab(tab) {
+      state.rankTab = tab;
+      state.rankErr = '';
+      state.rankLoading = false;
+      if (tab === 2) { openFriendRank(); return; }
+      state.rankList = state.rankCache[tab] || null;
+      state.rankListTab = tab;
+      cloudRank(tab);
+    }
+
+    /* v0.18 好友榜：开放数据域整块画好，主域只负责把 sharedCanvas 贴进卡片。
+     * 平台差异（getOpenDataContext / 尺寸）在 env.friend 里，core 不碰 wx.*。 */
+    function friendOn() {
+      return !!(env.friend && env.friend.available && env.friend.available());
+    }
+    function openFriendRank() {
+      if (!friendOn()) return;
+      var L = C.RANK.list;
+      /* 离屏画布按「设计 px × 主画布缩放 × 设备像素比」开，贴回来 1:1 不糊 */
+      var k = (view.scale || 1) * (view.dpr || 1);
+      if (!(k > 0)) k = 2;
+      k = Math.max(1, Math.min(3, k));
+      state.friendT = Date.now();
+      var fs = friendStats();
+      try {
+        env.friend.show({
+          w: L.w, h: L.h, k: k,
+          me: { nick: meNick(), avatar: meAvatarUrl(), cleared: fs.cleared, streak: fs.streak }
+        });
+      } catch (e) { /* 开放数据域不可用 → 界面走降级文案 */ }
     }
 
     /* 云同步状态一句话（设置页显示） */
@@ -861,21 +993,46 @@
       var parts = [];
       if (t.coin) { s.coin = (s.coin || 0) + t.coin; parts.push('+' + t.coin + ' 巧币'); }
       if (t.energy) { s.energy = (s.energy || 0) + t.energy; parts.push('+' + t.energy + ' 体力'); }
-      if (t.hint) { s.hintItems = (s.hintItems || 0) + t.hint; parts.push('+' + t.hint + ' 提示卡'); }
+      if (t.hint) { s.hintItems = (s.hintItems || 0) + t.hint; parts.push('+' + t.hint + ' ' + C.HINT.itemName); }
       persist();
       env.audio.play('sfx_snap');
       toast('在线奖励 ' + parts.join(' · '));
       return true;
     }
 
-    /* 提示卡：付费档提示的第三种支付方式（不花巧币、不看广告） */
+    /* v0.16：付费前先验一次「这一档真的能发」——否则会出现「扣了道具/巧币，
+     * 但 pickHintPiece() 返回 null（板已经全放对）→ 提示没发」的吞费。
+     * 旧版扣费在 useHint 之前，属于隐性缺陷；取消免费档后道具变稀缺，必须先守住。
+     * v0.20：不再有档位上限（每关可反复买），只保留"能不能发"这一层校验。 */
+    function canTakeHint() {
+      if (state.page !== 'play' || state.win) return false;
+      /* v0.21：教学关已经免费在指了 —— 这时候买提示纯属白花钱，直接拦住不扣费 */
+      if (state.tut) { toast('教学关不用买提示，照着屏幕上的指令做就行'); return false; }
+      /* v0.20：上一条提示还亮着（那一块还没放上去）就不要再扣一次费 ——
+       * 玩家连点两下面板会买到同一个提示，白花一个道具/40 巧币。 */
+      if (state.hint) {
+        var hst0 = null, lv0 = LEVELS[state.levelIdx];
+        for (var c0 = 0; c0 < lv0.solution.length; c0++) {
+          if (lv0.solution[c0].id === state.hint.id) hst0 = lv0.solution[c0];
+        }
+        if (hst0 && !pieceSolved(pieceOf(hst0.id), hst0)) {
+          toast('这一步已经标出来了，先把它放上去');
+          return false;
+        }
+      }
+      if (!pickHintPiece()) { toast('这一关已经拼好啦'); return false; }
+      return true;
+    }
+
+    /* v0.16：查找道具 = 提示的唯一"免费"支付方式（不花巧币、不看广告）。
+     * 每关不再白送一次，所以这里是玩家最常用的那条路。 */
     function useHintItem() {
       var s = state.save;
-      if (state.hintLv >= C.HINT.maxTier) { toast('本关提示已经用完'); return; }
-      if ((s.hintItems || 0) <= 0) { toast('提示卡不足'); return; }
+      if ((s.hintItems || 0) <= 0) { toast(C.HINT.itemName + '不足'); return; }
+      if (!canTakeHint()) return;
       s.hintItems -= 1;
       persist();
-      useHint(true);
+      useHint();
     }
 
     /* 每帧记账（由 update 调用）：累计 + 每 persistSec 落一次本地盘 */
@@ -889,30 +1046,6 @@
         state.onlineSaveT = 0;
         writeLocal(true);
       }
-    }
-
-    /* ---- 每日任务 ---- */
-    function taskList() {
-      var E = C.ECON, s = state.save, d = todayKey();
-      if (s.tasksDay !== d) { s.tasksDay = d; s.tasksClaimed = {}; s.taskPlays = 0; }
-      var got = s.tasksClaimed || {};
-      return [
-        { id: 't1', name: '完成 1 关', reward: '+' + E.taskCoin + ' 巧币', done: (s.taskPlays || 0) >= 1, got: !!got.t1, coin: E.taskCoin },
-        { id: 't2', name: '累计获得 3 星', reward: '+' + E.taskCoin3 + ' 巧币', done: totalStars() >= 3, got: !!got.t2, coin: E.taskCoin3 },
-        { id: 't3', name: '玩 3 局', reward: '+' + E.taskEnergy + ' 体力', done: (s.taskPlays || 0) >= E.taskPlays, got: !!got.t3, energy: E.taskEnergy }
-      ];
-    }
-    function claimTask(id) {
-      var s = state.save, d = todayKey();
-      if (s.tasksDay !== d) { s.tasksDay = d; s.tasksClaimed = {}; s.taskPlays = 0; }
-      var t = null, arr = taskList();
-      for (var i = 0; i < arr.length; i++) if (arr[i].id === id) t = arr[i];
-      if (!t || !t.done || t.got) return;
-      s.tasksClaimed[id] = true;
-      if (t.coin) s.coin += t.coin;
-      if (t.energy) s.energy = Math.min(s.energyMax, s.energy + t.energy);
-      persist();
-      toast('任务奖励已领取');
     }
 
     /* ---- 皮肤（只覆盖配色，动态改 COL 字段以让闭包引用同步生效） ---- */
@@ -956,7 +1089,8 @@
       if (kind === 'energy') grantFreeEnergy(true);
       else if (kind === 'revive') doRevive(true);
       else if (kind === 'invite') doInviteShare();
-      else if (kind === 'hint') useHint(true);     // v0.10：看完广告才给下一档提示
+      else if (kind === 'hint') useHint();          // v0.10：看完广告才给下一档提示
+      else if (kind === 'coin5') grantWinAdMul();   // v0.23：结算页 ×5
     }
 
     /* ---------------- v0.9 广告位 ---------------- */
@@ -984,48 +1118,108 @@
     /* ---- 失败 / 复活 ---- */
     function failLevel() {
       if (state.overlay === 'fail') return;
+      var s = state.save;
       state.running = false;
       state.overlay = 'fail';
       state.failT = 0;
       state.selId = null;
+      /* v0.18：计时归零 = 本局失败，当前连胜当场中断并落盘。
+       * 旧版只在「忍痛放弃」里清零：玩家直接在失败页杀掉进程，
+       * 下次进来连胜还在 —— 这是连胜榜虚高的第二个来源。
+       * 断点前的值只放内存，复活时恢复（面板上「复活可以保持连胜」仍然算数）。
+       * v0.19：断点除了连胜数值，还要带上「本段已计关集合」（state.seenBeforeFail），
+       * 否则复活后重打刚失败的那关会被当成新关再计一次。 */
+      state.streakBeforeFail = s.streak || 0;
+      state.seenBeforeFail = (s.streakSeen || []).slice();
+      if (state.streakBeforeFail > 0 || state.seenBeforeFail.length) {
+        s.streak = 0;
+        s.streakSeen = [];
+        persist();
+        /* v0.19：连胜是榜上的数，失败必须立刻上行（3.5s 防抖会让玩家以为没算），
+         * 也不留一次「被杀进程前还没发出去」的空档。 */
+        cloudPush(true);
+        publishFriend();
+      }
       env.audio.play('sfx_tap');
     }
     function doRevive(byAd) {
       var E = C.ECON, s = state.save;
-      if (state.reviveUsed >= E.reviveMaxPerLevel) { toast('本关复活次数已用完'); return; }
+      /* v0.23：取消「每关最多复活 2 次」——
+       *   广告复活不再给巧币（旧版 +90，比付费复活 -100 还划算，
+       *   最优策略变成"故意失败看广告"，与"别失败"的设计意图相反），
+       *   于是它回归成"看一段广告换回本关"的等价交换；
+       *   付费复活 100 → 80，与首通收入（2/3/5）拉开但不至于遥不可及。
+       * 次数不设上限：想连着看三次广告就复活三次，代价是时间，不是被拦下。 */
       if (byAd) {
-        s.coin = (s.coin || 0) + 90;           // 参考图：看广告复活 +1 心 +90 巧币
+        /* 广告复活只给心，不给巧币 */
       } else {
         if ((s.coin || 0) < E.coinRevive) { toast('巧币不足'); return; }
         s.coin -= E.coinRevive;
       }
       state.reviveUsed++;
+      /* v0.18：复活把失败时中断的连胜接回来（这就是「复活可以保持连胜」）
+       * v0.19：数值与「本段已计关集合」一起接回来，两处断点同时清掉。
+       * 没有断点（本局失败前连胜本来就是 0 / 集合为空）时不要动现有值 ——
+       * 否则「无断点的复活」会把连胜抹成 0。 */
+      var hadBp = (state.streakBeforeFail > 0) || ((state.seenBeforeFail || []).length > 0);
+      if (hadBp) {
+        s.streak = state.streakBeforeFail || 0;
+        s.streakSeen = (state.seenBeforeFail || []).slice();
+      }
+      state.streakBeforeFail = 0;
+      state.seenBeforeFail = [];
       state.timeLeft = Math.min(state.timeLimit, state.timeLeft + state.timeLimit / C.TIMER.hearts);
       state.hearts = heartsOf(state.timeLeft, state.timeLimit);
       persist();
+      if (hadBp) { cloudPush(true); publishFriend(); }
       state.overlay = null;
       state.running = true;
       env.audio.play('sfx_snap');
-      toast(byAd ? '复活成功 +90 巧币' : ('复活成功 -' + E.coinRevive + ' 巧币'));
+      toast(byAd ? '复活成功' : ('复活成功 -' + E.coinRevive + ' 巧币'));
       setLevelScene();
+    }
+    /* v0.23：结算页「看视频 ×5」—— 只作用于**本次**通关奖励。
+     * 不做「本关永久翻倍」，也不做「下一关自动带着」：
+     * 每一关想翻倍都得自己点一次，否则一次观看会被记成一个长期倍率，
+     * 奖励结构又回到"看一次广告吃一整局"的老问题。
+     * r.gain 是首通时已经落账的金额，这里补发 (倍率-1) 倍的差额。 */
+    function grantWinAdMul() {
+      var r = state.result;
+      if (!r || !r.first || r.adUsed || !r.gain) { toast('本关没有可翻倍的奖励'); return; }
+      var mul = (C.ECON.coinWinAdMul || 5);
+      var extra = r.gain * (mul - 1);
+      state.save.coin = Math.max(0, (state.save.coin || 0) + extra);
+      r.adUsed = true;
+      r.extra = extra;
+      persist();
+      env.audio.play('sfx_snap');
+      toast('+' + r.gain + ' → +' + (r.gain * mul) + ' 巧币');
     }
     function giveUp() {
       state.overlay = null;
       state.running = false;
       state.save.streak = 0;                   // 放弃 → 连胜清零
+      state.save.streakSeen = [];              // v0.19：本段集合同时清空
+      state.streakBeforeFail = 0;
+      state.seenBeforeFail = [];               // v0.19：两处断点一起清
       persist();
+      cloudPush(true);                         // v0.19：榜上的数立即上行
+      publishFriend();
       go('levels');
     }
 
-    /* ---- 邀请有礼（模拟分享：微信端可接 wx.shareAppMessage） ---- */
+    /* ---- 邀请有礼（模拟分享：微信端可接 wx.shareAppMessage） ----
+     * v0.16：除巧币外再给 1 个查找道具 —— 提示取消免费档后，
+     * 邀请是除在线奖励外唯一的免费获取途径（用户要求）。 */
     function doInviteShare() {
-      var s = state.save, d = todayKey();
+      var s = state.save, d = todayKey(), E = C.ECON;
       if (s.inviteDay === d) { toast('今天已经邀请过啦'); return; }
       s.inviteDay = d;
       s.inviteCount = (s.inviteCount || 0) + 1;
-      s.coin = (s.coin || 0) + 20;
+      s.coin = (s.coin || 0) + E.inviteCoin;
+      s.hintItems = (s.hintItems || 0) + (E.inviteHint || 0);
       persist();
-      toast('邀请成功 +20 巧币');
+      toast('邀请成功 +' + E.inviteCoin + ' 巧币 +' + (E.inviteHint || 0) + ' ' + C.HINT.itemName);
       if (env.share) { try { env.share(); } catch (e) {} }
     }
 
@@ -1046,6 +1240,10 @@
       applyAudio();
       state.levelIdx = 0; state.pieces = []; state.selId = null;
       state.drag = null; state.win = null; state.result = null; state.overlay = null;
+      /* v0.19：两个数据集各存一份 save，切数据集时内存里的断点必须清干净 ——
+       * 否则四巧板失败后切到七巧板再复活，会把另一套数据集的连胜接回来。 */
+      state.streakBeforeFail = 0;
+      state.seenBeforeFail = [];
       state.flower = null;   // v0.3.4 A4a：切数据集时清掉未播完的鲜花
       state.lastTap = null;  // v0.4 A1：切数据集不残留双击配对
       go('home');
@@ -1090,7 +1288,8 @@
     }
 
     /* ---------------- 关卡初始化 ---------------- */
-    function setupLevel(idx) {
+    function setupLevel(idx, opts) {
+      opts = opts || {};
       state.levelIdx = idx;
       var lv = LEVELS[idx];
       state.pieces = DS.pieceOrder.map(function (id, i) {
@@ -1106,8 +1305,9 @@
       });
       state.selId = null;
       state.drag = null;
-      state.elapsed = 0;
-      state.steps = 0;
+      /* v0.21：重开不清用时/步数 —— 计时没重置，这两个也必须跟着连续，
+       * 否则重开一次就等于把"用时"清空，星级又能刷回三星。 */
+      if (!opts.keepTimer) { state.elapsed = 0; state.steps = 0; }
       /* v0.10：提示改为「每关独立的三档阶梯」。
        * 不再从存档 hintUsed 恢复：旧版一旦用过提示，该关永久封顶 ★★（重玩也拿不到三星），
        * 玩家反馈"这关废了"。存档字段只留作历史标记，不参与星级计算。 */
@@ -1128,12 +1328,88 @@
       state.running = true;
       state.lastSnap = null;
       state.lastEdge = null;
-      /* v0.5：每关重置倒计时 / 生命值 / 复活次数 */
+      /* v0.5：每关重置倒计时 / 生命值 / 复活次数
+       * v0.21：重开（工具栏那个刷新按钮）**不再重置倒计时**。
+       * 旧版 restart 也走这里，等于按一下就把时间充满 —— 玩家发现后
+       * 只要在最后 10 秒狂点刷新，就能无限拖时间，"倒计时"形同虚设。
+       * 现在只有「换关 / 结算后重玩」才重置；重开保留 timeLeft、生命值、
+       * 已用复活次数与 elapsed，相当于「这一局还在继续，只是把板子放回托盘」。 */
       var tl = timeLimitOf(lv);
-      state.timeLimit = tl;
-      state.timeLeft = tl;
-      state.hearts = C.TIMER.hearts;
-      state.reviveUsed = 0;
+      if (opts.keepTimer) {
+        state.timeLimit = state.timeLimit || tl;
+        state.timeLeft = Math.max(0, state.timeLeft);
+        state.hearts = heartsOf(state.timeLeft, state.timeLimit || 1);
+      } else {
+        state.timeLimit = tl;
+        state.timeLeft = tl;
+        state.hearts = C.TIMER.hearts;
+        state.reviveUsed = 0;
+      }
+      /* v0.21：每类游戏的第 1 关是教学关 */
+      state.tut = makeTutorial(idx, opts);
+    }
+
+    /* ---------------- v0.21 新手教学 ----------------
+     * 依据参考视频的做法：教学关不在弹窗里念规则，而是
+     *   ① 把标准解按彩色淡显铺在轮廓里（玩家有"照着摆"的参照）
+     *   ② 卡纸顶部一行指令，说清下一步手上该做什么动作
+     *   ③ 倒计时冻结，不拿时间逼新手
+     * 指令不是写死的脚本，而是每帧按「下一块还差什么」算出来的：
+     * 还没上板 → 教拖；上板了角度不对 → 教转；角度对了但要翻面 → 教翻。
+     * 这样第 1 关需要哪种手势就教哪种，不会出现"教了翻转但本关不用翻"。 */
+    function makeTutorial(idx, opts) {
+      var T = C.TUTORIAL;
+      if (!T || !T.on) return null;
+      /* 验收/截图脚本可以显式关掉教学（env.tutorial === false）：
+       * 它们要测的是提示、计时、榜单这些横向系统，第 1 关被教学接管会互相干扰。 */
+      if (env.tutorial === false) return null;
+      if (idx >= (T.levels || 1)) return null;   // 只有每类第 1 关教
+      if (opts.noTut) return null;
+      /* v0.25：判据从"存档里的一次性标记 tutDone"换成"这一关到底通没通关"。
+       *
+       * 为什么换：tutDone 一旦写入（通关、点跳过、教学跑完都会写）就永久失效，
+       * 而且它跟着云存档同步 —— 换机、清缓存、重装都会被云端拉回来，
+       * 新玩家在旧设备上玩过一次就再也看不到教学，只能跑去设置里找入口，
+       * 这既深又反直觉。改成看星级后，行为变成玩家能理解的规则：
+       *   第 1 关还没通关 → 每次进来都教（新手一定看得到）
+       *   第 1 关通过一次 → 不再重复打扰
+       * 顺带的好处：「重置进度」清空星级后，教学会自己回来，不用额外开关。 */
+      var star1 = state.save.starOf[String(idx + 1)] || 0;
+      if (star1 > 0) return null;
+      return { t: 0, done: false };
+    }
+    /* 教学关的下一条指令：按"下一块差什么"给动作，全部放对后返回 null
+     * 判定顺序 = 拖上板 → 翻面 → 摆到位置 → 转角度，和玩家实际会踩的顺序一致：
+     * 不在板上先拖；翻错了怎么转都对不上，先翻；位置偏了先摆过去；最后才谈角度。 */
+    function tutStep() {
+      var lv = LEVELS[state.levelIdx], i;
+      for (i = 0; i < lv.solution.length; i++) {
+        var st = lv.solution[i], p = pieceOf(st.id);
+        if (!p) continue;
+        if (!p.onBoard) {
+          return { kind: 'drag', id: st.id,
+            text: '把亮起来的这块拖进来，放到同色的虚影上' };
+        }
+        if (pieceSolved(p, st)) continue;
+        if (!!p.flipped !== !!st.flipped) {
+          return { kind: 'flip', id: st.id,
+            text: '这块要翻个面：双击它一下' };
+        }
+        if (Math.abs(p.x - st.x) > 1 || Math.abs(p.y - st.y) > 1) {
+          return { kind: 'drag', id: st.id,
+            text: '把它挪到虚影的位置上，靠近会自动吸住' };
+        }
+        return { kind: 'rot', id: st.id,
+          text: '拖住板上的小圆点转一转，让它和虚影对齐' };
+      }
+      return null;
+    }
+    /* v0.25：跳过只关掉"这一次"，不再落档。
+     * 落档会让"点过一次跳过 = 以后永远没有教学"，也正是新玩家看不到教程的主要来源。
+     * 只关本次的话：当关继续玩不受影响；退出重进（仍未通关）还会教一次，这不算打扰。 */
+    function tutSkip() {
+      state.tut = null;
+      toast('已跳过教学');
     }
 
     function piecePoly(p) {
@@ -1219,32 +1495,72 @@
       var lv = LEVELS[state.levelIdx];
       state.running = false;
       state.win = { t: 0 };
+      /* v0.21：通关即结束教学 —— 否则虚影和指令会透过结算面板继续飘 */
+      if (state.tut) state.tut = null;
       state.flower = { t: 0 };   // v0.3.4 A4a：鲜花与音乐共用这一时刻起算
       env.audio.play('sfx_win');
-      /* 星级沿用策划 5.7 原规则（三星=时限+步数+未用提示；二星=时限内）。
-       * v0.3 A3 变更点：用提示（hint_used）从「只给 1 星」放宽为「封顶 ★★☆」。 */
+      /* 星级沿用策划 5.7 原规则（三星=时限+步数；二星=时限内）。
+       * v0.3 A3 变更点：用提示（hint_used）从「只给 1 星」放宽为「封顶 ★★☆」。
+       * v0.20：取消这条封顶 —— 提示从「三档作弊（含看全图）」收窄成「指一步」，
+       * 而且是唯一档、每次都要付费（查找道具/40 巧币/看视频）。
+       * 保留封顶等于「花钱买提示还降星」，玩家会觉得被罚；
+       * 面板上那行「用提示本关最高 ★★」也随本次需求一并删掉了，
+       * 规则和文案必须一致，所以这里把封顶一起去掉。
+       * 经济上不会刷币：三星多给 10 巧币，而一次提示 40 巧币。 */
       var stars = 1;
       if (state.elapsed <= lv.parTime * C.STAR.twoStarTimeFactor) stars = 2;
       if (state.elapsed <= lv.parTime && state.steps <= lv.parSteps) stars = 3;
-      if (state.hintUsed) stars = Math.min(stars, 2);
-      state.result = { stars: stars, time: state.elapsed, steps: state.steps };
       var k = String(state.levelIdx + 1);
       var s = state.save;
+      /* v0.23：首通判定必须在 starOf 更新**之前**取，否则永远是"已通过"。
+       * 只有首通给巧币（按星级 2/3/5），重复通关是 0 ——
+       * 旧版每次通关都给 20/30，第 1 关 30 秒一局，是全场最高效的刷币点。 */
+      var firstClear = !(s.starOf[k] > 0);
+      state.result = { stars: stars, time: state.elapsed, steps: state.steps,
+        first: firstClear, gain: 0, adUsed: false };
       s.starOf[k] = Math.max(s.starOf[k] || 0, stars);
       if (!s.bestTime[k] || state.elapsed < s.bestTime[k]) s.bestTime[k] = +state.elapsed.toFixed(1);
       if (state.levelIdx + 1 === s.unlockedMax && s.unlockedMax < LEVELS.length) s.unlockedMax = state.levelIdx + 2;
       if (s.unlockedMax > LEVELS.length) s.unlockedMax = LEVELS.length;
-      /* v0.5：通关奖励巧币 + 连胜 +1 + 下一关换 BGM 场景（每通一关切下一首） */
+      /* v0.5：通关奖励巧币 + 连胜 +1 + 下一关换 BGM 场景（每通一关切下一首）
+       * v0.23：改成**只给首通**，金额跟星级走（2/3/5）。重复通关是 0 ——
+       * 对应地，重复通关也不再扣体力（见 fireBtn 的 start / lvl_ 分支）：
+       * 不给奖励还收门票，是纯惩罚。 */
       var E2 = C.ECON;
-      s.coin = Math.max(0, (s.coin || 0) + (stars >= 3 ? E2.coinClear3Star : E2.coinClear));
-      s.streak = (s.streak || 0) + 1;
-      /* v0.8 连胜里程碑：每满 STREAK.step 关额外给巧币，结算页进度条走满即发 */
+      var gain = 0;
+      if (firstClear) {
+        gain = (E2.coinFirst && E2.coinFirst[stars - 1]) || 0;
+        if (gain) s.coin = Math.max(0, (s.coin || 0) + gain);
+      }
+      state.result.gain = gain;
       state.streakGain = 0;
-      if (s.streak % C.STREAK.step === 0) {
-        s.coin += C.STREAK.coin;
-        state.streakGain = C.STREAK.coin;
+      state.streakBeforeFail = 0;      // 通关 → 本段继续/结束，没有断点
+      state.seenBeforeFail = [];       // v0.19：两个断点一起清
+      /* v0.19 口径：计数单位是「本段内成功完成的一局」，不再是「首次通关的关」。
+       * 旧判定 wasCleared = starOf[k] > 0 把「同一关的第二次通过」一律当成重玩 ——
+       * 玩家在本关制造失败再复活通关（最常见的复现路径）就被判成重玩，连胜不涨，
+       * 体感就是「用道具/复活后通过没算」。现在只按「本段是否已经计过这关」去重：
+       *   · 失败后重打同一关 → 新段、集合为空 → 计入（修复用户报的问题）
+       *   · 复活后通关 → 段没断、集合保留 → 没计过就计入
+       *   · 同一关反复刷 → 第二次起不计（集合里有）→ 榜刷不动
+       *   · 段内换关通关 → 计入 → 一段最高仍是「已解锁关数」 */
+      if (!s.streakSeen) s.streakSeen = [];        // 迁移兜底（正常路径 loadSave 已给数组）
+      if (s.streakSeen.indexOf(k) < 0) {
+        s.streak = (s.streak || 0) + 1;
+        s.streakSeen.push(k);
+        s.bestStreak = Math.max(s.bestStreak || 0, s.streak);
+        /* v0.8 连胜里程碑：每满 STREAK.step 关额外给巧币，结算页进度条走满即发。
+         * v0.19：跟着「段内去重」走 —— 同一关在段内重复通关不会再发一次。 */
+        if (s.streak % C.STREAK.step === 0) {
+          s.coin += C.STREAK.coin;
+          state.streakGain = C.STREAK.coin;
+        }
       }
       persist();
+      /* v0.19：连胜是榜上的数，通关后必须立刻上行 —— 旧版只走 3.5s 防抖，
+       * 玩家通关后马上去看榜，拿到的是旧值，体感同样是「统计没算」。 */
+      cloudPush(true);
+      publishFriend();          // v0.18：好友榜读的是微信托管数据，通关就更新一次
       /* v0.11：通关不换曲——一关只播一首，换曲只发生在"进入下一关"。
        * 结算页继续放本关那首（音效 sting 已经给了庆祝感），
        * 这样第 5 关结束时不会在结算面板上突然换歌。 */
@@ -1584,8 +1900,11 @@
         case 'start': {
           var idx = Math.min((state.save.unlockedMax || 1) - 1, LEVELS.length - 1);
           if (idx < 0) idx = 0;
-          if (!spendEnergy()) { state.overlay = 'energy'; break; }   // 体力不足 → 免费体力弹窗
-          enterLevelCount(); setupLevel(idx); go('play'); break;
+          /* v0.23：已通关的关不扣体力 —— 重复通关没有巧币奖励，
+           * 再收 2 点体力就是纯罚（见 win() 的首通判定）。 */
+          var startCleared = (state.save.starOf[String(idx + 1)] || 0) > 0;
+          if (!startCleared && !spendEnergy()) { state.overlay = 'energy'; break; }   // 体力不足 → 免费体力弹窗
+          setupLevel(idx); go('play'); break;
         }
         case 'to_levels': go('levels'); break;
         /* v0.6：两套拼图固定入口，点谁进谁的关卡列表（不再「当前集/另一集」逻辑换位）。
@@ -1635,22 +1954,31 @@
           break;
         }
         case 'hint': {
-          /* v0.10 统一提示：每关 3 档，免费 1 次，其余走「看视频 / 巧币」二选一。
-           * 不再有「按一次就灰掉」和「按一次反而更模糊」两种相反行为。 */
-          if (state.hintLv >= C.HINT.maxTier) { toast('本关提示已经用完'); break; }
-          if (state.hintLv < C.HINT.freePerLevel) {
-            useHint(false);                 // 免费档：直接给
-          } else {
-            state.overlay = 'hint';         // 付费档：先弹提示面板，绝不静默播广告
-            env.audio.play('sfx_tap');
-          }
+          /* v0.16：每关不再白送一次，第一次点也要付一次。
+           * v0.20：取消档位上限，面板里随时可以再买一次（每次都指下一步）。
+           * v0.22：手里有查找道具就**一步用完**，不弹面板 —— 道具是已经付过费的，
+           * 再让玩家在面板里点第二下纯属多此一举（用户要求）。
+           * 面板只留给「没道具」的情形：花巧币买一次 / 看视频免费一次。
+           * 有道具但此刻不能发（上一步还亮着 / 教学关 / 已拼完），
+           * useHintItem() → canTakeHint() 会拦下并 toast，道具不会白扣。 */
+          if (state.tut) { toast('教学关不用买提示，照着屏幕上的指令做就行'); break; }
+          if ((state.save.hintItems || 0) > 0) { useHintItem(); break; }
+          state.overlay = 'hint';
+          env.audio.play('sfx_tap');
           break;
         }
         case 'hint_ad': adStart('hint'); break;
         case 'hint_coin': useHintCoin(); break;
         case 'hint_item': useHintItem(); break;
-        case 'restart': setupLevel(state.levelIdx); break;
+        case 'restart':
+          setupLevel(state.levelIdx, { keepTimer: true, noTut: true });
+          /* v0.21：说一句，免得玩家以为按钮坏了（旧版这里是"时间回满"） */
+          toast('已重排，倒计时继续');
+          break;
+        case 'tut_skip': tutSkip(); break;
         case 'next': nextLevel(); break;
+        /* v0.23：结算页看视频 ×5（只作用当次通关奖励） */
+        case 'win_ad5': adStart('coin5'); break;
         case 'replay': setupLevel(state.levelIdx); state.overlay = null;
           setLevelScene();
           break;
@@ -1661,14 +1989,15 @@
         case 'entry_desktop': state.overlay = 'desktop'; break;
         case 'entry_skin': state.overlay = 'skin'; break;
         case 'entry_invite': state.overlay = 'invite'; break;
-        case 'entry_task': state.overlay = 'tasks'; break;
+        /* v0.16：主页「任务」入口下线（用户要求，不再有每日任务） */
         case 'entry_rank': openRank(null); break;
         /* v0.8：结算页分享成品 / 查看榜单 / 切页签 */
         case 'share_pattern': sharePattern(); break;
         case 'open_rank': openRank('result'); break;
-        case 'rank_t0': state.rankTab = 0; cloudRank(0); break;
-        case 'rank_t1': state.rankTab = 1; cloudRank(1); break;
-        case 'rank_t2': state.rankTab = 2; cloudRank(2); break;
+        case 'rank_t0': selectRankTab(0); break;
+        case 'rank_t1': selectRankTab(1); break;
+        case 'rank_t2': selectRankTab(2); break;
+        case 'rank_retry': cloudRank(state.rankTab); break;
         case 'close_rank':
           /* 从结算页进来的退回结算页，从主页进来的直接关掉（不能读 state.result：
            * 通关后 result 一直留着，从主页进榜单会被误判成结算页） */
@@ -1685,9 +2014,6 @@
         case 'skin_mint': applySkin('mint'); break;
         case 'skin_night': applySkin('night'); break;
         case 'invite_share': adStart('invite'); break;
-        case 'task_t1': claimTask('t1'); break;
-        case 'task_t2': claimTask('t2'); break;
-        case 'task_t3': claimTask('t3'); break;
         case 'close_sheet':
         case 'close_energy':
         case 'close_hint':
@@ -1706,34 +2032,31 @@
           if (id.indexOf('lvl_') === 0) {
             var n = +id.slice(4);
             if (n <= state.save.unlockedMax) {
-              if (!spendEnergy()) { state.overlay = 'energy'; break; }   // 体力不足 → 免费体力弹窗
-              enterLevelCount(); setupLevel(n - 1); go('play');
+              /* v0.23：已通关的关重玩不扣体力（理由同 start 分支） */
+              var lvlCleared = (state.save.starOf[String(n)] || 0) > 0;
+              if (!lvlCleared && !spendEnergy()) { state.overlay = 'energy'; break; }   // 体力不足 → 免费体力弹窗
+              setupLevel(n - 1); go('play');
             }
           }
       }
     }
 
-    /* v0.5：进入一局时累加任务进度（每日重置由 taskList 负责） */
-    function enterLevelCount() {
-      var s = state.save;
-      s.taskPlays = (s.taskPlays || 0) + 1;
-      persist();
-    }
-
-    /* ---------------- v0.10 提示阶梯 ----------------
-     * useHint(paid)：消耗一档提示。paid=false 只有「每关首次」会走到（免费档），
-     *                paid=true 由「看完激励视频」或「扣巧币」触发。
+    /* ---------------- v0.20 提示：只有一档，常驻到那块放对 ----------------
+     * 旧版是 3 档阶梯（指位置 / 指板件 / 看全图），每档 3.5 秒后自己消失。
+     * 玩家实际用起来：想同时知道"哪块"和"放哪"得买两档，而且一闪就没。
+     * 现在一次购买 = 一步指引，内容是固定的三件事：
+     *   ① 目标位置脉冲高亮（棋盘上）
+     *   ② 把要用的那块圈出来（托盘里，或棋盘上摆歪的那块）
+     *   ③ 一条虚线从那一块连到落点
+     * 亮到那块被放对为止（没有 until，不会再定时消失）。
+     * 每次仍要付费：用查找道具 / 花巧币 / 看视频，本关不限次数。
      * 返回 true 表示真的给了提示（广告回调/扣币分支据此决定要不要提示失败）。 */
-    function useHint(paid) {
-      var H = C.HINT;
-      if (state.hintLv >= H.maxTier) return false;
+    function useHint() {
       if (state.page !== 'play' || state.win) return false;
-
-      var tier = state.hintLv + 1;
       var pid = pickHintPiece();
       if (!pid) { toast('这一关已经拼好啦'); return false; }
-      state.hintLv = tier;
-      if (paid) state.hintPaid++;
+      state.hintLv++;                  // 只做计数（统计/日志），不再限制次数
+      state.hintPaid++;
       if (!state.hintUsed) {
         state.hintUsed = true;
         /* 只写历史标记：本关"用过提示"这件事记在存档里（云端/老版本可读），
@@ -1741,25 +2064,20 @@
         state.save.hintUsed[String(state.levelIdx + 1)] = true;
         persist();
       }
-      state.hint = { id: pid, tier: tier, t: 0, until: nowMs() + (H.showMs[tier - 1] || 3500) };
+      state.hint = { id: pid, t: 0 };  // 没有 until：常驻到这一块放对
       state.overlay = null;
       env.audio.play('sfx_snap');
-      var msg = '提示 ' + tier + '/' + H.maxTier + ' · ' + H.names[tier - 1];
-      if (tier === 1 && !state.hintTipShown) {
-        state.hintTipShown = true;
-        msg += '（本关最高 ★★）';
-      }
-      toast(msg);
+      toast('已标出下一步：圈起来的那块，放到虚线处');
       return true;
     }
-    /* 巧币买提示：钱够就扣，不够给一句"看视频也行"，不弹失败页 */
+    /* 巧币直接买一次提示：钱够就扣，不够给一句"看视频也行"，不弹失败页 */
     function useHintCoin() {
       var H = C.HINT, s = state.save;
-      if (state.hintLv >= H.maxTier) { toast('本关提示已经用完'); return; }
       if ((s.coin || 0) < H.coinCost) { toast('巧币不足，看视频也能拿提示'); return; }
+      if (!canTakeHint()) return;
       s.coin -= H.coinCost;
       persist();
-      useHint(true);
+      useHint();
     }
 
     /* 一块板是否已经"放对"（位置/角度/翻面都对）。提示选块与档3淡显都用它。 */
@@ -1926,11 +2244,34 @@
       onlineTick(dt);
       if (state.page === 'play' && state.running && !state.overlay && !state.win) {
         state.elapsed += dt / 1000;
-        /* v0.5 A：倒计时递减 → 映射生命值；归零即失败 */
-        if (state.timeLeft > 0) {
+        /* v0.5 A：倒计时递减 → 映射生命值；归零即失败
+         * v0.21：教学关冻结倒计时（freezeTimer）。新手第一关还要边学边拼，
+         * 拿 90 秒逼他，只会让人在第一关就失败退游；这也是参考视频的做法。 */
+        var tutFreeze = !!(state.tut && C.TUTORIAL.freezeTimer);
+        if (state.timeLeft > 0 && !tutFreeze) {
           state.timeLeft = Math.max(0, state.timeLeft - dt / 1000);
           state.hearts = heartsOf(state.timeLeft, state.timeLimit || 1);
           if (state.timeLeft <= 0) failLevel();
+        }
+        /* v0.21 教学：每帧看"下一块还差什么"，全部放对就自动收尾 */
+        if (state.tut) {
+          state.tut.t += dt;
+          var tstep = tutStep();
+          /* 教"转"的时候先把那块选中 —— 旋转手柄只有选中才出现，
+           * 不替玩家选上，他看到的就只是一句"拖住小圆点"，而小圆点根本不在。 */
+          if (tstep && tstep.kind === 'rot' && state.selId !== tstep.id && !state.drag) {
+            state.selId = tstep.id;
+          }
+          /* v0.24.1：只有"棋盘已经建好"时才允许判定教学完成。
+           * tutStep() 在 solution 里的块一块都匹配不上时也会返回 null（找不到就 continue），
+           * 若不卡这一道，教学会在第一帧被当作"全部放对"，静默收尾 —— 玩家看到的就是
+           * "第 1 关教学莫名其妙没有了"。
+           * v0.25：收尾只关本次教学，不落档；下次是否再教由"第 1 关通没通关"决定。 */
+          var tutReady = state.pieces && state.pieces.length === DS.pieceOrder.length;
+          if (!tstep && tutReady) {
+            state.tut = null;
+            toast('教学完成，剩下的自己来');
+          }
         }
       }
       if (state.toast) { state.toast.t += dt; if (state.toast.t > 1600) state.toast = null; }
@@ -1990,19 +2331,14 @@
       }
       if (state.overlay === 'rank') state.rankT += dt;
       if (state.hint) {
-        if (nowMs() > state.hint.until) {
-          state.hint = null;
-        } else {
-          /* 被指的那块已经放对 → 剩余时间里改指下一块（不浪费已付的那一档） */
-          var hlv = LEVELS[state.levelIdx], hst = null;
-          for (var hi = 0; hi < hlv.solution.length; hi++) {
-            if (hlv.solution[hi].id === state.hint.id) hst = hlv.solution[hi];
-          }
-          if (hst && pieceSolved(pieceOf(hst.id), hst)) {
-            var nid = pickHintPiece();
-            if (nid) state.hint.id = nid; else state.hint = null;
-          }
+        /* v0.20：没有计时器了 —— 提示一直亮着，直到被指的那块真的放对。
+         * 放对就收工（不自动改指下一块：一次购买只换一步指引，
+         * 否则买一次就能一路看完整关解法）。 */
+        var hlv = LEVELS[state.levelIdx], hst = null;
+        for (var hi = 0; hi < hlv.solution.length; hi++) {
+          if (hlv.solution[hi].id === state.hint.id) hst = hlv.solution[hi];
         }
+        if (hst && pieceSolved(pieceOf(hst.id), hst)) state.hint = null;
       }
       if (state.press) state.pressT += dt;
       /* v0.4 A2：长按翻转已彻底移除——翻转改为 pointerup 后判定的「双击」，
@@ -2275,12 +2611,26 @@
         drawIcon(b.icon, b.x, b.y + dy,
           dis ? COL.disabledIcon : COL.text, b.iconScale || 1);
         if (b.badge) {
-          // v0.3 A3 当前提示档角标（右上角小圆 + 档号）
-          var bx = b.x + b.w / 2 - 12, byy = b.y - b.h / 2 + 12 + (pressed ? 2 : 0);
-          ctx.beginPath();
-          ctx.arc(bx, byy, 12, 0, Math.PI * 2);
-          ctx.fillStyle = COL.gold; ctx.fill();
-          text(String(b.badge), bx, byy + 1, 15, COL.btnText, 'center', '700');
+          /* v0.3 A3 角标（右上角小圆 + 数字）。
+           * v0.22：数字从"档号"变成"道具个数"，可能是两位数（囤了 12 个），
+           * 圆会放不下 → 改成右上角胶囊，宽度跟着文字走，>99 收敛成 99+。
+           * 描一圈白边，压在卡片色上也能分清边界。 */
+          var bt = String(b.badge);
+          if (b.badge > 99) bt = '99+';
+          ctx.save();
+          ctx.font = font(16, '700');
+          var tw = ctx.measureText ? ctx.measureText(bt).width : 20;
+          var bw2 = Math.max(30, tw + 14), bh2 = 30;
+          var bcy = b.y - b.h / 2 + 6 + bh2 / 2 + (pressed ? 2 : 0);
+          var bcx = b.x + b.w / 2 - 6 - bw2 / 2;
+          rr(bcx - bw2 / 2, bcy - bh2 / 2, bw2, bh2, bh2 / 2);
+          ctx.fillStyle = COL.gold;
+          ctx.fill();
+          ctx.lineWidth = 2.5;
+          ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+          ctx.stroke();
+          ctx.restore();
+          text(bt, bcx, bcy + 1, 16, COL.btnText, 'center', '700');
         }
       } else if (b.variant === 'ghost') {
         /* v0.8：结算页第三排「重玩 / 回列表」用的无底文字按钮，只保留点击热区 */
@@ -2436,15 +2786,6 @@
         ctx.beginPath(); ctx.arc(9, -4, 5, 0, Math.PI * 2); ctx.stroke();
         ctx.beginPath(); ctx.arc(-7, 15, 11, Math.PI * 1.12, Math.PI * 1.88); ctx.stroke();
         ctx.beginPath(); ctx.arc(9, 16, 9, Math.PI * 1.12, Math.PI * 1.88); ctx.stroke();
-      } else if (name === 'task') {
-        ctx.lineWidth = 3;
-        rr(-13, -17, 26, 34, 4); ctx.stroke();
-        ctx.lineWidth = 2.6;
-        for (var ti = 0; ti < 3; ti++) {
-          var ty = -9 + ti * 9;
-          ctx.beginPath(); ctx.moveTo(-7, ty); ctx.lineTo(-4, ty + 3); ctx.lineTo(1, ty - 3); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(4, ty); ctx.lineTo(10, ty); ctx.stroke();
-        }
       } else if (name === 'online') {
         ctx.lineWidth = 3;
         rr(-15, -5, 30, 18, 3); ctx.stroke();
@@ -2684,8 +3025,7 @@
       homeEntry('entry_skin', 'skin', '皮肤', lx, e0 + eg);
       homeEntry('entry_invite', 'invite', '邀请有礼', lx, e0 + eg * 2,
         state.save.inviteDay !== todayKey());
-      homeEntry('entry_task', 'task', '任务', lx, e0 + eg * 3,
-        taskList().some(function (it) { return it.done && !it.got; }));
+      /* v0.16：左列第 4 格「任务」已下线（用户要求），左列只留 3 个入口。 */
 
       /* 在线奖励：图标 + 上方气泡。
        * v0.15：气泡从「3 分钟倒计时」改成「今日累计时长」，有可领档位时变红显示「可领 N」。
@@ -2734,8 +3074,8 @@
       setEntry('set_t4', 'tangram4', '四巧板', H.set4Y);
       setEntry('set_t7', 'tangram7', '七巧板', H.set7Y);
 
-      /* v0.7：设置从右上角挪到右列底部，与左列「任务」同排（页面中段），
-       * 样式与其它入口统一成「图标 + 下方小字」，不再孤零零贴在屏幕角上。 */
+      /* v0.7：设置从右上角挪到右列底部，样式与其它入口统一成「图标 + 下方小字」。
+       * v0.16：左列「任务」下线后，右列仍保持 3 个入口（排行榜 / 在线奖励 / 设置）。 */
       homeEntry('settings', 'gear', '设置', rx, e0 + eg * 3);
 
       text('已获得 ' + totalStars() + '/' + (LEVELS.length * 3) + ' 星', C.DESIGN.w / 2, 1360, 24, COL.textSub, 'center');
@@ -2864,6 +3204,288 @@
       }
     }
 
+    /* ---------------- 对局页 HUD（v0.17） ----------------
+     * 局内会因「买提示 / 巧币复活」扣钱，玩家不能等到退回主页才知道余量，
+     * 所以顶栏常驻一对胶囊（巧币在上、体力在下，与主页同序）。
+     * 放在**左侧**：真机右上角是微信原生胶囊按钮（系统层盖在画布之上），
+     * 画在右边会被压掉一半，而网页预览里完全看不出来。
+     * 几何全取自 config.LAYOUT.HUD_MIN，验收脚本读同一组数，避免两边抄魔数。 */
+    /* 位数兜底：巧币真攒到一万以上时，`10000` 这种 5 位数即使用 18px 也塞不进
+     * 127 宽的胶囊（会顶到倒计时胶囊上）。折算成「1.2万 / 10亿」后最宽 4 个字符，
+     * 宽度问题从根上消失，也不比一串数字更难读。 */
+    function shortNum(n) {
+      n = Math.max(0, Math.floor(n || 0));
+      if (n < 10000) return String(n);
+      if (n < 100000000) {
+        return (n / 10000).toFixed(n < 100000 ? 1 : 0).replace(/\.0$/, '') + '万';
+      }
+      return (n / 100000000).toFixed(1).replace(/\.0$/, '') + '亿';
+    }
+
+    function playHud(cy) {
+      var M = C.LAYOUT.HUD_MIN, s = state.save;
+      var rows = [
+        { icon: 'coin', color: COL.gold, scale: M.coinScale, num: shortNum(s.coin), sub: '' },
+        { icon: 'energy', color: '#3DBEF0', scale: M.energyScale,
+          num: shortNum(s.energy), sub: '/' + s.energyMax }
+      ];
+      var ratio = M.subFontSize / M.fontSize;
+      /* 两行等长（沿用主页 v0.7.1 的规矩：一长一短斜着难看），
+       * 先量各自文字取最大值；超过 maxW 就按 2px 递减字号，宁可变小也不许撑出屏幕。 */
+      var fsz = M.fontSize, wEach = 0, guard = 0;
+      while (guard++ < 20) {
+        wEach = 0;
+        for (var i = 0; i < rows.length; i++) {
+          ctx.font = font(fsz, M.fontWeight);
+          var w = M.padL + ctx.measureText(rows[i].num).width + M.padR;
+          if (rows[i].sub) {
+            ctx.font = font(Math.max(12, Math.round(fsz * ratio)), M.fontWeight);
+            w += ctx.measureText(rows[i].sub).width;
+          }
+          if (w > wEach) wEach = w;
+        }
+        if (wEach <= M.maxW || fsz <= M.minFontSize) break;
+        fsz -= 2;
+      }
+      var x = M.left, ph = M.pillH;
+      var subFs = Math.max(12, Math.round(fsz * ratio));
+      for (var k = 0; k < rows.length; k++) {
+        var r = rows[k], rowY = cy + (k - 0.5) * M.rowGap;
+        ctx.save();
+        shadow(8, 3, 'rgba(44,58,75,0.20)');
+        rr(x, rowY - ph / 2, wEach, ph, ph / 2);
+        ctx.fillStyle = M.pillFill;
+        ctx.fill();
+        noShadow();
+        ctx.lineWidth = M.border;
+        ctx.strokeStyle = M.pillStroke;
+        ctx.stroke();
+        ctx.restore();
+        drawIcon(r.icon, x + M.iconInset, rowY, r.color, r.scale);
+        text(r.num, x + M.padL, rowY + 1, fsz, M.textColor, 'left', M.fontWeight);
+        if (r.sub) {
+          ctx.save();
+          ctx.font = font(fsz, M.fontWeight);
+          var nw = ctx.measureText(r.num).width;
+          ctx.restore();
+          /* 分母压暗一点：一眼看到「现在还剩多少」，上限是次要信息 */
+          text(r.sub, x + M.padL + nw + 1, rowY + 2, subFs,
+            'rgba(255,255,255,0.72)', 'left', M.fontWeight);
+        }
+      }
+    }
+
+    /* ================= v0.21 教学绘制 =================
+     * 分两层：
+     *   ① drawTutGhost —— 画在轮廓之后、板件之前：把还没放对的标准解淡显成彩色虚影
+     *   ② drawTutTip   —— 画在板件/托盘之后：顶部一行指令 + 手势图标 + 跳过
+     * 分开画的理由和提示层一样：虚影要在玩家自己的板下面（不然糊住真实板件），
+     * 文字要在最上面（不然被板压住）。
+     */
+    var TUT_ICON = { drag: '拖', rot: '转', flip: '翻' };
+
+    function drawTutGhost(lv) {
+      var T = C.TUTORIAL, step = tutStep(), i;
+      /* 目标：当前这一块的落点脉冲得更亮，其余虚影保持低透明度 */
+      for (i = 0; i < lv.solution.length; i++) {
+        var st = lv.solution[i], p = pieceOf(st.id);
+        if (pieceSolved(p, st)) continue;      // 已放对的不再盖虚影（会糊掉真板）
+        var gp = G.toWorld(LOCAL[st.id], st).map(function (v) { return [w2d(v[0]), h2d(v[1])]; });
+        var isCur = !!(step && step.id === st.id && step.kind === 'drag');
+        var ga = isCur
+          ? (T.ghostAlpha + 0.10 + 0.06 * Math.sin(state.time / 220))
+          : T.ghostAlpha;
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(gp[0][0], gp[0][1]);
+        for (var gi = 1; gi < gp.length; gi++) ctx.lineTo(gp[gi][0], gp[gi][1]);
+        ctx.closePath();
+        ctx.globalAlpha = ga;
+        ctx.fillStyle = DS.pieces[st.id].color;
+        ctx.fill();
+        ctx.globalAlpha = isCur ? 0.95 : 0.55;
+        ctx.lineWidth = isCur ? 3 : 2;
+        ctx.setLineDash([8, 6]);
+        ctx.strokeStyle = isCur ? COL.goldDeep : COL.gold;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+    }
+
+    /* 手势图标：用最少的笔画讲清"手指怎么动"，尺寸按 T.iconR 缩放 */
+    function drawTutIcon(kind, cx, cy, r) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = COL.goldDeep;
+      ctx.fillStyle = COL.goldDeep;
+      ctx.lineWidth = Math.max(2.4, r * 0.16);
+      if (kind === 'rot') {
+        /* 圆弧 + 箭头：转 */
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 0.78, -0.5, 4.3);
+        ctx.stroke();
+        var ax = Math.cos(-0.5) * r * 0.78, ay = Math.sin(-0.5) * r * 0.78;
+        ctx.beginPath();
+        ctx.moveTo(ax - r * 0.34, ay - r * 0.06);
+        ctx.lineTo(ax + r * 0.18, ay + r * 0.24);
+        ctx.lineTo(ax + r * 0.06, ay - r * 0.36);
+        ctx.closePath();
+        ctx.fill();
+      } else if (kind === 'flip') {
+        /* 双向箭头：翻 */
+        ctx.beginPath();
+        ctx.moveTo(-r * 0.62, -r * 0.26); ctx.lineTo(r * 0.58, -r * 0.26);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(r * 0.62, r * 0.26); ctx.lineTo(-r * 0.58, r * 0.26);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(r * 0.62, -r * 0.26); ctx.lineTo(r * 0.24, -r * 0.56);
+        ctx.lineTo(r * 0.24, r * 0.04);
+        ctx.closePath(); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(-r * 0.62, r * 0.26); ctx.lineTo(-r * 0.24, r * 0.56);
+        ctx.lineTo(-r * 0.24, -r * 0.04);
+        ctx.closePath(); ctx.fill();
+      } else {
+        /* 拖：一块实心方 + 箭头 + 一个虚线空框 —— 一眼就是"把它拖进框里"，
+         * 比画手指可靠（60px 见方时手指的细节全糊成一团）。
+         * 两个方块直接用 0.72r，撑满图标框；太小会缩成两个点。 */
+        var q = r * 0.72, gap = r * 0.30;
+        ctx.fillStyle = COL.gold;
+        ctx.strokeStyle = COL.goldDeep;
+        ctx.lineWidth = Math.max(2, r * 0.11);
+        rr(-gap - q, -q / 2, q, q, q * 0.2);
+        ctx.fill();
+        ctx.stroke();
+        /* 箭头：从左边方块右沿指向右边虚框左沿 */
+        var ax0 = -gap + r * 0.04, ax1 = gap - r * 0.04;
+        ctx.beginPath();
+        ctx.moveTo(ax0, 0); ctx.lineTo(ax1, 0);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(ax1 + r * 0.02, 0);
+        ctx.lineTo(ax1 - r * 0.26, -r * 0.22);
+        ctx.lineTo(ax1 - r * 0.26, r * 0.22);
+        ctx.closePath();
+        ctx.fillStyle = COL.goldDeep;
+        ctx.fill();
+        ctx.save();
+        ctx.setLineDash([q * 0.30, q * 0.24]);
+        ctx.lineWidth = Math.max(1.8, r * 0.10);
+        ctx.strokeStyle = COL.goldDeep;
+        rr(gap, -q / 2, q, q, q * 0.2);
+        ctx.stroke();
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    /* 把"这一步要用哪块"圈出来：托盘里圈板件、已经在台上就圈台上那块。
+     * 窗口文字写的是「亮起来的这块」，所以必须真有一块在亮 —— 否则玩家会盯着
+     * 一动不动的一句话找半天。箭头压在包围盒上方（太靠上会顶到指令行，那就翻到下方）。 */
+    function drawTutFocus() {
+      var step = tutStep();
+      if (!step) return;
+      var p = pieceOf(step.id);
+      if (!p) return;
+      var pts = p.onBoard ? piecePolyDesign(p) : trayPoly(p);
+      if (!pts || !pts.length) return;
+      var a = 0.55 + 0.30 * Math.sin(state.time / 180);
+      var minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9, i;
+      for (i = 0; i < pts.length; i++) {
+        if (pts[i][0] < minX) minX = pts[i][0];
+        if (pts[i][0] > maxX) maxX = pts[i][0];
+        if (pts[i][1] < minY) minY = pts[i][1];
+        if (pts[i][1] > maxY) maxY = pts[i][1];
+      }
+      ctx.save();
+      ctx.beginPath();
+      for (i = 0; i < pts.length; i++) {
+        if (i === 0) ctx.moveTo(pts[i][0], pts[i][1]); else ctx.lineTo(pts[i][0], pts[i][1]);
+      }
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(255,185,61,0.14)';
+      ctx.fill();
+      /* 白描边打底 + 金色虚线环：板件本身就是暖色（橙/黄）时，
+       * 单靠一圈金线看不出"被选中"，垫一层白边才在任何底色上都跳出来。 */
+      ctx.lineWidth = 9;
+      ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+      ctx.stroke();
+      ctx.lineWidth = 4.5;
+      ctx.strokeStyle = 'rgba(255,159,28,' + a.toFixed(2) + ')';
+      ctx.stroke();
+
+      /* 箭头只在"还在托盘里"时画：台上那块已经有白+金双圈，
+       * 再压一个箭头反而挡住板件本身。 */
+      if (p.onBoard) { ctx.restore(); return; }
+      /* 箭头：默认在包围盒上方往下指；离指令行太近就翻到下方往上指 */
+      var T = C.TUTORIAL, B = LAY.BOARD;
+      var cx = (minX + maxX) / 2;
+      var up = (minY - 34) > (B.y + T.textY + 34);
+      var ay = up ? (minY - 30) : (maxY + 30);
+      var bob = Math.sin(state.time / 200) * 4;
+      ctx.beginPath();
+      if (up) {
+        ctx.moveTo(cx, ay + 18 + bob);
+        ctx.lineTo(cx - 16, ay - 8 + bob);
+        ctx.lineTo(cx + 16, ay - 8 + bob);
+      } else {
+        ctx.moveTo(cx, ay - 18 + bob);
+        ctx.lineTo(cx - 16, ay + 8 + bob);
+        ctx.lineTo(cx + 16, ay + 8 + bob);
+      }
+      ctx.closePath();
+      ctx.fillStyle = COL.goldDeep;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawTutTip(lv) {
+      var T = C.TUTORIAL, B = LAY.BOARD;
+      var step = tutStep();
+      var txt = step ? step.text : '拼好了，点「下一关」继续';
+      var kind = step ? step.kind : 'drag';
+
+      /* 指令一行：图标 + 文字整体居中，文字过长时降字号兜底 */
+      var size = T.textSize, iconW = T.iconR * 2 + 14;
+      ctx.font = font(size, '600');
+      var tw = ctx.measureText ? ctx.measureText(txt).width : 300;
+      var maxW = B.size - 120;
+      while (tw + iconW > maxW && size > 18) {
+        size -= 2;
+        ctx.font = font(size, '600');
+        tw = ctx.measureText ? ctx.measureText(txt).width : tw;
+      }
+      var groupW = iconW + tw;
+      var gx = C.DESIGN.w / 2 - groupW / 2;
+      var gy = B.y + T.textY;
+      /* 背部一层极淡白底，避免虚影透上来压低文字对比度 */
+      ctx.save();
+      rr(gx - 16, gy - 26, groupW + 32, 52, 26);
+      ctx.fillStyle = 'rgba(255,255,255,0.82)';
+      ctx.fill();
+      ctx.restore();
+      var bob = Math.sin(state.time / 260) * 3;
+      drawTutIcon(kind, gx + T.iconR, gy + bob, T.iconR);
+      text(txt, gx + iconW, gy, size, COL.text, 'left', '600');
+
+      /* 跳过：卡纸右下角一行小字（教学是一次性的，必须留出口） */
+      var sx = B.x + B.size - T.skipW / 2 - 12, sy = B.y + B.size - 34;
+      text(T.skipText, sx, sy, 22, COL.textSub, 'center', '500');
+      ctx.save();
+      ctx.strokeStyle = 'rgba(122,138,156,0.55)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(sx - 44, sy + 15); ctx.lineTo(sx + 44, sy + 15);
+      ctx.stroke();
+      ctx.restore();
+      addHit(sx, sy, T.skipW, 72, 'tut_skip');
+    }
+
     /* ---------------- 对局页 ---------------- */
     function renderPlay() {
       var lv = LEVELS[state.levelIdx];
@@ -2878,24 +3500,9 @@
       var bb = { id: 'back_levels', x: 70, y: by, w: 76, h: 76, variant: 'tool', icon: 'back' };
       addHit(bb.x, bb.y, bb.w, bb.h, 'back_levels');
       drawButton(bb);
-      // 关名可以为空（只有少数形状真的像某个物件）：没名字时关号单行居中于按钮
-      var head = '第 ' + (state.levelIdx + 1) + ' 关';
-      var tx0 = 118;
-      text(head, tx0, lv.name ? by - 13 : by, 30, COL.text, 'left', '600');
-      /* 关名按「到胶囊左沿」的余量截断：长关名（平行四边形、T 字型）在 375 屏上
-       * 只差 30 多 px 就贴到胶囊了，宁可行尾加省略号也不许压上去。 */
-      if (lv.name) {
-        var nameMax = capL - tx0 - 18;
-        var nm = lv.name;
-        ctx.save();
-        ctx.font = font(20, '500');
-        if (ctx.measureText && ctx.measureText(nm).width > nameMax) {
-          while (nm.length > 1 && ctx.measureText(nm + '…').width > nameMax) nm = nm.slice(0, -1);
-          nm = nm + '…';
-        }
-        ctx.restore();
-        text(nm, tx0, by + 22, 20, COL.textSub, 'left', '500');
-      }
+      /* v0.17：关号从顶栏让位到卡纸内左上角（见下方「关卡标题」）。
+       * 原因：真机右上角是微信原生胶囊按钮，巧币/体力必须占住返回按钮右侧那一段，
+       * 顶栏一行塞不下「返回 + 关号 + 居中的倒计时 + 双胶囊」四组东西。 */
 
       /* 生命值（3 心，随剩余时间递减）+ 倒计时胶囊，整条胶囊对齐屏幕中线。
        * 倒计时 ≤warnSec 时数字转红并轻微脉冲，给紧迫感。 */
@@ -2928,6 +3535,13 @@
       ctx.scale(pl, pl);
       text(timeTxt, 0, 0, 34, warn ? '#E5484D' : COL.btnText, 'center', '700');
       ctx.restore();
+
+      /* v0.17：顶栏右侧常驻巧币 / 体力余量（局内买提示、复活都要扣巧币）。
+       * 与倒计时胶囊同一条水平线，右端对齐广告位右沿，不挂热区 ——
+       * 局内点开面板会打断拼图，展示就够了。
+       * 复活 / 结算弹层会在自己的遮罩之上再画一遍（否则会被压暗），这里别重复画：
+       * 半透明深底叠两次会比正常页面明显更黑。 */
+      if (state.overlay !== 'fail' && state.overlay !== 'result') playHud(by);
 
       /* v0.9 顶部广告位（LAY.AD）：真机由原生 banner 盖在这块空白上，
        * 画布只铺一层浅底把它"托"住；预览端画虚线占位框，方便对位验收。
@@ -2972,6 +3586,22 @@
         ctx.restore();
       }
 
+      /* 关卡标题（v0.17）：从顶栏挪进卡纸左上角，单行「第 N 关 · 关名」。
+       * 只放一行是有依据的：所有关卡轮廓的最高点在屏幕上不低于 352
+       * （七巧板第 2 关最靠上，而卡纸从 302 起），两行就会压上去。
+       * 40..686 的宽度足够 20 多个字，仍按卡纸内宽兜底截断。 */
+      var headTxt = '第 ' + (state.levelIdx + 1) + ' 关' + (lv.name ? ' · ' + lv.name : '');
+      var headMax = B.size - 52;
+      ctx.save();
+      ctx.font = font(22, '600');
+      if (ctx.measureText && ctx.measureText(headTxt).width > headMax) {
+        var hm = headTxt;
+        while (hm.length > 1 && ctx.measureText(hm + '…').width > headMax) hm = hm.slice(0, -1);
+        headTxt = hm + '…';
+      }
+      ctx.restore();
+      text(headTxt, B.x + 26, B.y + 32, 22, COL.textSub, 'left', '600');
+
       /* 目标轮廓（v0.3.1 A2 样式，v0.10 起固定不变）
        * 档1 虚线轮廓(3px,[8,6])+淡填充 / 档2 细实线轮廓(1.5px)+淡填充 / 档3 纯剪影无描边。
        * v0.10：这三档是「关卡自带的显示难度」，不再由提示按钮改动
@@ -2999,6 +3629,9 @@
       }
       ctx.restore();
 
+      /* v0.21 教学关：标准解彩色虚影（画在轮廓之上、板件之下） */
+      if (state.tut) drawTutGhost(lv);
+
       /* 已上板的板件（先画，被拖的那块最后画） */
       var dragging = state.drag ? state.drag.id : null;
       for (var m = 0; m < state.pieces.length; m++) {
@@ -3020,6 +3653,8 @@
       }
       /* v0.10 档2：把「托盘里的哪一块」标出来（画在托盘之上，压住叠放关系） */
       if (state.hint) drawHintTray();
+      /* v0.21 教学：把「这一步要用的是哪一块」圈出来（窗口里说"亮起来的这块"必须真有亮） */
+      if (state.tut) drawTutFocus();
 
       /* 拖动中的板最后画（在最上层） */
       if (dragging) {
@@ -3071,6 +3706,9 @@
         ctx.restore();
       }
 
+      /* v0.21 教学：指令行 + 跳过（画在板件/托盘之上，不吞拖动 —— 只有「跳过」挂热区） */
+      if (state.tut) drawTutTip(lv);
+
       /* 工具栏 */
       var sel = pieceOf(state.selId);
       var tools = [
@@ -3078,11 +3716,13 @@
         { id: 'rot_cw', icon: 'rotR', disabled: !sel },
         /* v0.4 A1/A3：翻转 = 双击板件本体 或 本按钮；长按已移除、tip 汉字已删除 */
         { id: 'flip', icon: 'flip', disabled: !sel },
-        /* v0.10：角标 = 本关还剩几档提示（3/2/1），用满 3 档才置灰。
-         * 免费档直接用；第 2、3 档点按钮先弹「看视频 / 巧币」面板，不静默播广告。 */
-        { id: 'hint', icon: 'hint',
-          badge: Math.max(0, C.HINT.maxTier - state.hintLv),
-          disabled: state.hintLv >= C.HINT.maxTier },
+        /* v0.10：角标 = 本关还剩几档提示（3/2/1）。
+         * v0.16：角标同时提示「还有几档」，任何一档点按钮都先弹付费面板
+         * （查找道具 / 巧币 / 看视频），不再有免费直给的那一次。
+         * v0.20：没有档位上限了 —— 去掉角标和置灰，按钮永远可点。
+         * v0.22：角标改成**查找道具余量**（用户要求）：有几个就直接显示几个，
+         * 没有就不画。配合「点一下直接用」，玩家一眼知道还能免费用几次。 */
+        { id: 'hint', icon: 'hint', badge: (state.save.hintItems || 0) },
         { id: 'restart', icon: 'restart', disabled: false }
       ];
       for (var i2 = 0; i2 < tools.length; i2++) {
@@ -3280,48 +3920,19 @@
       }
     }
 
-    /* ================= v0.11 提示绘制（三档统一，画在已上板件之上） =================
-     * 档1 只画"落点"，档2 加"是哪一块"，档3 把还没放对的块淡显到标准解上。
-     * 关键：这一层在 board pieces 之后绘制——玩家先摆了几块也一定看得见提示。
-     * （旧版画在板件之前，落点被板压住，玩家只看到一句"提示 2/3"却什么都找不到。） */
+    /* ================= v0.20 提示绘制（单档，画在已上板件之上） =================
+     * 一次提示 = 三件事一起给：目标位置（脉冲+金虚线）、要用哪一块（托盘圈或棋盘圈）、
+     * 一条从那一块连到落点的虚线。没有档位、没有倒计时，亮到那块放对为止。
+     * 关键：这一层在 board pieces 之后绘制——玩家先摆了几块也一定看得见提示。 */
     function drawHintGuide(lv) {
-      var H = C.HINT, hh = state.hint, tier = hh.tier || 1;
+      var H = C.HINT, hh = state.hint;
       var hs = null;
       for (var q = 0; q < lv.solution.length; q++) if (lv.solution[q].id === hh.id) hs = lv.solution[q];
       if (!hs) return;
       var pz = pieceOf(hh.id);
       var onBoard = !!(pz && pz.onBoard);
 
-      /* 档3：还没放对的块按标准解淡显。
-       * 已经放对的块跳过——再盖一层会把真实板件的颜色/立体感糊掉，
-       * 玩家反而分不清"哪些已经好了、哪些还要动"。 */
-      if (tier >= 3) {
-        var ga = H.ghostAlpha * (0.85 + 0.15 * Math.sin(state.time / 240));
-        ctx.save();
-        for (var g = 0; g < lv.solution.length; g++) {
-          var st = lv.solution[g];
-          if (pieceSolved(pieceOf(st.id), st)) continue;
-          var gp = G.toWorld(LOCAL[st.id], st).map(function (v) { return [w2d(v[0]), h2d(v[1])]; });
-          ctx.beginPath();
-          ctx.moveTo(gp[0][0], gp[0][1]);
-          for (var gi = 1; gi < gp.length; gi++) ctx.lineTo(gp[gi][0], gp[gi][1]);
-          ctx.closePath();
-          ctx.globalAlpha = ga;
-          ctx.fillStyle = DS.pieces[st.id].color;
-          ctx.fill();
-          /* 金色虚线描边：压在已摆的板上面时也能一眼分出"这是提示不是我的板" */
-          ctx.globalAlpha = 0.85;
-          ctx.lineWidth = 2.5;
-          ctx.setLineDash([7, 5]);
-          ctx.strokeStyle = COL.gold;
-          ctx.stroke();
-          ctx.setLineDash([]);
-        }
-        ctx.restore();
-        return;
-      }
-
-      /* 档1/2：这一块的落点脉冲 */
+      /* 这一块的落点脉冲 */
       var hp = G.toWorld(LOCAL[hs.id], hs).map(function (v) { return [w2d(v[0]), h2d(v[1])]; });
       var a = 0.30 + 0.22 * Math.sin(state.time / 180);
       ctx.save();
@@ -3398,15 +4009,22 @@
           if (pbp[b3][1] < pTop) pTop = pbp[b3][1];
           if (pbp[b3][1] > pBot) pBot = pbp[b3][1];
         }
-        label = '移到虚线处'; lw = 138;
+        label = H.labels.move; lw = 138;
         ly = pTop - 28;
         if (ly < LAY.BOARD.y + 30) ly = pBot + 28;
       } else {
-        var cx = 0, cy = 0;
-        for (var c2 = 0; c2 < hp.length; c2++) { cx += hp[c2][0]; cy += hp[c2][1]; }
-        label = '放这里'; lw = 96;
+        /* v0.20：落点小牌挪到目标轮廓的上/下方，不再压在轮廓正中 ——
+         * 压在正中会把刚高亮出来的形状盖掉一半，玩家反而看不清要放什么形状。 */
+        var cx = 0, cy = 0, hpTop = 1e9, hpBot = -1e9;
+        for (var c2 = 0; c2 < hp.length; c2++) {
+          cx += hp[c2][0]; cy += hp[c2][1];
+          if (hp[c2][1] < hpTop) hpTop = hp[c2][1];
+          if (hp[c2][1] > hpBot) hpBot = hp[c2][1];
+        }
+        label = H.labels.place; lw = 96;
         cx /= hp.length; cy /= hp.length;
-        ly = cy;
+        ly = hpTop - 26;
+        if (ly < LAY.BOARD.y + 30) ly = hpBot + 26;
       }
       var bTop = LAY.BOARD.y + 26, bBot = LAY.BOARD.y + LAY.BOARD.size - 26;
       var bL = LAY.BOARD.x + lw / 2 + 8, bR = LAY.BOARD.x + LAY.BOARD.size - lw / 2 - 8;
@@ -3418,8 +4036,8 @@
       ctx.fill();
       text(label, lx, ly + 1, 21, '#FFFFFF', 'center', '600');
 
-      /* 档2：从托盘那块拉一条引导虚线，省掉"眼睛在棋盘和托盘之间来回找" */
-      if (tier === 2 && !onBoard) {
+      /* 从托盘那块拉一条引导虚线，省掉"眼睛在棋盘和托盘之间来回找" */
+      if (!onBoard) {
         var sp0 = SLOT_POS[pz.slot];
         ctx.save();
         ctx.setLineDash([10, 10]);
@@ -3434,10 +4052,10 @@
       }
     }
 
-    /* 档2：托盘上那一块的描边 + 「用这块」小牌（档3 给了全图，不再指单块） */
+    /* v0.20：托盘上那一块的描边 + 「用这块」小牌（每次都标，不再分档） */
     function drawHintTray() {
       var hh = state.hint;
-      if (!hh || (hh.tier || 1) !== 2) return;
+      if (!hh) return;
       var p = pieceOf(hh.id);
       if (!p || p.onBoard) return;                 // 已经拿到棋盘上了就不再标托盘
       var pts = trayPoly(p);
@@ -3464,7 +4082,7 @@
       rr(sp.x - pw / 2, py - ph / 2, pw, ph, ph / 2);
       ctx.fillStyle = 'rgba(44,58,75,0.88)';
       ctx.fill();
-      text('用这块', sp.x, py + 1, 24, '#FFFFFF', 'center', '600');
+      text(C.HINT.labels.use, sp.x, py + 1, 24, '#FFFFFF', 'center', '600');
       ctx.restore();
     }
 
@@ -3628,6 +4246,9 @@
       var W = C.WIN;
       ctx.fillStyle = COL.mask;
       ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
+      /* v0.17：结算会现场加巧币/体力，余额就摆在屏幕顶部（与对局页同位置），
+       * 不用等玩家退回主页才发现数字变了。 */
+      playHud(view.safeTop + 40);
       var appear = Math.min(1, state.resT / C.ANIM.panelFade);
       var e = G.easeOutCubic(appear);
       ctx.save();
@@ -3659,6 +4280,60 @@
       ctx.strokeStyle = 'rgba(255,185,61,0.55)';
       rr(bx - boxW / 2, byc - boxH / 2, boxW, boxH, 26);
       ctx.stroke();
+
+      /* v0.24：完成感不再靠「拼好了！」这行字撑（标题保留不动），
+       * 改成图案本体呼吸发光。做法是三层"越靠外越淡"的金色描边套在图案框上：
+       * 图案几乎填满整个框，框内没有留白做渐变（试过径向金光，结果是整块糊黄），
+       * 所以把光放到框外沿，明暗呼吸 —— 远看就是这块拼好的图案在发亮。
+       * 周期 1.9s，cos 做 0→1→0 往返；进场 120ms 后才起，避开图案弹出的缩放。 */
+      if (state.resT > 120) {
+        var glowPh = ((state.resT - 120) % 1900) / 1900;
+        var pulse = 0.5 - 0.5 * Math.cos(glowPh * Math.PI * 2);
+        /* ① 环形辉光：内圈透明、图案边缘处最亮、向外淡出。
+         * 中心必须透明 —— 试过中心亮的径向光，整块白底被染黄，像脏了。
+         * 做成横向椭圆（rx 0.85 / ry 0.55 个框边长）：卡片上下几乎没有余量
+         * （框顶到关卡名 18px、框底到星级 11px），垂直方向扩散会压字，
+         * 横向左右各有 210px，光就往两侧散。 */
+        var gRx = boxW * 0.85, gRy = boxW * 0.55;
+        ctx.save();
+        ctx.translate(bx, byc);
+        ctx.scale(1, gRy / gRx);
+        var gRad = ctx.createRadialGradient(0, 0, boxW * 0.30, 0, 0, gRx);
+        gRad.addColorStop(0, 'rgba(255,208,110,0)');
+        gRad.addColorStop(0.45, 'rgba(255,200,92,' + (0.16 + 0.16 * pulse).toFixed(3) + ')');
+        gRad.addColorStop(0.74, 'rgba(255,186,60,' + (0.09 + 0.09 * pulse).toFixed(3) + ')');
+        gRad.addColorStop(1, 'rgba(255,186,60,0)');
+        ctx.fillStyle = gRad;
+        ctx.fillRect(-gRx, -gRx, gRx * 2, gRx * 2);
+        ctx.restore();
+        /* ② 三层描边：负责勾出光的"边"，越靠外越淡；pad 收到 10px 以内，
+         * 免得压到关卡名（框顶 -18px 就是那行字） */
+        var halos = [[10, 8, 0.050], [5, 4, 0.100], [2.5, 1.5, 0.240]];
+        ctx.save();
+        for (var hi = 0; hi < halos.length; hi++) {
+          var padv = halos[hi][1] + 1.6 * pulse;
+          ctx.lineWidth = halos[hi][0];
+          ctx.strokeStyle = 'rgba(255,190,72,' +
+            (halos[hi][2] + halos[hi][2] * 1.2 * pulse).toFixed(3) + ')';
+          rr(bx - boxW / 2 - padv, byc - boxH / 2 - padv,
+            boxW + padv * 2, boxH + padv * 2, 26 + padv);
+          ctx.stroke();
+        }
+        ctx.restore();
+        /* 四角星芒：四颗小星相位错开闪烁，让"发光"不只是明暗，还有星点游走。
+         * 位置压在光带上（框角外侧 10px），不与图案和星级抢视线。 */
+        var cornerX = [-1, 1, 1, -1], cornerY = [-1, -1, 1, 1];
+        for (var si = 0; si < 4; si++) {
+          var sph = ((glowPh + si * 0.25) % 1);
+          var sp = 0.5 - 0.5 * Math.cos(sph * Math.PI * 2);
+          if (sp < 0.14) continue;
+          ctx.save();
+          ctx.globalAlpha = 0.30 + 0.65 * sp;
+          drawStar(bx + cornerX[si] * (boxW / 2 + 10), byc + cornerY[si] * (boxH / 2 + 10),
+            2.5 + 4 * sp, true, 1);
+          ctx.restore();
+        }
+      }
       var pop = G.easeOutBack(Math.min(1, Math.max(0, (state.resT - 140) / 460)));
       drawSolved(lv, bx, byc, W.shapeMax, 0.84 + 0.16 * pop);
 
@@ -3685,8 +4360,61 @@
       text(String(state.result ? state.result.steps : 0),
         C.DESIGN.w / 2 + 120, W.statValueY + dy, 30, COL.text, 'center', '600');
 
-      var b1 = { id: last ? 'to_list' : 'next', x: C.DESIGN.w / 2, y: W.primaryY + dy,
-        w: 360, h: W.primaryH, label: last ? '回列表' : '下一关', variant: 'primary', size: 30 };
+      /* ---- v0.23：奖励条（首通才发巧币，可当场看视频 ×5） ----
+       * 放在数据行与主按钮之间，是一条"横向说明条"而不是第四个主按钮：
+       * 左侧写这一局到底给了什么，右侧才是 ×5 入口，避免整条误触播广告。 */
+      var rw = W.rewardW, rh = W.rewardH, ry = W.rewardY + dy;
+      var res = state.result || { first: false, gain: 0, adUsed: false };
+      var mul = C.ECON.coinWinAdMul || 5;
+      ctx.save();
+      rr(C.DESIGN.w / 2 - rw / 2, ry - rh / 2, rw, rh, rh / 2);
+      ctx.fillStyle = res.first ? 'rgba(255,185,61,0.14)' : 'rgba(120,130,146,0.10)';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = res.first ? 'rgba(255,159,28,0.55)' : 'rgba(120,130,146,0.20)';
+      ctx.stroke();
+      ctx.restore();
+
+      /* v0.24：×5 入口挪到下面一排之后，这条就只剩"这一局给了什么"一句话，
+       * 整条居中；文案也顺势写清楚（首通 / 已翻倍 / 重复无奖励三种）。 */
+      var gainTxt, gainCol;
+      if (!res.first) {
+        gainTxt = '已通过 · 重复挑战无奖励';
+        gainCol = COL.textSub;
+      } else if (res.adUsed) {
+        gainTxt = '首通奖励 +' + (res.gain * mul) + ' 巧币 · 已翻 ' + mul + ' 倍';
+        gainCol = COL.goldDeep;
+      } else {
+        gainTxt = '首通奖励 +' + res.gain + ' 巧币';
+        gainCol = COL.text;
+      }
+      text(gainTxt, C.DESIGN.w / 2, ry + 1, 23, gainCol, 'center', '600');
+
+      /* ---- 主操作排（v0.24）：[看视频 ×5] [下一关 / 返回] 并排 ----
+       * 原来 ×5 缩在奖励条末端（宽 160、高 42），既小又和"这局给了什么"
+       * 挤在同一行，主次不清。现在奖励条独占一行讲结果，动作统一收到这一排：
+       * 有 ×5 可领时两枚并排（排宽 552 居中），否则主按钮单独 360 居中。 */
+      var canAd = res.first && res.gain > 0 && !res.adUsed;
+      var nextW = 360, nextX = C.DESIGN.w / 2, adX = 0;
+      if (canAd) {
+        var rowW = W.adMulW + W.btnGap + W.primaryW;
+        var rowX0 = C.DESIGN.w / 2 - rowW / 2;
+        adX = rowX0 + W.adMulW / 2;
+        nextX = rowX0 + W.adMulW + W.btnGap + W.primaryW / 2;
+        nextW = W.primaryW;
+      }
+
+      if (canAd) {
+        /* 用 danger 而不是 primary：全 App 的「看视频」都是橙红（提示面板、
+         * 复活弹窗），保持"红=看广告"的一致语义；也和金色的「下一关」区分开。 */
+        var bMul = { id: 'win_ad5', x: adX, y: W.primaryY + dy, w: W.adMulW, h: W.primaryH,
+          label: '看视频 ×' + mul, variant: 'danger', size: 22, disabled: !!state.adSim };
+        if (!state.adSim) addHit(bMul.x, bMul.y, bMul.w, bMul.h, 'win_ad5');
+        drawButton(bMul);
+      }
+
+      var b1 = { id: last ? 'to_list' : 'next', x: nextX, y: W.primaryY + dy,
+        w: nextW, h: W.primaryH, label: last ? '返回' : '下一关', variant: 'primary', size: 30 };
       addHit(b1.x, b1.y, b1.w, b1.h, b1.id);
       drawButton(b1);
 
@@ -3700,26 +4428,31 @@
       addHit(b3.x, b3.y, b3.w, b3.h, 'open_rank');
       drawButton(b3);
 
-      // 第三排：重玩 / 回列表（小号文字按钮）
+      // 第三排：重玩 / 返回（小号文字按钮）
       var b4 = { id: 'replay', x: last ? C.DESIGN.w / 2 : C.DESIGN.w / 2 - 108,
         y: W.row3Y + dy, w: 200, h: W.row3H, label: '重玩', variant: 'ghost', size: 22 };
       addHit(b4.x, b4.y, b4.w, b4.h, 'replay');
       drawButton(b4);
       if (!last) {
         var b5 = { id: 'to_list', x: C.DESIGN.w / 2 + 108, y: W.row3Y + dy,
-          w: 200, h: W.row3H, label: '回列表', variant: 'ghost', size: 22 };
+          w: 200, h: W.row3H, label: '返回', variant: 'ghost', size: 22 };
         addHit(b5.x, b5.y, b5.w, b5.h, 'to_list');
         drawButton(b5);
       }
       ctx.restore();
+      /* v0.23：结算页现在也能播激励视频（×5），模拟广告的进度条必须画在这一层 */
+      adLayer();
+      /* 真广告走 state.adWait（没有进度层），这几秒里也不许点穿到「下一关 / 重玩」，
+       * 否则玩家可能在看广告期间离开结算页，回调回来时 state.result 已经是 null。 */
+      if (state.adSim || state.adWait) hits = [];
     }
 
     /* ---------------- v0.8 排行榜 ---------------- */
-    /* 三个榜都只有「自己」是真实数据，其余是配置里的示例榜：
-     * 主线榜/连胜榜=自己的通关数与连胜；好友榜需开放数据域取真实好友数据。 */
+    /* 主线榜 = 通关关数；连胜榜 = 历史最高连胜（v0.18 改口径，见 config.STREAK 注释）；
+     * 好友榜 = 微信开放数据域读到的好友通关数（不走云开发）。 */
     function rankValue(tab) {
       var s = state.save;
-      if (tab === 1) return s.streak || 0;
+      if (tab === 1) return Math.max(s.bestStreak || 0, s.streak || 0);
       var n = 0;
       for (var k in s.starOf) if ((s.starOf[k] || 0) > 0) n++;
       return n;
@@ -3729,7 +4462,9 @@
     function rankData() {
       var tab = state.rankTab, raw = [];
       if (C.RANK.useMock) raw = (C.RANK.mock[tab] || []).slice();
-      else if (state.rankList && state.rankList.list) raw = state.rankList.list;
+      /* v0.18：好友榜绝不读 state.rankList —— 那份缓存是云榜（主线/连胜）的，
+       * 旧版就是被好友榜这次请求覆盖成空列表，切回来才变成「加载失败」。 */
+      else if (tab !== 2 && state.rankList && state.rankList.list) raw = state.rankList.list;
 
       var list = [];
       for (var i = 0; i < raw.length; i++) {
@@ -3750,7 +4485,8 @@
           c: COL.gold, a: meAvatarUrl() };
         rank = (mc && mc.rank) || (list.length + 1);
       }
-      var top = list.slice(0, 7);
+      var rows = C.RANK.list.rows || 7;
+      var top = list.slice(0, rows);
       var inTop = false;
       for (var k = 0; k < top.length; k++) if (top[k].me) inTop = true;
       return { top: top, mine: mine, rank: rank, inTop: inTop, empty: list.length === 0 };
@@ -3758,7 +4494,7 @@
     var RANK_COLORS = ['#FF8A5B', '#4FA8E0', '#63C88B', '#A87BE8', '#D96A9B', '#FFC53D', '#3FB8B0'];
 
     function rankRow(item, y, idx, highlight) {
-      var x0 = 92, w = 566, h = 74;
+      var L = C.RANK.list, x0 = L.x, w = L.w, h = L.rowH;
       ctx.save();
       if (highlight) shadow(10, 4, 'rgba(255,120,80,0.18)');
       rr(x0, y - h / 2, w, h, 16);
@@ -3787,6 +4523,35 @@
       text(item.v + ' ' + unit, x0 + w - 28, y + 1, 26, highlight ? '#E2624A' : COL.text, 'right', '700');
     }
 
+    /* v0.18：好友榜。真机走开放数据域（离屏画布整块贴进来）；
+     * 浏览器预览没有关系链 —— 调试时用 useMock 画同一套行，正式包不会走到。 */
+    function renderFriendRank(d, ry) {
+      var L = C.RANK.list, img = null;
+      if (friendOn() && state.friendT) {
+        try { img = env.friend.image(); } catch (e) { img = null; }
+      }
+      if (img) {
+        ctx.drawImage(img, L.x, ry, L.w, L.h);
+        text(C.RANK.friendNote, C.DESIGN.w / 2, ry + L.h + 32, 18, COL.textSub, 'center');
+        return;
+      }
+      if (C.RANK.useMock) {
+        /* 与开放数据域同一规矩：自己不在前 7 就顶掉第 7 名，占最后一行。
+         * 否则 7 行 + 我的排名 = 8 行，会压到下面的说明文字。 */
+        var lst = d.top.slice(0);
+        if (!d.inTop && lst.length >= L.rows) lst = lst.slice(0, L.rows - 1);
+        for (var i = 0; i < lst.length; i++) {
+          rankRow(lst[i], ry + i * L.step, i, !!lst[i].me);
+        }
+        if (!d.inTop) rankRow(d.mine, ry + lst.length * L.step + 6, d.rank - 1, true);
+        text('预览示例 · 真机显示微信好友', C.DESIGN.w / 2, ry + L.h + 32, 18, COL.textSub, 'center');
+        return;
+      }
+      text('好友榜要在微信小游戏里看', C.DESIGN.w / 2, ry + 120, 26, COL.text, 'center', '600');
+      text('浏览器预览拿不到微信好友关系链', C.DESIGN.w / 2, ry + 164, 19, COL.textSub, 'center');
+      text('真机上会自动读取已授权好友的通关数', C.DESIGN.w / 2, ry + 196, 19, COL.textSub, 'center');
+    }
+
     function renderRank() {
       var R = C.RANK;
       var W = 660, H = 900, cy = 812;
@@ -3811,24 +4576,28 @@
       }
 
       // 榜单
+      var L = C.RANK.list;
       var d = rankData();
-      var ry = 566 + (y0 - cy), step = 84;
+      var ry = L.top + (y0 - cy), step = L.step;
       if (state.rankTab === 2) {
-        /* 好友榜要开放数据域（openDataContext + wx.getFriendCloudStorage），
-         * 云开发拿不到微信好友关系。这里如实说明，不拿全服数据冒充好友。 */
-        text('好友榜暂未开通', C.DESIGN.w / 2, ry + 96, 26, COL.text, 'center', '600');
-        text('需要开放数据域才能读取微信好友的进度', C.DESIGN.w / 2, ry + 140, 19, COL.textSub, 'center');
-        text('先看「主线榜」和「连胜榜」吧', C.DESIGN.w / 2, ry + 176, 19, COL.textSub, 'center');
+        renderFriendRank(d, ry);
       } else if (state.rankLoading && !d.top.length) {
         text('正在加载榜单…', C.DESIGN.w / 2, ry + 120, 24, COL.textSub, 'center');
+      } else if (state.rankErr && !d.top.length) {
+        /* v0.18：错误优先于「未开启云同步」——能报出具体原因的，就不该用一句
+         * 笼统的降级文案盖过去（这张图也正是用户看到的「数据直接加载失败」）。 */
+        text('榜单加载失败', C.DESIGN.w / 2, ry + 96, 26, COL.text, 'center', '600');
+        text(state.rankErr, C.DESIGN.w / 2, ry + 140, 19, COL.textSub, 'center');
+        /* 给一条活路。以前失败只能关掉重开，重开还是那次失败的缓存 */
+        var bR = { id: 'rank_retry', x: C.DESIGN.w / 2, y: ry + 224, w: 260, h: 76,
+          label: '重新加载', variant: 'primary', size: 26 };
+        addHit(bR.x, bR.y, bR.w, bR.h, 'rank_retry');
+        drawButton(bR);
       } else if (!cloudOn() && !C.RANK.useMock && !state.rankList) {
         text('未开启云同步', C.DESIGN.w / 2, ry + 96, 26, COL.text, 'center', '600');
         /* 给玩家看的话，不是给开发看的：只在真机上永远不该出现在这里 */
         text('当前进度只保存在这台手机上', C.DESIGN.w / 2, ry + 140, 19, COL.textSub, 'center');
         text('开启后可跨设备同步并与全服玩家比进度', C.DESIGN.w / 2, ry + 172, 19, COL.textSub, 'center');
-      } else if (state.rankErr) {
-        text('榜单加载失败', C.DESIGN.w / 2, ry + 96, 26, COL.text, 'center', '600');
-        text(state.rankErr, C.DESIGN.w / 2, ry + 140, 19, COL.textSub, 'center');
       } else if (d.empty) {
         text('还没有人上榜', C.DESIGN.w / 2, ry + 96, 26, COL.text, 'center', '600');
         text('拼完一关就会出现在这里', C.DESIGN.w / 2, ry + 140, 19, COL.textSub, 'center');
@@ -3845,6 +4614,10 @@
         }
       }
       text(C.RANK.useMock ? '示例榜单 · 仅供本地调试'
+        : (state.rankTab === 2) ? (friendOn() ? '好友榜 · 数据来自微信关系链'
+          : '浏览器预览 · 看不到微信好友')
+        : (state.rankErr) ? (d.top.length ? '网络不稳定 · 显示的是上次的榜单' : '加载失败 · 可点上面按钮重试')
+        : (state.rankTab === 1) ? '按历史最高连胜排名 · 每关在一段连胜里只计一次'
         : ((cloudOn() || state.rankList) ? '全服实时榜 · 数据来自云开发' : '本地预览 · 未连接云端'),
         C.DESIGN.w / 2, 1222 + (y0 - cy), 18, COL.textSub, 'center');
 
@@ -3861,7 +4634,9 @@
       state.rankBack = from || null;
       state.overlay = 'rank';
       state.rankT = 0;
-      if (!state.rankList) cloudRank(state.rankTab);   // 首次打开才拉，切页签再拉
+      /* v0.18：每次打开都刷新当前页签。有缓存就先显缓存，
+       * 不再像旧版那样「有 rankList 就不拉了」——那样榜单永远是上次的。 */
+      selectRankTab(state.rankTab);
     }
 
     /* ---------------- v0.8 分享成品图案 ---------------- */
@@ -3919,11 +4694,15 @@
        * （wx.createUserInfoButton 必须由用户点原生按钮才弹授权，画布手势不算）。 */
       syncProfileButton();
 
-      var r1 = { id: 'reset_progress', x: C.DESIGN.w / 2, y: cy + 250, w: 340, h: 84, label: '重置进度', variant: 'secondary', size: 28 };
-      addHit(r1.x, r1.y, r1.w, r1.h, 'reset_progress');
-      drawButton(r1);
+      /* v0.25：删掉 v0.24.1 那枚「重看教程」—— 它把教学藏进了设置二级页，
+       * 新玩家根本不会点进来找。教学归位到每类游戏的第 1 关（见 makeTutorial），
+       * 判据是"这一关通没通关"，所以想过教程把第 1 关重玩一遍就行，不需要入口。 */
+      var r1b = { id: 'reset_progress', x: C.DESIGN.w / 2, y: cy + 246, w: 340, h: 84,
+        label: '重置进度', variant: 'secondary', size: 28 };
+      addHit(r1b.x, r1b.y, r1b.w, r1b.h, 'reset_progress');
+      drawButton(r1b);
 
-      var r2 = { id: 'close_settings', x: C.DESIGN.w / 2, y: cy + 344, w: 300, h: 92, label: '关闭', variant: 'primary', size: 32 };
+      var r2 = { id: 'close_settings', x: C.DESIGN.w / 2, y: cy + 350, w: 300, h: 92, label: '关闭', variant: 'primary', size: 32 };
       addHit(r2.x, r2.y, r2.w, r2.h, 'close_settings');
       drawButton(r2);
 
@@ -3997,57 +4776,58 @@
       hits = [];   // 广告期间吞掉所有点击
     }
 
-    /* v0.10 提示面板：免费档用完后，点提示按钮弹这里。
-     * 先讲清"下一档能多拿到什么"，再让玩家二选一（看视频 / 巧币）；
+    /* v0.10 提示面板 —— v0.16 改版：每关不再送免费档，所以任何一档点开都是这里。
+     * 三选一的付费方式按「对玩家最划算」从上到下排：
+     *   ① 用查找道具（在线奖励 / 邀请有礼得的，囤着不花巧币）
+     *   ② 花巧币直接买一次（不必先囤道具）
+     *   ③ 看视频（最后的兜底）
      * 绝不静默自动播广告，也不把"广告"和"提示"两个概念混在一个按钮里。 */
+    /* v0.20 提示面板：单档，只讲一件事「下一步是哪块、放到哪」。
+     * 旧版这里是 3 个档位圆点 + 档名 + 档描述 + 底部两行小字（来源/余量/星级封顶），
+     * 玩家反馈那两行字既占位置又要读半天，已按 v0.20 需求删除。 */
+    /* v0.22 提示面板：只在「没有查找道具」时才出现。
+     * 有道具时点工具栏是**直接使用**（core 的 'hint' 路由），不进这里；
+     * 所以这一页的常态是两行按钮：花巧币买一次 / 看视频免费一次。
+     * 道具按钮保留但只作为兜底（若被别处以编程方式打开且身上有道具）。 */
     function renderHint() {
-      var H = C.HINT, s = state.save, done = state.hintLv;
-      var ch = 900, cy = sheetBg(640, ch);
+      var H = C.HINT, s = state.save;
+      var busy = !!state.adSim || !!state.adWait;
+      var items = s.hintItems || 0;
+      var hasItem = items > 0 && !busy;
+      /* 多一行道具按钮时面板要高一截，否则底部 × 会被裁掉 */
+      var ch = hasItem ? 720 : 616;
+      var cy = sheetBg(640, ch);
       sheetTitle('提示', cy, ch);
       var top = cy - ch / 2;
+      var y = top + 330;
 
-      /* 三档进度点：已用过的打勾，没用到的显示档号 */
-      for (var i = 0; i < H.maxTier; i++) {
-        var dx = C.DESIGN.w / 2 + (i - 1) * 168;
-        var on = i < done;
-        ctx.save();
-        ctx.beginPath(); ctx.arc(dx, top + 156, 28, 0, Math.PI * 2);
-        ctx.fillStyle = on ? COL.gold : COL.track; ctx.fill();
-        if (!on) { ctx.lineWidth = 2; ctx.strokeStyle = COL.cardEdge; ctx.stroke(); }
-        ctx.restore();
-        text(on ? '✓' : String(i + 1), dx, top + 157, 26, on ? COL.btnText : COL.textSub, 'center', '700');
-        text(H.names[i], dx, top + 208, 22, on ? COL.goldDeep : COL.textSub, 'center', on ? '600' : '400');
-      }
+      text('帮你看下一步', C.DESIGN.w / 2, top + 168, 38, COL.text, 'center', '700');
+      text('圈起来的那块，放到金色虚线处 · 放对前一直亮着', C.DESIGN.w / 2, top + 224, 24, COL.textSub, 'center');
 
-      text('第 ' + (done + 1) + ' 档 · ' + H.names[done], C.DESIGN.w / 2, top + 306, 40, COL.text, 'center', '700');
-      text(H.descs[done], C.DESIGN.w / 2, top + 358, 26, COL.textSub, 'center');
-
-      var busy = !!state.adSim || !!state.adWait;
-      /* v0.15：提示卡（在线奖励 40/60 分钟给的）放在最上面 —— 已有道具先让用，
-       * 再往下才是看视频 / 花巧币，符合「能白嫖的先用掉」的直觉。 */
-      var items = s.hintItems || 0;
-      if (items > 0) {
-        var bItem = { id: 'hint_item', x: C.DESIGN.w / 2, y: top + 430, w: 460, h: 92,
-          label: '用提示卡 · 剩 ' + items, variant: 'primary', size: 28, disabled: busy };
+      /* 主按钮跟着「现在真能用的那条路」走：有道具就高亮道具，
+       * 没道具但巧币够就高亮巧币；两样都没有时只留视频按钮发光。 */
+      if (hasItem) {
+        var bItem = { id: 'hint_item', x: C.DESIGN.w / 2, y: y, w: 480, h: 96,
+          label: '用' + H.itemName + ' · 剩 ' + items, variant: 'primary', size: 28 };
         addHit(bItem.x, bItem.y, bItem.w, bItem.h, 'hint_item');
         drawButton(bItem);
-      } else {
-        text('没有提示卡 · 在线奖励 40 分钟可得', C.DESIGN.w / 2, top + 430, 21, COL.textSub, 'center');
+        y += 104;
       }
 
-      var bAd = { id: 'hint_ad', x: C.DESIGN.w / 2, y: top + 534, w: 480, h: 98,
-        label: '看视频 · 免费看', variant: 'danger', size: 30, icon: 'tv', disabled: busy };
       var canCoin = (s.coin || 0) >= H.coinCost && !busy;
-      var bCoin = { id: 'hint_coin', x: C.DESIGN.w / 2, y: top + 642, w: 420, h: 84,
-        label: (s.coin || 0) >= H.coinCost ? ('花 ' + H.coinCost + ' 巧币') : '巧币不足，看视频吧',
-        variant: 'secondary', size: 28, disabled: !canCoin };
-      addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'hint_ad');
-      addHit(bCoin.x, bCoin.y, bCoin.w, bCoin.h, 'hint_coin');
-      drawButton(bAd); drawButton(bCoin);
+      var bCoin = { id: 'hint_coin', x: C.DESIGN.w / 2, y: y, w: 440, h: 84,
+        label: (s.coin || 0) >= H.coinCost ? ('花 ' + H.coinCost + ' 巧币 · 买 1 次') : ('巧币不足 ' + (s.coin || 0) + '/' + H.coinCost),
+        variant: (!hasItem && canCoin) ? 'primary' : 'secondary', size: 26, disabled: !canCoin };
+      if (canCoin) addHit(bCoin.x, bCoin.y, bCoin.w, bCoin.h, 'hint_coin');
+      drawButton(bCoin);
+      y += 104;
 
-      text('用提示本关最高 ★★ · 重玩可再冲三星', C.DESIGN.w / 2, top + 716, 22, COL.textSub, 'center');
-      text('巧币余额 ' + (s.coin || 0) + ' · 提示卡 ' + items, C.DESIGN.w / 2, top + 752, 22, COL.textSub, 'center');
-      sheetClose(top + 828, 'close_hint');
+      var bAd = { id: 'hint_ad', x: C.DESIGN.w / 2, y: y, w: 480, h: 92,
+        label: '看视频 · 免费一次', variant: 'danger', size: 28, icon: 'tv', disabled: busy };
+      if (!busy) addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'hint_ad');
+      drawButton(bAd);
+
+      sheetClose(y + 104, 'close_hint');
       adLayer();
     }
 
@@ -4055,25 +4835,35 @@
     function renderFail() {
       var cy = sheetBg(600, 820);
       sheetTitle('复活', cy, 820);
+      /* v0.17：这一页要花巧币复活，余额必须可见 —— 弹层遮罩会把对局页顶栏压暗，
+       * 所以在这里把常驻 HUD 重画一遍（位置与对局页完全相同，看起来是浮在遮罩上）。 */
+      playHud(view.safeTop + 40);
       var s = state.save;
       var top = cy - 820 / 2;
       // 大红心
       drawIcon('heart', C.DESIGN.w / 2, top + 175, '#FF5A5A', 3.2);
-      text(s.streak > 0 ? ('已经连胜 ' + s.streak + ' 关了') : '本轮挑战结束',
+      /* v0.18：失败瞬间 streak 已经清零落盘了，这里要显示「断点前的值」，
+       * 否则复活面板会写「本轮挑战结束」——而复活明明还能把连胜接回来。 */
+      var showStreak = Math.max(s.streak || 0, state.streakBeforeFail || 0);
+      text(showStreak > 0 ? ('已经连胜 ' + showStreak + ' 关了') : '本轮挑战结束',
         C.DESIGN.w / 2, top + 305, 32, COL.text, 'center', '600');
-      text('复活可以保持连胜', C.DESIGN.w / 2, top + 355, 26, COL.textSub, 'center');
+      text(showStreak > 0 ? '复活可以保持连胜' : '下次再来，连胜从 1 重新算',
+        C.DESIGN.w / 2, top + 355, 26, COL.textSub, 'center');
 
-      var left = C.ECON.reviveMaxPerLevel - state.reviveUsed;
-      var canAd = left > 0 && !state.adSim;
-      // 广告复活（橙红大按钮；参考图的 +1 心 +90 巧币 放在按钮下方小字）
+      /* v0.23：复活不再设每关上限 —— 反复看视频复活是允许的（用户要求）。
+       * 代价从"被拦住"变成"要花时间看广告"，比硬性封顶更讲得通。 */
+      var canAd = !state.adSim;
+      // 广告复活（橙红大按钮）
       var bAd = { id: 'ad_revive', x: C.DESIGN.w / 2, y: top + 465, w: 440, h: 108,
-        label: left > 0 ? '看广告复活' : '本关复活次数已用完', variant: 'danger', size: 32, icon: 'tv' };
+        label: '看广告复活', variant: 'danger', size: 32, icon: 'tv' };
       if (canAd) addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'ad_revive');
       drawButton(bAd);
-      if (left > 0) text('+1 心  +90 巧币', C.DESIGN.w / 2, top + 545, 24, COL.textSub, 'center', '600');
+      /* v0.23：删掉「+90 巧币」—— 广告复活只给心。
+       * 旧版给币 → 看广告比付费复活还划算 → 最优策略是"故意失败"。 */
+      text('+1 心 · 继续本关', C.DESIGN.w / 2, top + 545, 24, COL.textSub, 'center', '600');
 
       // 巧币复活
-      var canCoin = left > 0 && (s.coin || 0) >= C.ECON.coinRevive && !state.adSim;
+      var canCoin = (s.coin || 0) >= C.ECON.coinRevive && !state.adSim;
       var bCoin = { id: 'coin_revive', x: C.DESIGN.w / 2, y: top + 635, w: 380, h: 84,
         label: '花 ' + C.ECON.coinRevive + ' 巧币复活', variant: 'secondary', size: 28, disabled: !canCoin };
       if (canCoin) addHit(bCoin.x, bCoin.y, bCoin.w, bCoin.h, 'coin_revive');
@@ -4107,33 +4897,6 @@
       drawButton(bShare); drawButton(bAd);
       text('使用次数 ' + used + '/' + total, C.DESIGN.w / 2, top + 510, 24, COL.textSub, 'center');
       sheetClose(top + 700, 'close_energy');
-      adLayer();
-    }
-
-    /* 每日任务 */
-    function renderTasks() {
-      var cy = sheetBg(640, 700);
-      sheetTitle('每日任务', cy, 700);
-      var top = cy - 700 / 2;
-      var arr = taskList();
-      for (var i = 0; i < arr.length; i++) {
-        var t = arr[i], y = top + 190 + i * 132;
-        ctx.save();
-        rr(60, y - 56, C.DESIGN.w - 120, 112, 20);
-        ctx.fillStyle = 'rgba(74,51,39,0.05)'; ctx.fill();
-        ctx.restore();
-        text(t.name, 100, y - 18, 28, COL.text, 'left', '600');
-        text(t.reward, 100, y + 24, 22, COL.goldDeep, 'left');
-        var btn = { id: t.id === 't1' ? 'task_t1' : (t.id === 't2' ? 'task_t2' : 'task_t3'),
-          x: C.DESIGN.w - 150, y: y, w: 160, h: 72,
-          label: t.got ? '已领取' : (t.done ? '领取' : '未完成'),
-          variant: t.done && !t.got ? 'primary' : 'secondary', size: 24,
-          disabled: t.got || !t.done };
-        addHit(btn.x, btn.y, btn.w, btn.h, btn.id);
-        drawButton(btn);
-      }
-      text('每日 0 点刷新', C.DESIGN.w / 2, top + 620, 22, COL.textSub, 'center');
-      sheetClose(top + 740, 'close_sheet');
       adLayer();
     }
 
@@ -4178,7 +4941,7 @@
         var rw = [];
         if (t.energy) rw.push('体力 +' + t.energy);
         if (t.coin) rw.push('巧币 +' + t.coin);
-        if (t.hint) rw.push('提示卡 +' + t.hint);
+        if (t.hint) rw.push(C.HINT.itemName + ' +' + t.hint);
         text(rw.join('   '), 86, y + 22, 21, t.got ? COL.textSub : COL.goldDeep, 'left');
 
         var label = t.got ? '已领取' : (t.ready ? '领取' : ('差 ' + onlineClock(t.left)));
@@ -4192,7 +4955,7 @@
         drawButton(b);
       }
 
-      text('提示卡 ×' + (state.save.hintItems || 0) + ' · 关卡提示面板可直接使用',
+      text(C.HINT.itemName + ' ×' + (state.save.hintItems || 0) + ' · 关卡「提示」面板可直接使用',
         C.DESIGN.w / 2, top + 1030, 21, COL.textSub, 'center');
       sheetClose(top + 1112, 'close_sheet');
       adLayer();
@@ -4205,7 +4968,8 @@
       var top = cy - 600 / 2, s = state.save;
       drawIcon('invite', C.DESIGN.w / 2, top + 180, COL.goldDeep, 3);
       text('邀请好友一起拼图', C.DESIGN.w / 2, top + 300, 32, COL.text, 'center', '600');
-      text('每位好友 +20 巧币（每日 1 次）', C.DESIGN.w / 2, top + 348, 24, COL.textSub, 'center');
+      text('每位好友 +' + C.ECON.inviteCoin + ' 巧币 +' + C.ECON.inviteHint + ' ' + C.HINT.itemName + '（每日 1 次）',
+        C.DESIGN.w / 2, top + 348, 22, COL.textSub, 'center');
       text('已邀请 ' + (s.inviteCount || 0) + ' 人', C.DESIGN.w / 2, top + 400, 24, COL.textSub, 'center');
       var b = { id: 'invite_share', x: C.DESIGN.w / 2, y: top + 490, w: 400, h: 100,
         label: '分享给好友', variant: 'primary', size: 30, icon: 'share' };
@@ -4295,7 +5059,6 @@
       else if (state.overlay === 'fail') renderFail();
       else if (state.overlay === 'hint') renderHint();
       else if (state.overlay === 'energy') renderEnergy();
-      else if (state.overlay === 'tasks') renderTasks();
       else if (state.overlay === 'online') renderOnline();
       else if (state.overlay === 'invite') renderInvite();
       else if (state.overlay === 'desktop') renderDesktop();
@@ -4435,6 +5198,7 @@
       });
       /* v0.15：起表。老存档没有 onlineDay，这里会顺手清零并从 0 开始累计 */
       onlineRoll();
+      publishFriend();          // v0.18：启动先写一次好友榜数据（未授权也能写，只是没资料）
       state.onlineMark = Date.now();
       lastT = 0;
       frame(nowMs());
@@ -4448,9 +5212,9 @@
         handleAt: handleDesign,   // v0.3.2 B1：测试用，返回手柄圆心的设计坐标
         /* v0.5：经济/体力/倒计时/皮肤的工具函数，供 verify_v05 直接驱动 */
         fireBtn: fireBtn, syncEnergy: syncEnergy, onlineClaim: onlineClaim,
-        claimTask: claimTask, applySkin: applySkin, grantFreeEnergy: grantFreeEnergy,
-        doRevive: doRevive, taskList: taskList,
-        /* v0.15：在线奖励（6 档 / 每日 0 点清零）与提示卡 */
+        applySkin: applySkin, grantFreeEnergy: grantFreeEnergy,
+        doRevive: doRevive,
+        /* v0.15：在线奖励（6 档 / 每日 0 点清零）与查找道具 */
         onlineSecNow: onlineSecNow, onlineTierList: onlineTierList,
         onlineClaimCount: onlineClaimCount, onlineClock: onlineClock,
         onlineSync: onlineSync, useHintItem: useHintItem, onlineTick: onlineTick,
@@ -4458,6 +5222,17 @@
         /* v0.9：云同步 / 广告 / 榜单，供 verify_v09 直接驱动 */
         cloudPush: cloudPush, cloudPull: cloudPull, cloudRank: cloudRank,
         openRank: openRank, netText: netText, adRect: adRect, syncBanner: syncBanner, go: go,
+        /* v0.18：页签缓存 / 好友榜 / 连胜口径，供 verify_v18 直接驱动 */
+        selectRankTab: selectRankTab, rankData: rankData, rankValue: rankValue,
+        friendStats: friendStats, publishFriend: publishFriend, friendOn: friendOn,
+        openFriendRank: openFriendRank, failLevel: failLevel,
+        /* v0.19：连胜口径（段内去重）直接驱动 —— 放弃 / 复活 / 通关 三条路径 */
+        giveUp: giveUp,
+        /* v0.24：把当前帧的点击热区表交出去，供 verify_v24 校验"按钮是否同一排 / 是否重叠" */
+        hitList: function () { return hits.slice(); },
+        /* v0.21：教学步骤 / 跳过，供 verify_v21 直接断言 */
+        tutStep: tutStep, tutSkip: tutSkip,
+        mergeSave: mergeSave, collectCloud: collectCloud,
         /* v0.14：玩家资料 —— 供 verify_v14 直接驱动（授权 / 改名 / 云端覆盖） */
         meNick: meNick, applyProfile: applyProfile, profileStateText: profileStateText,
         requestProfile: requestProfile, renameProfile: renameProfile,

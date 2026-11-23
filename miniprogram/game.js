@@ -11,6 +11,7 @@ var data = require('./js/levels.js');
 var core = require('./js/core.js');
 var cloudLib = require('./js/cloud.js');     // v0.9：微信登录 + 云存档 + 真实榜单
 var profileLib = require('./js/wxprofile.js'); // v0.14：微信昵称 / 头像（原生授权按钮）
+var friendLib = require('./js/friendrank.js'); // v0.18：好友榜（开放数据域 + 微信托管数据）
 var adLib = require('./js/ad.js');           // v0.9：banner / 激励视频 / 插屏
 
 /* ---------------- 画布 ---------------- */
@@ -140,21 +141,25 @@ function noiseBurst(dur, gain, filterFreq, delay) {
   } catch (e) {}
 }
 
+/* v0.20 音效重做：全部改成「低频为主 + 极短衰减」的木质感。
+ * 依据是把参考视频的音轨拆开实测 —— 操作音的能量 65% 落在 0~1kHz、
+ * 1~3kHz 只占 8%、衰减 10~15ms；而旧版 sfx_snap 是 1500Hz 带通噪声 +
+ * 880→420 方波，1~3kHz 特别重，听感发尖发刺，这就是"难听"的主因。
+ * 现在：tap = 620→480Hz 短点；pick = 392→523Hz 上滑；snap = 196→147Hz
+ * 加 98Hz 的"笃"（只留一丝 700Hz 木质接触声）；win 去掉原来 1568Hz 的高频
+ * 冠音（最刺耳），低音补一层 C5 垫底，242ms 顶点仍与鲜花动效对齐。 */
 var synth = {
-  sfx_tap: function () { tone(1500, 0.045, 'triangle', 0.1); noiseBurst(0.03, 0.05, 2600); },
-  sfx_pick: function () { tone(620, 0.07, 'sine', 0.16); noiseBurst(0.05, 0.10, 1200); },
-  sfx_snap: function () { noiseBurst(0.05, 0.24, 1500); tone(880, 0.06, 'square', 0.09, 0, 420); },
+  sfx_tap: function () { tone(620, 0.055, 'sine', 0.085, 0, 480); tone(1240, 0.022, 'sine', 0.028); },
+  sfx_pick: function () { tone(392, 0.075, 'sine', 0.115, 0, 523); tone(1046, 0.030, 'sine', 0.026); },
+  sfx_snap: function () { tone(196, 0.085, 'sine', 0.21, 0, 147); tone(98, 0.070, 'sine', 0.12); noiseBurst(0.020, 0.055, 700); },
   sfx_win: function () {
-    // v0.3.4 A4b：欢快通关 sting — C 大调上行琶音 + 顶点重音 + 收束和弦（约 0.82s）
-    // offset 与动画线鲜花关键帧共用 state.win.t 基准：242ms 顶点重音对齐主花绽放峰值
-    // triangle 上行（明亮），C6 gain 0.16 做重音；sine 收束和弦高频压低 gain 防刺耳
-    tone(523.25, 0.12, 'triangle', 0.13, 0.000);  // C5 — t=0 起苞
-    tone(659.25, 0.12, 'triangle', 0.13, 0.082);  // E5 — 卫星花区
-    tone(783.99, 0.13, 'triangle', 0.14, 0.162);  // G5 — 卫星花②
-    tone(1046.50, 0.22, 'triangle', 0.16, 0.242); // C6 — ★顶点重音，对齐主花峰值 242ms
-    tone(1046.50, 0.50, 'sine', 0.10, 0.300);     // C6 和弦根
-    tone(1318.51, 0.48, 'sine', 0.09, 0.330);     // E6 和弦三音
-    tone(1567.98, 0.46, 'sine', 0.06, 0.360);     // G6 和弦冠（压低高频）
+    tone(523.25, 0.14, 'triangle', 0.10, 0.000);  // C5 — 起苞
+    tone(659.25, 0.14, 'triangle', 0.10, 0.082);  // E5 — 卫星花区
+    tone(783.99, 0.15, 'triangle', 0.11, 0.162);  // G5 — 卫星花②
+    tone(1046.50, 0.24, 'sine', 0.13, 0.242);     // C6 — ★顶点，对齐主花峰值 242ms
+    tone(523.25, 0.62, 'sine', 0.07, 0.242);      // C5 — 低音垫底（参考视频低频厚）
+    tone(783.99, 0.52, 'sine', 0.06, 0.300);      // G5
+    tone(1046.50, 0.50, 'sine', 0.05, 0.340);     // C6
   }
 };
 
@@ -670,6 +675,7 @@ function boot() {
     images: images,
     cloud: cloudLib.createCloud(),           // 没配 CLOUD.envId 时 enabled() 返回 false
     profile: profileLib.createProfile(),     // v0.14：微信昵称/头像（不可用时 core 自动降级）
+    friend: friendLib.createFriend(),        // v0.18：好友榜（开放数据域，不可用时降级文案）
     ad: adLib.createAd(),                    // 没配 unitId 时 banner 空操作、rewarded 不存在
     share: function (opt) {                   // v0.5 邀请有礼 / v0.8 分享成品图案
       opt = opt || {};
