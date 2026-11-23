@@ -1,0 +1,38 @@
+[
+  {
+    "name": "v22_badge3_750",
+    "ok": true,
+    "size": 255705,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v22_badge12_750",
+    "ok": true,
+    "size": 256056,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v22_direct_750",
+    "ok": true,
+    "size": 264493,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v22_panel_noitem_750",
+    "ok": true,
+    "size": 219440,
+    "dim": [
+      750,
+      1624
+    ]
+  }
+]

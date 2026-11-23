@@ -1,0 +1,74 @@
+[
+  {
+    "name": "v24_result_first_750",
+    "ok": true,
+    "size": 242692,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v24_result_ad_750",
+    "ok": true,
+    "size": 240310,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v24_result_repeat_750",
+    "ok": true,
+    "size": 243334,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v24_fail_750",
+    "ok": true,
+    "size": 207661,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v24_result_glow_peak_750",
+    "ok": true,
+    "size": 242616,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v24_result_named_750",
+    "ok": true,
+    "size": 245564,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v241_settings_750",
+    "ok": true,
+    "size": 297072,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v241_tut_level1_750",
+    "ok": true,
+    "size": 265961,
+    "dim": [
+      750,
+      1624
+    ]
+  }
+]

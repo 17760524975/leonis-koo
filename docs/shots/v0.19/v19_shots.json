@@ -1,0 +1,29 @@
+[
+  {
+    "name": "v19_rank_streak_750",
+    "ok": true,
+    "size": 249384,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v19_fail_revive_750",
+    "ok": true,
+    "size": 209085,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v19_result_streak_750",
+    "ok": true,
+    "size": 201802,
+    "dim": [
+      750,
+      1624
+    ]
+  }
+]

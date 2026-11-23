@@ -1,0 +1,38 @@
+[
+  {
+    "name": "v23_result_first_750",
+    "ok": true,
+    "size": 210796,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v23_result_ad_750",
+    "ok": true,
+    "size": 210251,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v23_result_repeat_750",
+    "ok": true,
+    "size": 213198,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v23_fail_750",
+    "ok": true,
+    "size": 207717,
+    "dim": [
+      750,
+      1624
+    ]
+  }
+]

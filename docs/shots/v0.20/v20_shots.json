@@ -1,0 +1,29 @@
+[
+  {
+    "name": "v20_hint_panel_750",
+    "ok": true,
+    "size": 215655,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v20_hint_tray_750",
+    "ok": true,
+    "size": 265240,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v20_hint_move_750",
+    "ok": true,
+    "size": 268074,
+    "dim": [
+      750,
+      1624
+    ]
+  }
+]

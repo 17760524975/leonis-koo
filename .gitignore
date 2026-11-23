@@ -15,3 +15,6 @@ desktop.ini
 
 # 音频母带（34MB，本地保留；打包后的 90s/48kbps 版本已入库 assets/audio/）
 audio/*.mp3
+
+# 小游戏工程目录里误留的内嵌仓库（2.6MB，克隆时不需要）
+miniprogram/.git/

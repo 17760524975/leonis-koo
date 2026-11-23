@@ -1,0 +1,38 @@
+[
+  {
+    "name": "v21_tut4_drag_750",
+    "ok": true,
+    "size": 266114,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v21_tut4_flip_750",
+    "ok": true,
+    "size": 255433,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v21_tut7_rot_750",
+    "ok": true,
+    "size": 267004,
+    "dim": [
+      750,
+      1624
+    ]
+  },
+  {
+    "name": "v21_restart_keep_750",
+    "ok": true,
+    "size": 254924,
+    "dim": [
+      750,
+      1624
+    ]
+  }
+]
