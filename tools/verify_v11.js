@@ -182,31 +182,21 @@ section('3. mp3 资源与包体');
 const assets = ['preview/assets/audio', 'miniprogram/assets/audio'];
 for (const dir of assets) {
   const d = path.join(ROOT, dir);
-  /* v0.29.2：三首新曲 + 5 条 stem + 紧张层 + 新胜利音 + 失败音 */
-  const want = ['bgm_dawn.mp3', 'bgm_starlit.mp3', 'bgm_flow.mp3',
-    'stem_flow_pad.mp3', 'stem_flow_arp.mp3', 'stem_flow_bass.mp3',
-    'stem_flow_perc.mp3', 'stem_flow_lead.mp3', 'layer_tension.mp3',
-    'sfx_win_fanfare.mp3', 'sfx_fail.wav'];
-  check(`${dir} 新音频资源齐`, want.every(f => fs.existsSync(path.join(d, f))), want.join(','));
-  check(`${dir} 已删旧 4 首关卡曲 / 旧胜利音`,
-    ['bgm_lv1.mp3', 'bgm_lv2.mp3', 'bgm_lv3.mp3', 'bgm_lv4.mp3', 'sfx_win.mp3']
-      .every(f => !fs.existsSync(path.join(d, f))));
+  /* v0.12：主页换成合成和弦，assets 里只留 4 首关卡曲 */
+  const want = ['bgm_lv1.mp3', 'bgm_lv2.mp3', 'bgm_lv3.mp3', 'bgm_lv4.mp3'];
+  check(`${dir} 四首关卡曲齐`, want.every(f => fs.existsSync(path.join(d, f))), want.join(','));
+  check(`${dir} 已删旧 bgm_main / bgm_home`,
+    !fs.existsSync(path.join(d, 'bgm_main.mp3')) && !fs.existsSync(path.join(d, 'bgm_home.mp3')));
   const sizes = want.map(f => fs.existsSync(path.join(d, f)) ? fs.statSync(path.join(d, f)).size : 0);
   check(`${dir} 单曲 < 700KB`, sizes.every(s => s > 0 && s <= 700 * 1024), sizes.map(s => Math.round(s / 1024) + 'KB').join(' / '));
   const sum = sizes.reduce((a, b) => a + b, 0);
-  check(`${dir} 新版音频合计 < 2MB`, sum < 2 * 1024 * 1024, (sum / 1024 / 1024).toFixed(2) + 'MB');
+  check(`${dir} 关卡 BGM 合计 < 2.5MB`, sum < 2.5 * 1024 * 1024, (sum / 1024 / 1024).toFixed(2) + 'MB');
 }
 const pkg = walkSize(path.join(ROOT, 'miniprogram'));
 check('小游戏主包 < 4MB（微信硬限制）', pkg < 4 * 1024 * 1024, (pkg / 1024 / 1024).toFixed(2) + 'MB');
 check('配置里的关卡曲名与文件一致',
   CFG.AUDIO.bgm.lv.every(f => fs.existsSync(path.join(ROOT, 'miniprogram/assets/audio', f))));
-check('主页 / 关卡列表 / 对局三首曲已配置',
-  CFG.AUDIO.bgm.home === 'bgm_dawn.mp3' && CFG.AUDIO.bgm.levels === 'bgm_starlit.mp3'
-    && CFG.AUDIO.bgm.play === 'bgm_flow.mp3',
-  `${CFG.AUDIO.bgm.home} / ${CFG.AUDIO.bgm.levels} / ${CFG.AUDIO.bgm.play}`);
-check('动态混音 6 路 stem 齐全',
-  Object.keys(CFG.AUDIO.mix.stems).length === 6 && Object.keys(CFG.AUDIO.mix.presets).length === 4,
-  Object.keys(CFG.AUDIO.mix.stems).join(','));
+check('主页不再引用任何音频文件', CFG.AUDIO.bgm.home === '', "'" + CFG.AUDIO.bgm.home + "'");
 
 section('4. 提示选块：先挑没上板的，再挑上板没放对的');
 playAt(0);

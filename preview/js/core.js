@@ -1338,10 +1338,6 @@
         if (page === 'home' || page === 'levels') env.audio.setScene('home');
         else if (page === 'play') env.audio.setScene(bgmSceneKey());
       }
-      /* v0.29.2：新 BGM 由「页面」决定曲目（setScene 仍保留旧调用给老版本音频层），
-       * setMix 驱动对局动态混音的平静 / 专注预设。老音频层没有这些方法时静默跳过。 */
-      if (env.audio.setPage) env.audio.setPage(page);
-      if (env.audio.setMix) env.audio.setMix(page === 'play' ? 'play' : 'calm');
       if (page !== 'play') { state.running = false; }
       /* v0.14：切页就撤掉盖在画布上的原生授权按钮，别让它留在别的页面上 */
       if (state.overlay !== 'settings') hideProfileButton();
@@ -1657,7 +1653,6 @@
       if (state.tut) state.tut = null;
       state.flower = { t: 0 };   // v0.3.4 A4a：鲜花与音乐共用这一时刻起算
       env.audio.play('sfx_win');
-      if (env.audio.setMix) env.audio.setMix('win');   // v0.29.2：全声部齐鸣
       /* 星级沿用策划 5.7 原规则（三星=时限+步数；二星=时限内）。
        * v0.3 A3 变更点：用提示（hint_used）从「只给 1 星」放宽为「封顶 ★★☆」。
        * v0.20：取消这条封顶 —— 提示从「三档作弊（含看全图）」收窄成「指一步」，
@@ -2412,13 +2407,6 @@
         if (state.timeLeft > 0 && !tutFreeze) {
           state.timeLeft = Math.max(0, state.timeLeft - dt / 1000);
           state.hearts = heartsOf(state.timeLeft, state.timeLimit || 1);
-          /* v0.29.2：倒计时进入最后 20% → 紧张层淡入，鼓点与低音顶上来。
-           * setMix 内部会去重，逐帧调用不会反复重排程；结算/教学不抢 win 预设。 */
-          var MX = C.AUDIO && C.AUDIO.mix;
-          if (MX && env.audio.setMix && !state.win) {
-            var leftRatio = state.timeLimit ? state.timeLeft / state.timeLimit : 1;
-            env.audio.setMix(leftRatio <= (MX.tenseAt || 0.2) ? 'tense' : 'play');
-          }
           if (state.timeLeft <= 0) failLevel();
         }
         /* v0.21 教学：每帧看"下一块还差什么"，全部放对就自动收尾 */

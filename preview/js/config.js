@@ -9,7 +9,7 @@
   'use strict';
 
   return {
-    version: 'v0.29.2',
+    version: 'v0.29.3',
 
     /* ---------- 品牌（v0.6 改名「方寸巧拼」） ----------
      * 游戏名只在这里定义一次：主页标题、分享文案、工程名都从这里取，
@@ -741,11 +741,11 @@
      * 之所以按「关卡序号」而不是「通关次数」算：同一个关卡每次进来听同一首，
      * 玩家对关卡与音乐的对应关系是稳定的；重玩旧关也不会跳曲。 */
     BGM: {
-      home: { name: '主页 · 晨光微语' },
-      lv1: { name: '对局 · 巧思时刻（动态混音）' },
-      lv2: { name: '对局 · 巧思时刻（动态混音）' },
-      lv3: { name: '对局 · 巧思时刻（动态混音）' },
-      lv4: { name: '对局 · 巧思时刻（动态混音）' },
+      home: { name: '主页·暖阳' },
+      lv1: { name: '关卡 1 · Monkeys Spinning Monkeys' },
+      lv2: { name: '关卡 2 · Carefree' },
+      lv3: { name: '关卡 3 · we never（千年之后）' },
+      lv4: { name: '关卡 4 · Cheery Monday' },
       scenes: ['lv1', 'lv2', 'lv3', 'lv4'],
       levelsPerTrack: 5,      // 每 5 关换一首
       /* 换曲淡出/淡入时长（ms）。真机 InnerAudioContext 不支持采样级淡变，
@@ -780,37 +780,18 @@
       files: {
         sfx_pick: 'sfx_pick.wav',
         sfx_snap: 'sfx_snap.wav',
+        sfx_win: 'sfx_win.mp3',
         sfx_tap: 'sfx_tap.wav',
-        /* v0.29.2：用户试听通过后启用的新版胜利音与拼接失败音。 */
-        sfx_win_fanfare: 'sfx_win_fanfare.mp3',
+        /* v0.29.2 新增、v0.29.3 音频回退后仍保留：拼接失败音（仅在真实重叠时响）。 */
         sfx_fail: 'sfx_fail.wav'
       },
-      /* v0.29.2：三首新曲替换旧的 5 首 BGM。
-       *   主页 = 晨光微语（dawn），关卡列表 = 星海漫游（starlit），
-       *   对局 = 巧思时刻（flow）的 5 条 stem 动态混音。
-       * lv 数组仅为兼容旧场景键 / file:// 元素池兜底，四项都指向 flow 全混。 */
+      /* 主页 / 关卡四首（顺序即文件名数字顺序）
+       * v0.12：主页不再用 mp3 —— home 留空表示"走下面的合成和弦"（pad）。
+       * 关卡仍是真人 mp3，一关一首、每 5 关换一首。
+       * v0.29.3：用户试玩后反馈新曲 + 动态混音的体验不如旧版，整体回退到这套。 */
       bgm: {
-        home: 'bgm_dawn.mp3',
-        levels: 'bgm_starlit.mp3',
-        play: 'bgm_flow.mp3',
-        lv: ['bgm_flow.mp3', 'bgm_flow.mp3', 'bgm_flow.mp3', 'bgm_flow.mp3']
-      },
-      /* v0.29.2 动态混音：5 条 stem + 紧张层，增益与 audio-lab/试听.html 的预设一致。
-       * 同一时刻 start() 排程，避免微信 InnerAudioContext 多路播放的时钟漂移。 */
-      mix: {
-        trim: 0.42,                        // 5 路叠加后的总线衰减，给软限幅留余量
-        stems: {
-          pad: 'stem_flow_pad.mp3', arp: 'stem_flow_arp.mp3', bass: 'stem_flow_bass.mp3',
-          perc: 'stem_flow_perc.mp3', lead: 'stem_flow_lead.mp3', tension: 'layer_tension.mp3'
-        },
-        presets: {
-          calm:  { pad: 0.70, arp: 0.55, bass: 0.60, perc: 0.08, lead: 0.35, tension: 0 },
-          play:  { pad: 0.55, arp: 0.60, bass: 0.65, perc: 0.45, lead: 0.70, tension: 0 },
-          tense: { pad: 0.45, arp: 0.15, bass: 0.80, perc: 0.85, lead: 0.10, tension: 0.55 },
-          win:   { pad: 0.75, arp: 0.80, bass: 0.55, perc: 0.55, lead: 0.95, tension: 0 }
-        },
-        fadeMs: 280,
-        tenseAt: 0.20                      // 剩余时间 < 20% 切紧张层
+        home: '',
+        lv: ['bgm_lv1.mp3', 'bgm_lv2.mp3', 'bgm_lv3.mp3', 'bgm_lv4.mp3']
       },
       /* ---------- v0.13 主页轻音乐（纯合成，零音频文件） ----------
        * v0.12 那版是四个正弦长音慢起慢落，实测听感像风琴/嗡鸣（"难听"），
@@ -864,11 +845,11 @@
        * 不处理的话，同一音量下第 3、4 首会突然变响，主页又显得很轻。
        * 这里把每首乘一个系数拉到约 -20 dBFS（trim = 10^((-20 - RMS)/20)）。
        * 系数直接乘在音量上，峰值仍有余量（最热的 lv4：-0.2dBFS × 0.52 × 0.55 ≈ -11dBFS）。 */
-      trim: { home: 1.00, bgm_dawn: 1.00, bgm_starlit: 0.92, bgm_flow: 0.88, bgm_lv1: 0.88, bgm_lv2: 0.88, bgm_lv3: 0.88, bgm_lv4: 0.88 },
+      trim: { home: 1.70, bgm_lv1: 1.53, bgm_lv2: 1.66, bgm_lv3: 0.65, bgm_lv4: 0.52 },
       sfxVolume: 1.0,
       /* v0.20：音效整体重做成"低频为主"的木质感（见 game.js 的 synth 注释），
        * 三个短音的响度重新配平：吸附最响（反馈最重要）、点击最轻。 */
-      sfxGain: { sfx_snap: 1.00, sfx_win: 0.95, sfx_pick: 0.85, sfx_tap: 0.70, sfx_fail: 0.55, sfx_win_fanfare: 0.85 },
+      sfxGain: { sfx_snap: 1.00, sfx_win: 0.95, sfx_pick: 0.85, sfx_tap: 0.70, sfx_fail: 0.55 },
       fadeMs: 220,
       tapGuardMs: 40,
       snapVoices: 2
