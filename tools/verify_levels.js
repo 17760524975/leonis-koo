@@ -65,7 +65,19 @@ quiet = false;
 console.log(`  ${DATA.levels.length} 关全部检完：覆盖率最低 ${(minCover * 100).toFixed(3)}%、溢出最高 ${(maxOver * 100).toFixed(3)}%、面积误差最大 ${(maxAreaErr * 100).toFixed(4)}%、有真重叠 ${overlapBad} 关`);
 
 console.log('\n==== 2. 多解不误杀（同轮廓的另一种摆法）====');
-const report = require('./out/levels_report.json');
+/* tools/out/levels_report.json 是关卡构建器的本地构建产物
+ * （node tools/enumerate.js && node tools/build_levels.js 生成），不随源码入库。
+ * 缺失时优雅降级：跳过本节，1/3/4 节照常验收，不因此判失败。
+ * 注意：不要为跑本节而直接重跑 build_levels.js —— 它会覆写 js/levels.js。 */
+let report = { alts: {} };
+let reportOk = false;
+try {
+  report = require('./out/levels_report.json');
+  reportOk = true;
+} catch (e) {
+  console.log('  [跳过] 缺少构建产物 tools/out/levels_report.json，本节不参与判定');
+  console.log('         生成方式：node tools/enumerate.js && node tools/build_levels.js');
+}
 
 /* 替代摆法在枚举时是「A 板固定在原位」的独立帧，可能整体旋转/镜像过。
  * 这里用各板质心做最小二乘拟合，找出与关卡解一致的刚体变换，再送去判定。
@@ -137,7 +149,9 @@ for (const lv of DATA.levels) {
   }
 }
 quiet = false;
-console.log(`  对齐失败跳过 ${altSkipped} 种；替代摆法不通过 ${altFail} 种`);
+console.log(reportOk
+  ? `  对齐失败跳过 ${altSkipped} 种；替代摆法不通过 ${altFail} 种`
+  : '  本节已跳过（缺少构建产物，非代码缺陷）');
 console.log(`  共测试 ${altTested} 种替代摆法`);
 
 console.log('\n==== 3. 反例（必须判不通关）====');

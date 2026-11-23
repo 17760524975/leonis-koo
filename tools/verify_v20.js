@@ -293,9 +293,27 @@ function profile(file) {
   check('两端都没有旧的 1500 / 2600Hz 噪声',
     !/noise\(\s*0\.0\d+,\s*0\.\d+,\s*(1500|2600)/.test(gPrev) &&
     !/noiseBurst\(\s*0\.0\d+,\s*0\.\d+,\s*(1500|2600)/.test(gMp));
-  check('吸附音改成低频下滑（196→147 + 98Hz）',
-    /tone\(196,\s*0\.0\d+,[^)]*147\)/.test(gPrev) && /tone\(98,/.test(gPrev) &&
-    /tone\(196,\s*0\.0\d+,[^)]*147\)/.test(gMp) && /tone\(98,/.test(gMp));
+  /* v0.28 起音效改为「配置驱动」：SFX_BASE.snap = {f,d,g,to,f2,d2,g2}，
+   * buildSfxSynth() 按风格缩放播放，源码里不再有硬编码的 tone(196,...,147)。
+   * v0.20 的旧正则因此失效（实现本身没退化）。验证意图保持不变：
+   * 吸附音必须是 196→147Hz 低频下滑 + 98Hz 的「笃」，且两端一致；
+   * 下方还有对 sfx_snap.wav 的实测频谱断言（0~300Hz 占比、衰减、高频占比）。 */
+  const snapCfg = s => {
+    const m = s.match(/snap:\s*\{([^}]*)\}/);
+    if (!m) return null;
+    const num = k => {
+      const x = m[1].match(new RegExp('\\b' + k + ':\\s*([0-9.]+)'));
+      return x ? +x[1] : null;
+    };
+    return { f: num('f'), to: num('to'), f2: num('f2') };
+  };
+  const snapPrev = snapCfg(gPrev), snapMp = snapCfg(gMp);
+  const snapOk = c => !!c && c.f === 196 && c.to === 147 && c.f2 === 98;
+  check('吸附音改成低频下滑（196→147 + 98Hz，配置驱动）',
+    snapOk(snapPrev) && snapOk(snapMp),
+    snapPrev && snapMp
+      ? `preview ${snapPrev.f}→${snapPrev.to}+${snapPrev.f2}Hz / miniprogram ${snapMp.f}→${snapMp.to}+${snapMp.f2}Hz`
+      : '未找到 SFX_BASE.snap 配置');
   check('通关音去掉了 1568Hz 的高频冠音', gPrev.indexOf('1567.98') < 0 && gMp.indexOf('1567.98') < 0);
   check('通关音仍保留 242ms 顶点（鲜花动效对齐）',
     /0\.242/.test(gPrev) && /0\.242/.test(gMp));
