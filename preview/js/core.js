@@ -1203,24 +1203,9 @@
       else if (kind === 'coin5') grantWinAdMul();   // v0.23：结算页 ×5
     }
 
-    /* ---------------- v0.9 广告位 ---------------- */
-    /* 设计坐标 → CSS 坐标（原生 banner 只认屏幕 px，不认画布变换） */
-    function adRect() {
-      var A = LAY.AD;
-      return {
-        x: view.ox + A.x * view.scale,
-        y: view.oy + A.y * view.scale,
-        w: A.w * view.scale,
-        h: A.h * view.scale
-      };
-    }
-    var bannerOn = false;
-    function syncBanner(show, force) {
-      if (!env.ad || !env.ad.banner) return;
-      if (show === bannerOn && !force) return;
-      bannerOn = show;
-      try { env.ad.banner(show, show ? adRect() : null); } catch (e) {}
-    }
+    /* ---------------- v0.9 广告位（v0.33：banner 下线） ----------------
+     * 原生 banner 预留区（LAY.AD）已随卡纸放大一并移除，adRect/syncBanner 删除。
+     * 激励视频 / 插屏仍走 env.ad.rewarded / env.ad.interstitial，不受影响。 */
     function adAvailable() {
       return !!(env.ad && env.ad.rewarded);
     }
@@ -1392,7 +1377,6 @@
       if (page !== 'play') { state.running = false; }
       /* v0.14：切页就撤掉盖在画布上的原生授权按钮，别让它留在别的页面上 */
       if (state.overlay !== 'settings') hideProfileButton();
-      syncBanner(page === 'play');       // v0.9：只在拼图页挂 banner
       /* v0.6：离开对局页就收掉通关鲜花/结算态，避免下次进来还在飘 */
       if (page !== 'play') { state.win = null; state.flower = null; }
       // 进关卡页时跳到「当前进度所在章」，关卡再多也不该每次都从第 1 章翻起
@@ -4266,30 +4250,13 @@
       ctx.restore();
 
       /* v0.17：顶栏右侧常驻巧币 / 体力余量（局内买提示、复活都要扣巧币）。
-       * 与倒计时胶囊同一条水平线，右端对齐广告位右沿，不挂热区 ——
+       * 与倒计时胶囊同一条水平线（v0.29.1 起回到左上角，见 HUD_MIN），不挂热区 ——
        * 局内点开面板会打断拼图，展示就够了。
        * 复活 / 结算弹层会在自己的遮罩之上再画一遍（否则会被压暗），这里别重复画：
        * 半透明深底叠两次会比正常页面明显更黑。 */
       if (state.overlay !== 'fail' && state.overlay !== 'result') playHud(by);
 
-      /* v0.9 顶部广告位（LAY.AD）：真机由原生 banner 盖在这块空白上，
-       * 画布只铺一层浅底把它"托"住；预览端画虚线占位框，方便对位验收。
-       * 不注册任何 hit，避免误点广告。 */
-      var AD = LAY.AD;
-      ctx.save();
-      rr(AD.x, AD.y, AD.w, AD.h, 18);
-      ctx.fillStyle = 'rgba(255,255,255,0.52)';
-      ctx.fill();
-      if (env.ad && env.ad.placeholder) {
-        ctx.setLineDash([10, 8]);
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = 'rgba(122,138,156,0.5)';
-        ctx.stroke();
-        ctx.setLineDash([]);
-        text('广告位 · banner', C.DESIGN.w / 2, AD.y + AD.h / 2, 22,
-          'rgba(122,138,156,0.85)', 'center', '500');
-      }
-      ctx.restore();
+      /* v0.33：原 v0.9 顶部广告位（LAY.AD）已移除，这块位置直接让给拼图卡纸。 */
 
       /* 拼图卡纸 */
       var B = LAY.BOARD;
@@ -6185,8 +6152,6 @@
       var si = env.safeInsets ? env.safeInsets() : { top: 0, bottom: 0 };
       view.safeTop = Math.max(C.SAFE.top, (si.top || 0) / view.scale);
       view.safeBottom = Math.max(C.SAFE.bottom, (si.bottom || 0) / view.scale);
-      /* 原生 banner 不跟画布缩放：窗口尺寸/安全区一变就得重新摆一次 */
-      if (typeof bannerOn !== 'undefined' && bannerOn) syncBanner(true, true);
       /* v0.14：原生授权按钮同理，重算一次位置（不然转屏后会错位） */
       if (state.overlay === 'settings') syncProfileButton();
       var cv = ctx.canvas;
@@ -6332,9 +6297,10 @@
         timeLimitOf: timeLimitOf, heartsOf: heartsOf, totalStars: totalStars,
         /* v0.31：主页自适应布局（细长屏底部锚定）—— 验收脚本据此取点击坐标 */
         homeLayout: homeLayout, designH: DH,
-        /* v0.9：云同步 / 广告 / 榜单，供 verify_v09 直接驱动 */
+        /* v0.9：云同步 / 榜单，供 verify_v09 直接驱动
+         * （v0.33：banner 相关的 adRect/syncBanner 已随广告位移除） */
         cloudPush: cloudPush, cloudPull: cloudPull, cloudRank: cloudRank,
-        openRank: openRank, netText: netText, adRect: adRect, syncBanner: syncBanner, go: go,
+        openRank: openRank, netText: netText, go: go,
         /* v0.18：页签缓存 / 好友榜 / 连胜口径，供 verify_v18 直接驱动 */
         selectRankTab: selectRankTab, rankData: rankData, rankValue: rankValue,
         friendStats: friendStats, publishFriend: publishFriend, friendOn: friendOn,
