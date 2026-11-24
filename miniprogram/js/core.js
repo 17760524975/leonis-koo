@@ -401,6 +401,71 @@
       return true;
     }
 
+    /* ---------------- v0.36 全局在线状态 ----------------
+     * 在线奖励原本和钱包一样，是塞在「四巧 / 七巧各自一份存档」里的
+     * （onlineDay / onlineSec / onlineGot）。切一次玩法就等于换了一套计时：
+     * 另一边从 0 开始重新累计、6 档又能再领一遍，等于一天领两轮。
+     * 用户要求「不区分四巧和七巧，统一只有一个在线时长统计，一天只能领取一次」。
+     * 做法沿用 v0.31 视觉设置 / v0.34 全局钱包：抽成独立的一个键，
+     * 读档时覆盖、写盘时同步；两套存档里的同名字段只是云同步的镜像。
+     * 奖励档位不变（1/5/10/20/40/60 分钟共 6 档），每档每天各一次，
+     * 但「今天」的计时与已领记录全游戏只有这一份，切玩法不能重复领。
+     *
+     * 首次升级没有这个键时，扫描两份老存档把「今天」的状态合并成一份：
+     * 时长取较大值（不亏待玩家），已领档位取并集（防止升级后重复领）。
+     * 昨天的记录一律不迁 —— 迁过来只会让今天白送一轮。 */
+    var ONLINE_KEY = 'tangram_online_v1';
+    function loadOnline() {
+      var raw = null;
+      try { raw = env.storage.get(ONLINE_KEY); } catch (e) { raw = null; }
+      if (!raw) return null;
+      var o = raw;
+      if (typeof raw === 'string') { try { o = JSON.parse(raw); } catch (e) { return null; } }
+      return (o && typeof o === 'object') ? o : null;
+    }
+    function writeOnline(src) {
+      var s = src || (state && state.save) || {};
+      var o = {
+        onlineDay: s.onlineDay || '',
+        onlineSec: (typeof s.onlineSec === 'number' && isFinite(s.onlineSec)) ? s.onlineSec : 0,
+        onlineGot: (s.onlineGot && typeof s.onlineGot === 'object') ? s.onlineGot : {}
+      };
+      try { env.storage.set(ONLINE_KEY, JSON.stringify(o)); } catch (e) { /* 隐私模式静默降级 */ }
+      return o;
+    }
+    function mergeOnlineInto(out, o) {
+      if (!o || typeof o !== 'object') return;
+      if (typeof o.onlineSec === 'number' && isFinite(o.onlineSec) && o.onlineSec > out.onlineSec) {
+        out.onlineSec = o.onlineSec;
+      }
+      var g = o.onlineGot, k;
+      if (g && typeof g === 'object') { for (k in g) if (g[k]) out.onlineGot[k] = true; }
+    }
+    function seedOnline(cur) {
+      var d = todayKey(), out = { onlineDay: d, onlineSec: 0, onlineGot: {} }, i;
+      var ks = saveKeys();
+      for (i = 0; i < ks.length; i++) {
+        var o = readSaveByKey(ks[i]);
+        if (o && o.onlineDay === d) mergeOnlineInto(out, o);
+      }
+      /* 当前这份可能还没落盘（比如刚跨天清零），一并纳入 */
+      if (cur && cur.onlineDay === d) mergeOnlineInto(out, cur);
+      writeOnline(out);
+      return out;
+    }
+    function applyOnlineTo(s) {
+      var o = loadOnline();
+      if (!o) o = seedOnline(s);
+      s.onlineDay = (typeof o.onlineDay === 'string') ? o.onlineDay : '';
+      s.onlineSec = (typeof o.onlineSec === 'number' && isFinite(o.onlineSec) && o.onlineSec >= 0)
+        ? Math.min(C.ONLINE.maxSec, o.onlineSec) : 0;
+      var g = (o.onlineGot && typeof o.onlineGot === 'object') ? o.onlineGot : {};
+      var got = {}, k;
+      for (k in g) if (g[k]) got[k] = true;   /* 克隆，别和全局对象共用引用 */
+      s.onlineGot = got;
+      return true;
+    }
+
     /* ---------------- 存档 ---------------- */
     function defaultSave() {
       var E = C.ECON;
@@ -525,6 +590,8 @@
       if (!applyVisualTo(s)) s.bgFx = 'geometric';
       /* v0.34：巧币 / 体力一律以全局钱包为准 —— 切数据集不再换余额 */
       applyWalletTo(s);
+      /* v0.36：在线时长 / 已领记录一律以全局键为准 —— 切数据集不再重开一轮 */
+      applyOnlineTo(s);
       return s;
     }
     /* keepTs=true：只落盘、不刷新 updatedAt。
@@ -535,6 +602,8 @@
       try { env.storage.set(SAVE_KEY, JSON.stringify(state.save)); } catch (e) { /* 隐私模式静默降级 */ }
       /* v0.34：钱包跟着每次落盘同步，两套存档里的同名字段只是云同步的镜像 */
       writeWallet(state.save);
+      /* v0.36：在线状态同理 —— 15 秒一次的计时落盘、领取、切后台都走这里 */
+      writeOnline(state.save);
     }
     function persist() {
       writeLocal();
@@ -737,8 +806,10 @@
        * 合并出来的 streak 与集合对不上，玩家重打已经断开过的关时会被误判成「本段计过」。 */
       out.streakSeen = (newer.streakSeen || []).slice();
       out.bestStreak = Math.max(a.bestStreak || 0, b.bestStreak || 0);
-      /* v0.15：在线时长是「这台设备今天待了多久」，不能拿云端那份覆盖本机，
-       * 否则换设备一登录就凭空多出几小时、白领一轮奖励；已领记录同源，一并保留本地。 */
+      /* v0.36：在线状态是「这台设备今天待了多久」，不能拿云端那份覆盖本机，
+       * 否则换设备一登录就凭空多出几小时、白领一轮奖励。这里先按本地兜底，
+       * 末尾再由 applyOnlineTo(out) 用全局键统一覆盖 —— 四巧 / 七巧两份镜像
+       * 与云端旧值都不会把「今天已领」冲掉。 */
       out.onlineDay = a.onlineDay || '';
       out.onlineSec = a.onlineSec || 0;
       out.onlineGot = a.onlineGot || {};
@@ -751,15 +822,25 @@
       /* v0.31：视觉设置是全局的，合并后仍然以全局键为准 —— 否则换设备登录后
        * 会拿云端那份旧配色把本机刚选的皮肤盖掉。 */
       applyVisualTo(out);
+      /* v0.36：合并结果里的在线字段一律以全局键为准（本机权威、跨玩法共用） */
+      applyOnlineTo(out);
       return out;
     }
 
     function collectCloud() {
       writeLocal();
-      var sets = {}, ks = saveKeys(), i;
+      var sets = {}, ks = saveKeys(), i, gOn = loadOnline();
       for (i = 0; i < ks.length; i++) {
         var o = readSaveByKey(ks[i]);
-        if (o) sets[ks[i]] = o;
+        if (!o) continue;
+        /* v0.36：在线状态全局唯一。上行前把每份存档里的镜像对齐到全局键，
+         * 否则云端会同时存着「四巧 700 秒 / 七巧 0 秒」两份分叉统计。 */
+        if (gOn) {
+          o.onlineDay = gOn.onlineDay || '';
+          o.onlineSec = gOn.onlineSec || 0;
+          o.onlineGot = gOn.onlineGot || {};
+        }
+        sets[ks[i]] = o;
       }
       var stars = 0, cleared = 0, best = state.save.bestStreak || 0, sk, lv;
       for (sk in sets) {
@@ -1397,6 +1478,10 @@
      * 不重建 game 实例 → 不会重复 bindInput / 重复启动 rAF 主循环。 */
     function useSet(key) {
       if (!SETS || !SETS[key] || key === state.setKey) return;
+      /* v0.36：在线状态是全局的。切玩法前先把这一刻的累计秒数结算并落盘，
+       * 否则 loadSave() 会拿 15 秒前那次落盘的旧值把刚待的这段时间抹掉，
+       * 玩家会看到「切一次玩法，今日在线倒退」。 */
+      if (state.save) { onlineSync(); writeLocal(true); }
       var b = buildSet(key);
       DS = b.ds; LEVELS = b.levels; LOCAL = b.LOCAL; TRAY_BB = b.TRAY_BB;
       SLOT_POS = b.SLOT_POS; CHAP_PER = b.chapPer; CHAP_NAMES = b.chapNames;
@@ -1404,6 +1489,9 @@
       SAVE_KEY = b.saveKey; SNAP_GRID = b.snapGrid;
       state.setKey = key;
       state.save = loadSave();
+      /* v0.36：把全局在线状态回写进刚载入的这份存档，两套镜像不分叉
+       * （玩家看不到镜像，但云端上行会读它；见 collectCloud） */
+      writeLocal(true);
       state.settingsFx = state.save.settings.sfx !== false;
       state.settingsBgm = state.save.settings.bgm !== false;
       applyAudio();
@@ -5911,7 +5999,8 @@
       var sec = onlineSecNow(), arr = onlineTierList();
       var i;
 
-      text('今日累计在线', C.DESIGN.w / 2, top + 112, 22, COL.textSub, 'center');
+      /* v0.36：明确告诉玩家这是「全游戏共用一份」的计时，切玩法不会重新开一轮 */
+      text('今日累计在线 · 四巧 / 七巧共用', C.DESIGN.w / 2, top + 112, 22, COL.textSub, 'center');
       text(onlineClock(sec), C.DESIGN.w / 2, top + 158, 54, COL.goldDeep, 'center', '700');
 
       /* 进度条：到「下一个还没领的档」的完成度。全领完就满格 */
@@ -6470,6 +6559,9 @@
       });
       /* v0.15：起表。老存档没有 onlineDay，这里会顺手清零并从 0 开始累计 */
       onlineRoll();
+      /* v0.36：把「今天的全局在线状态」立刻落一次盘（含首次播种 / 跨天清零），
+       * 之后每 15 秒由 onlineTick 续写；不动 updatedAt，避免误判云端新旧。 */
+      writeLocal(true);
       publishFriend();          // v0.18：启动先写一次好友榜数据（未授权也能写，只是没资料）
       state.onlineMark = Date.now();
       lastT = 0;
@@ -6494,6 +6586,9 @@
         onlineSecNow: onlineSecNow, onlineTierList: onlineTierList,
         onlineClaimCount: onlineClaimCount, onlineClock: onlineClock,
         onlineSync: onlineSync, useHintItem: useHintItem, onlineTick: onlineTick,
+        /* v0.36：全局在线状态（跨数据集共用），供 verify_v036 直接驱动 */
+        onlineKey: ONLINE_KEY, loadOnline: loadOnline, writeOnline: writeOnline,
+        applyOnlineTo: applyOnlineTo,
         timeLimitOf: timeLimitOf, heartsOf: heartsOf, totalStars: totalStars,
         /* v0.31：主页自适应布局（细长屏底部锚定）—— 验收脚本据此取点击坐标 */
         homeLayout: homeLayout, designH: DH,
