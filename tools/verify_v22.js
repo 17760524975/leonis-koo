@@ -110,7 +110,7 @@ function badgeTexts() {
 
   /* ================= 1. 配置 ================= */
   section('1. 版本与配置');
-  check('版本 v0.22 起（v0.23 继续沿用本版规则）', /^v0\.2[2-9](\.\d+)?$/.test(CFG.version), CFG.version);
+  check('版本 v0.22 起（v0.23 继续沿用本版规则）', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
   check('提示价格 30 巧币（v0.23）', H.coinCost === 30, String(H.coinCost));
   check('道具名仍是「查找道具」', H.itemName === '查找道具', H.itemName);
 

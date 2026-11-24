@@ -319,6 +319,9 @@
       timeLeft: 0,          // 剩余秒数（倒计）
       hearts: 3,            // 由 timeLeft 映射的 3/2/1 心
       reviveUsed: 0,        // 本关已复活次数
+      /* v0.35：本关已看完的激励视频次数（提示 / 复活 / ×5 三类合计，上限见 ECON.adPerLevel）。
+       * 换关清零；"重开"不清 —— 重开还是同一局、同一个倒计时，额度不该白送。 */
+      adLv: 0,
       /* v0.21：教学关状态（null = 不在教学）。{ t } —— 指令内容每帧由 tutStep() 算 */
       tut: null,
       toast: null,          // { text, t } 轻提示
@@ -1231,11 +1234,20 @@
     }
 
     /* ---- 模拟广告（个人主体无流量主：adSimMs 进度条后发奖） ---- */
+    /* v0.35：本关看视频额度（提示 / 复活 / 结算 ×5，合计上限 ECON.adPerLevel=3）。
+     * 体力面板的看视频**不占额度** —— 那是全局钱包，跟哪一关无关。 */
+    var AD_LV_KINDS = { hint: 1, revive: 1, coin5: 1 };
+    function adLvLimit() { return C.ECON.adPerLevel || 3; }
+    function adLvLeft() { return Math.max(0, adLvLimit() - (state.adLv || 0)); }
     /* 激励视频：有真实广告位就走 wx 的激励视频（看完才发奖），
      * 没有（预览端 / 未开流量主 / 广告拉取失败）再退回原来的模拟播放。
      * 注意：真广告「没看完」不发奖，这是流量主结算的前提，不能作弊友好。 */
     function adStart(kind) {
       if (state.adSim || state.adWait) return;
+      if (AD_LV_KINDS[kind] && adLvLeft() <= 0) {
+        toast('本关看视频次数已用完（最多 ' + adLvLimit() + ' 次）');
+        return;
+      }
       env.audio.play('sfx_tap');
       if (adAvailable()) {
         state.adWait = kind;
@@ -1254,6 +1266,8 @@
       adFinishKind(kind);
     }
     function adFinishKind(kind) {
+      /* 只在这条"真发奖"的路径上计数：拉不到广告 / 用户中途退出都不扣额度 */
+      if (AD_LV_KINDS[kind]) state.adLv = (state.adLv || 0) + 1;
       if (kind === 'energy') grantFreeEnergy(true);
       else if (kind === 'revive') doRevive(true);
       else if (kind === 'invite') doInviteShare();
@@ -1598,6 +1612,9 @@
         state.timeLeft = tl;
         state.hearts = C.TIMER.hearts;
         state.reviveUsed = 0;
+        /* v0.35：新的一关 → 看视频额度重新给满 3 次（keepTimer 的"重开"不清，
+         * 那是同一局接着打，额度不该因为点了一下刷新就回满）。 */
+        state.adLv = 0;
       }
       /* v0.21：每类游戏的第 1 关是教学关 */
       state.tut = makeTutorial(idx, opts);
@@ -2863,15 +2880,47 @@
         text(b.label, b.x + (b.icon ? 18 : 0), b.y + dy, b.size || 32, fg, 'center', '600');
       } else if (b.variant === 'tool') {
         var dis = !!b.disabled;
-        rr(x, y, b.w, b.h, 24);
-        ctx.fillStyle = dis ? COL.disabledBg : COL.card;
-        ctx.fill();
-        ctx.lineWidth = 1.5; ctx.strokeStyle = dis ? COL.disabledBg : COL.cardEdge;
-        ctx.stroke();
-        noShadow();
-        // v0.4 A3：翻转按钮 tip 汉字已删除，图标恢复满尺寸居中（v0.3.2 布局）
-        drawIcon(b.icon, b.x, b.y + dy,
-          dis ? COL.disabledIcon : COL.text, b.iconScale || 1);
+        /* v0.35：对局页工具栏换成「糖果按钮」——五枚各自带柔光底色 + 6px 厚底边，
+         * 按下去整体下移 2px，像捏了一颗软糖。图标用同色系深一档的墨色，
+         * 只有提示（灯泡）按用户要求固定是黄色。
+         * b.tone 为空时仍走原来的白卡样式（主页入口、返回按钮都是白卡，
+         * 那里不能变 —— 它们是"导航"，不是"操作玩具"）。 */
+        if (b.tone) {
+          var tn = b.tone;
+          var cx0 = b.x - b.w / 2, cy0 = b.y - b.h / 2 + dy;
+          ctx.save();
+          if (!dis) shadow(0, 7, 'rgba(122,98,66,0.16)');
+          var tg = ctx.createLinearGradient(0, cy0, 0, cy0 + b.h);
+          tg.addColorStop(0, dis ? '#F8FAFD' : tn.bg1);
+          tg.addColorStop(1, dis ? '#EEF2F7' : tn.bg2);
+          rr(cx0, cy0, b.w, b.h, 30);
+          ctx.fillStyle = tg; ctx.fill();
+          noShadow();
+          ctx.save(); rr(cx0, cy0, b.w, b.h, 30); ctx.clip();
+          /* 底部厚边：糖果的"厚度"，也是按下的视觉锚 */
+          ctx.fillStyle = dis ? '#E4EAF1' : tn.edge;
+          ctx.fillRect(cx0, cy0 + b.h - 6, b.w, 9);
+          /* 左上柔光 */
+          if (ctx.ellipse) {
+            ctx.beginPath();
+            ctx.ellipse(b.x - b.w * 0.06, cy0 + 15, b.w * 0.30, 9, 0, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fill();
+          }
+          ctx.restore();
+          drawIcon(b.icon, b.x, b.y + dy - 3,
+            dis ? COL.disabledIcon : tn.ink, b.iconScale || 1.16);
+          ctx.restore();
+        } else {
+          rr(x, y, b.w, b.h, 24);
+          ctx.fillStyle = dis ? COL.disabledBg : COL.card;
+          ctx.fill();
+          ctx.lineWidth = 1.5; ctx.strokeStyle = dis ? COL.disabledBg : COL.cardEdge;
+          ctx.stroke();
+          noShadow();
+          // v0.4 A3：翻转按钮 tip 汉字已删除，图标恢复满尺寸居中（v0.3.2 布局）
+          drawIcon(b.icon, b.x, b.y + dy,
+            dis ? COL.disabledIcon : COL.text, b.iconScale || 1);
+        }
         if (b.badge) {
           /* v0.3 A3 角标（右上角小圆 + 数字）。
            * v0.22：数字从"档号"变成"道具个数"，可能是两位数（囤了 12 个），
@@ -2959,17 +3008,33 @@
         ctx.lineWidth = 2.4; ctx.strokeStyle = '#0E6FA8'; ctx.stroke();
         ctx.fillStyle = '#FFFFFF'; ctx.fill();
       } else if (name === 'hint') {
-        /* 查找道具：放大镜 + 镜柄 + 镜内星芒（"找"的语义，而不是灯泡） */
-        ctx.lineWidth = 3.4; ctx.strokeStyle = shadeHex(color, -0.15);
-        ctx.beginPath(); ctx.arc(-2, -3, 9.5, 0, Math.PI * 2); ctx.stroke();
-        ctx.fillStyle = hexA(color, 0.22); ctx.fill();
-        ctx.lineWidth = 4.6; ctx.beginPath();
-        ctx.moveTo(5, 4.5); ctx.lineTo(13, 13); ctx.stroke();
-        ctx.lineWidth = 1.8; ctx.strokeStyle = shadeHex(color, -0.3);
-        ctx.beginPath(); ctx.moveTo(-2, -9); ctx.lineTo(-2, 3);
-        ctx.moveTo(-8, -3); ctx.lineTo(4, -3); ctx.stroke();
-        ctx.fillStyle = '#FFFFFF';
-        ctx.beginPath(); ctx.arc(-4.5, -6, 2.1, 0, Math.PI * 2); ctx.fill();
+        /* 查找道具（v0.35）：用户要求把放大镜换成**黄色灯泡**。
+         * 结构从下往上：两道螺纹底座 → 玻璃球（黄渐变 + 深黄描边）→ 外圈光晕 → 左侧高光。
+         * 光晕用径向渐变而不是描边，缩到 46px 也还是一颗"亮着的灯泡"。 */
+        var by0 = -3.6;
+        var glow = ctx.createRadialGradient(0, by0, 3, 0, by0, 21);
+        glow.addColorStop(0, 'rgba(255,214,92,0.60)');
+        glow.addColorStop(1, 'rgba(255,214,92,0)');
+        ctx.beginPath(); ctx.arc(0, by0, 21, 0, Math.PI * 2);
+        ctx.fillStyle = glow; ctx.fill();
+        /* 玻璃球：上 3/4 圆 + 收口到颈部 */
+        ctx.beginPath();
+        ctx.arc(0, by0, 10.6, Math.PI * 0.80, Math.PI * 2.20);
+        ctx.quadraticCurveTo(8.2, by0 + 11, 4.6, 10.4);
+        ctx.lineTo(-4.6, 10.4);
+        ctx.quadraticCurveTo(-8.2, by0 + 11, -8.4, by0 + 9.6);
+        ctx.closePath();
+        var bg2 = ctx.createLinearGradient(-9, -12, 7, 12);
+        bg2.addColorStop(0, '#FFE888'); bg2.addColorStop(0.55, '#FFCC4D'); bg2.addColorStop(1, '#F5A623');
+        ctx.fillStyle = bg2; ctx.fill();
+        ctx.lineWidth = 2.2; ctx.strokeStyle = '#D9861A'; ctx.stroke();
+        /* 螺纹底座 */
+        ctx.lineWidth = 2.4; ctx.strokeStyle = '#C57C16';
+        ctx.beginPath(); ctx.moveTo(-4.8, 14.2); ctx.lineTo(4.8, 14.2); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(-4.0, 18.0); ctx.lineTo(4.0, 18.0); ctx.stroke();
+        /* 高光 */
+        ctx.beginPath(); ctx.arc(-3.6, by0 - 3.4, 3.1, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fill();
       } else if (name === 'rank') {
         /* 排行榜：奖杯（杯身 + 双耳 + 底座），替换原三根柱子 */
         ctx.lineWidth = 3; ctx.strokeStyle = shadeHex(color, -0.18);
@@ -3044,40 +3109,61 @@
         ctx.moveTo(6, -r); ctx.lineTo(-8, 0); ctx.lineTo(6, r);
         ctx.stroke();
       } else if (name === 'rotL' || name === 'rotR') {
-        var dir = name === 'rotR' ? 1 : -1;
+        /* v0.35：圆环箭头重画（可爱版）—— 粗描边 + 圆头 + 实心胖箭头。
+         * 两枚的箭头都落在**正上方**（这样并排时一眼能比方向）：
+         *   顺时针箭头朝右（↻）、逆时针箭头朝左（↺）；
+         *   缺口 70° 分别镜像到右上 / 左上。
+         * 踩过的坑：逆时针若照顺时针那组角度反扫，扫过的是整圈 360°，
+         * 环会闭合、缺口和箭头一起消失。 */
+        var cw = name === 'rotR';
+        var R2 = 12.4, TH = -Math.PI * 0.5;
+        ctx.lineWidth = 5.2; ctx.lineCap = 'round';
         ctx.beginPath();
-        ctx.arc(0, 2, r * 0.8, dir > 0 ? -0.5 : Math.PI - 2.2, dir > 0 ? 2.2 : Math.PI + 0.5, dir < 0);
+        if (cw) ctx.arc(0, 0, R2, TH + Math.PI * 0.39, TH + Math.PI * 2, false);
+        else ctx.arc(0, 0, R2, TH - Math.PI * 0.39, TH - Math.PI * 2, true);
         ctx.stroke();
-        var a = dir > 0 ? 2.2 : Math.PI - 2.2;
-        var px = Math.cos(a) * r * 0.8, py = 2 + Math.sin(a) * r * 0.8;
+        ctx.save();
+        ctx.translate(0, -R2);
+        if (!cw) ctx.rotate(Math.PI);
         ctx.beginPath();
-        ctx.moveTo(px - 8, py - 3);
-        ctx.lineTo(px + 6, py + 5);
-        ctx.lineTo(px + 2, py - 10);
-        ctx.closePath();
-        ctx.fill();
-      } else if (name === 'flip') {
-        // ⇄ 双向箭头：上排向右、下排向左（原版是"竖线+三角"，辨识度太低，改成标准双向箭头）
-        ctx.beginPath();
-        ctx.moveTo(-13, -7); ctx.lineTo(12, -7);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(13, -7); ctx.lineTo(6, -12.5); ctx.lineTo(6, -1.5);
+        ctx.moveTo(7.6, 0); ctx.lineTo(-5.6, -6.4); ctx.lineTo(-2.2, 0); ctx.lineTo(-5.6, 6.4);
         ctx.closePath(); ctx.fill();
+        ctx.restore();
+      } else if (name === 'flip') {
+        /* v0.35：左右翻转（可爱版）—— 上下两支粗圆头箭头反向指，
+         * 笔画加粗、箭头放大。原来的中间虚线轴在 46px 下会压住箭头，
+         * 反而读成"两条虚线"，已去掉。 */
+        ctx.lineWidth = 5; ctx.lineCap = 'round';
+        /* 上排向右 */
+        ctx.beginPath(); ctx.moveTo(-13, -7.5); ctx.lineTo(10, -7.5); ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(13, 7); ctx.lineTo(-12, 7);
-        ctx.stroke();
+        ctx.moveTo(14, -7.5); ctx.lineTo(5.4, -12.6); ctx.lineTo(5.4, -2.4);
+        ctx.closePath(); ctx.fill();
+        /* 下排向左 */
+        ctx.beginPath(); ctx.moveTo(13, 7.5); ctx.lineTo(-10, 7.5); ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(-13, 7); ctx.lineTo(-6, 1.5); ctx.lineTo(-6, 12.5);
+        ctx.moveTo(-14, 7.5); ctx.lineTo(-5.4, 2.4); ctx.lineTo(-5.4, 12.6);
         ctx.closePath(); ctx.fill();
       } else if (name === 'restart') {
-        ctx.beginPath();
-        ctx.arc(0, 0, r * 0.85, -0.6, 4.4);
-        ctx.stroke();
-        var ax = Math.cos(-0.6) * r * 0.85, ay = Math.sin(-0.6) * r * 0.85;
-        ctx.beginPath();
-        ctx.moveTo(ax - 9, ay - 1); ctx.lineTo(ax + 5, ay + 6); ctx.lineTo(ax + 2, ay - 9);
-        ctx.closePath(); ctx.fill();
+        /* v0.35：刷新（可爱版）—— 双箭头圆环（⟳），两个头都朝顺时针。
+         * 不能再画成单箭头圆环：那和两枚旋转按钮长得几乎一样，玩家分不清
+         * "转 90°" 和 "整盘重来"。 */
+        var R3 = 12.4;
+        ctx.lineWidth = 5; ctx.lineCap = 'round';
+        var arcs = [[Math.PI * 0.55, Math.PI * 1.45], [Math.PI * 1.55, Math.PI * 2.45]];
+        for (var ai = 0; ai < 2; ai++) {
+          ctx.beginPath();
+          ctx.arc(0, 0, R3, arcs[ai][0], arcs[ai][1], false);
+          ctx.stroke();
+          var hEnd = arcs[ai][1];
+          ctx.save();
+          ctx.translate(Math.cos(hEnd) * R3, Math.sin(hEnd) * R3);
+          ctx.rotate(Math.atan2(Math.cos(hEnd), -Math.sin(hEnd)));
+          ctx.beginPath();
+          ctx.moveTo(7.2, 0); ctx.lineTo(-5.4, -6.0); ctx.lineTo(-2.1, 0); ctx.lineTo(-5.4, 6.0);
+          ctx.closePath(); ctx.fill();
+          ctx.restore();
+        }
       } else if (name === 'lock') {
         ctx.lineWidth = 3.5;
         rr(-11, -2, 22, 18, 4); ctx.fill();
@@ -4324,24 +4410,28 @@
 
       /* v0.33：原 v0.9 顶部广告位（LAY.AD）已移除，这块位置直接让给拼图卡纸。 */
 
-      /* 拼图卡纸 */
+      /* 拼图卡纸
+       * v0.35：纸面是 734×842 的竖长方形，盘面（1000×1000 世界映射）仍是顶对齐的 734 正方形。
+       * 多出来的 108px 是纸的页脚，进度条搬进去了 —— 纸面加高但没有一片空白区。 */
       var B = LAY.BOARD;
+      var BH = B.h || B.size;
       ctx.save();
       shadow(16, 4, COL.shadow);
-      rr(B.x, B.y, B.size, B.size, 28);
+      rr(B.x, B.y, B.size, BH, 28);
       ctx.fillStyle = COL.card; ctx.fill();
       noShadow();
       ctx.restore();
       // 纸纹（极淡）
       var paper = env.images && env.images.board_paper;
       if (paper) {
-        ctx.save(); rr(B.x, B.y, B.size, B.size, 28); ctx.clip();
-        ctx.drawImage(paper, B.x, B.y, B.size, B.size);
+        ctx.save(); rr(B.x, B.y, B.size, BH, 28); ctx.clip();
+        ctx.drawImage(paper, B.x, B.y, B.size, BH);
         ctx.restore();
       } else {
-        ctx.save(); rr(B.x, B.y, B.size, B.size, 28); ctx.clip();
+        ctx.save(); rr(B.x, B.y, B.size, BH, 28); ctx.clip();
         ctx.strokeStyle = 'rgba(44,58,75,0.022)'; ctx.lineWidth = 1;
-        for (var i = 0; i < 26; i++) {
+        var rows = Math.round(BH / 27);
+        for (var i = 0; i < rows; i++) {
           var yy = B.y + 20 + i * 27;
           ctx.beginPath(); ctx.moveTo(B.x, yy); ctx.lineTo(B.x + B.size, yy + 6); ctx.stroke();
         }
@@ -4444,8 +4534,18 @@
         }
       }
 
-      /* 覆盖率进度条 */
+      /* 覆盖率进度条
+       * v0.35：从「卡纸外独立一行」搬进卡纸页脚。页脚顶画一条极淡分隔线，
+       * 让下半截读起来像卡片的"信息栏"，而不是一片没画完的白。 */
       var P = LAY.PROGRESS;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(44,58,75,0.065)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(B.x + 26, B.y + B.size + 24);
+      ctx.lineTo(B.x + B.size - 26, B.y + B.size + 24);
+      ctx.stroke();
+      ctx.restore();
       text('覆盖', P.x, P.y + P.h / 2, 26, COL.textSub, 'left');
       var px = P.x + 74, pw = P.w - 144;   // v0.9：右侧留 70 给百分比，绿条走满不再穿字
       rr(px, P.y, pw, P.h, P.h / 2);
@@ -4482,6 +4582,16 @@
       if (state.tut) drawTutTip(lv);
 
       /* 工具栏 */
+      /* 工具栏（v0.35：五枚糖果按钮的配色表）
+       * 底色两档渐变 + 一支深色"厚度边"，图标取同色系深一档；
+       * 提示按钮固定黄色（用户指定：黄色灯泡）。 */
+      var TOOL_TONE = {
+        rot_ccw: { bg1: '#EAF6FF', bg2: '#D2EAFB', edge: '#AED6F2', ink: '#3E9BD8' },
+        rot_cw:  { bg1: '#E9FBF3', bg2: '#D0F2E4', edge: '#B0E2CF', ink: '#33AC84' },
+        flip:    { bg1: '#F5EFFF', bg2: '#E7DAFE', edge: '#D2BEF7', ink: '#8A68E0' },
+        hint:    { bg1: '#FFF9E4', bg2: '#FFEDBC', edge: '#FFDA8C', ink: '#F2A73B' },
+        restart: { bg1: '#FFF1EE', bg2: '#FFE0DA', edge: '#FFC7BD', ink: '#EF6F5D' }
+      };
       var sel = pieceOf(state.selId);
       var tools = [
         { id: 'rot_ccw', icon: 'rotL', disabled: !sel },
@@ -4502,6 +4612,7 @@
           id: tools[i2].id, x: TOOL_X[i2], y: TOOL_Y,
           w: LAY.TOOLBAR.w, h: LAY.TOOLBAR.h,
           variant: 'tool', icon: tools[i2].icon, disabled: tools[i2].disabled,
+          tone: TOOL_TONE[tools[i2].id],
           badge: tools[i2].badge        // v0.10：剩余档位角标（之前漏传，角标根本没画出来）
         };
         addHit(tb.x, tb.y, tb.w, tb.h, tb.id);
@@ -5236,6 +5347,7 @@
       var rw = W.rewardW, rh = W.rewardH, ry = W.rewardY + dy;
       var res = state.result || { first: false, gain: 0, adUsed: false };
       var mul = C.ECON.coinWinAdMul || 5;
+      var adLeft = adLvLeft();       // v0.35：本关还剩几次看视频（提示/复活/×5 共用）
       ctx.save();
       rr(C.DESIGN.w / 2 - rw / 2, ry - rh / 2, rw, rh, rh / 2);
       ctx.fillStyle = res.first ? 'rgba(255,185,61,0.14)' : 'rgba(120,130,146,0.10)';
@@ -5255,7 +5367,7 @@
         gainTxt = '首通奖励 +' + (res.gain * mul) + ' 巧币 · 已翻 ' + mul + ' 倍';
         gainCol = COL.goldDeep;
       } else {
-        gainTxt = '首通奖励 +' + res.gain + ' 巧币';
+        gainTxt = '首通奖励 +' + res.gain + ' 巧币 · 本关视频 ' + adLeft + '/' + adLvLimit();
         gainCol = COL.text;
       }
       text(gainTxt, C.DESIGN.w / 2, ry + 1, 23, gainCol, 'center', '600');
@@ -5264,11 +5376,14 @@
        * 原来 ×5 缩在奖励条末端（宽 160、高 42），既小又和"这局给了什么"
        * 挤在同一行，主次不清。现在奖励条独占一行讲结果，动作统一收到这一排：
        * 有 ×5 可领时两枚并排（排宽 552 居中），否则主按钮单独 360 居中。 */
-      var canAd = res.first && res.gain > 0 && !res.adUsed;
+      /* v0.35：本关看视频额度用完时，×5 按钮**留在原位但置灰**——
+       * 直接消失会让「下一关」突然占满整排，玩家以为是界面错乱。 */
+      var showMul = res.first && res.gain > 0 && !res.adUsed;
+      var canAd = showMul && adLeft > 0;
       /* v0.34：两枚主按钮同宽同高（W.primaryW === W.adMulW、共用 W.primaryH），
        * 单独一枚时也不再放大到 360，避免「有广告时小、没广告时大」来回跳。 */
       var nextW = W.primaryW, nextX = C.DESIGN.w / 2, adX = 0;
-      if (canAd) {
+      if (showMul) {
         var rowW = W.adMulW + W.btnGap + W.primaryW;
         var rowX0 = C.DESIGN.w / 2 - rowW / 2;
         adX = rowX0 + W.adMulW / 2;
@@ -5276,12 +5391,13 @@
         nextW = W.primaryW;
       }
 
-      if (canAd) {
+      if (showMul) {
         /* 用 danger 而不是 primary：全 App 的「看视频」都是橙红（提示面板、
          * 复活弹窗），保持"红=看广告"的一致语义；也和金色的「下一关」区分开。 */
         var bMul = { id: 'win_ad5', x: adX, y: W.primaryY + dy, w: W.adMulW, h: W.primaryH,
-          label: '看视频 ×' + mul, variant: 'danger', size: 22, disabled: !!state.adSim };
-        if (!state.adSim) addHit(bMul.x, bMul.y, bMul.w, bMul.h, 'win_ad5');
+          label: canAd ? ('看视频 ×' + mul) : '本关已看完',
+          variant: 'danger', size: canAd ? 22 : 20, disabled: !!state.adSim || !canAd };
+        if (canAd && !state.adSim) addHit(bMul.x, bMul.y, bMul.w, bMul.h, 'win_ad5');
         drawButton(bMul);
       }
 
@@ -5691,12 +5807,22 @@
       drawButton(bCoin);
       y += 104;
 
+      /* v0.35：本关看视频有次数上限（提示/复活/×5 共用 3 次），用完就置灰并改文案，
+       * 不能让玩家点了之后只弹一句 toast —— 那样每次都要多试一次才知道没额度。 */
+      var adLvOk = adLvLeft() > 0;
       var bAd = { id: 'hint_ad', x: C.DESIGN.w / 2, y: y, w: 480, h: 92,
-        label: '看视频 · 免费一次', variant: 'danger', size: 28, icon: 'tv', disabled: busy };
-      if (!busy) addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'hint_ad');
+        label: adLvOk ? '看视频 · 免费一次' : '本关看视频次数已用完',
+        variant: 'danger', size: adLvOk ? 28 : 24, icon: 'tv',
+        disabled: busy || !adLvOk };
+      if (!busy && adLvOk) addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'hint_ad');
       drawButton(bAd);
-
-      sheetClose(y + 104, 'close_hint');
+      if (adLvOk) {
+        text('本关还可看 ' + adLvLeft() + '/' + adLvLimit() + ' 次（含复活与 ×5）',
+          C.DESIGN.w / 2, y + 74, 20, COL.textSub, 'center');
+        sheetClose(y + 130, 'close_hint');
+      } else {
+        sheetClose(y + 104, 'close_hint');
+      }
       adLayer();
     }
 
@@ -5720,16 +5846,20 @@
         C.DESIGN.w / 2, top + 355, 26, COL.textSub, 'center');
 
       /* v0.23：复活不再设每关上限 —— 反复看视频复活是允许的（用户要求）。
-       * 代价从"被拦住"变成"要花时间看广告"，比硬性封顶更讲得通。 */
-      var canAd = !state.adSim;
+       * v0.35：但整个"看视频"总额度有上限（ECON.adPerLevel=3），用完置灰。 */
+      var adLvOk = adLvLeft() > 0;
+      var canAd = !state.adSim && adLvOk;
       // 广告复活（橙红大按钮）
       var bAd = { id: 'ad_revive', x: C.DESIGN.w / 2, y: top + 465, w: 440, h: 108,
-        label: '看广告复活', variant: 'danger', size: 32, icon: 'tv' };
+        label: adLvOk ? '看广告复活' : '本关看视频次数已用完',
+        variant: 'danger', size: adLvOk ? 32 : 26, icon: 'tv', disabled: !adLvOk };
       if (canAd) addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'ad_revive');
       drawButton(bAd);
       /* v0.23：删掉「+90 巧币」—— 广告复活只给心。
        * 旧版给币 → 看广告比付费复活还划算 → 最优策略是"故意失败"。 */
-      text('+1 心 · 继续本关', C.DESIGN.w / 2, top + 545, 24, COL.textSub, 'center', '600');
+      text(adLvOk ? ('+1 心 · 继续本关 · 还可看 ' + adLvLeft() + ' 次')
+        : '+1 心 · 继续本关',
+        C.DESIGN.w / 2, top + 545, 24, COL.textSub, 'center', '600');
 
       // 巧币复活
       var canCoin = (s.coin || 0) >= C.ECON.coinRevive && !state.adSim;
@@ -5746,8 +5876,8 @@
     }
 
     /* 免费体力弹窗（参考图 2）
-     * v0.31：用户要求「体力获取只保留看视频」「4 倍改 10 倍」——
-     * 去掉「分享获得」，只留一枚通栏的看视频按钮；单次 2×10 = 20 点。 */
+     * v0.31：用户要求「体力获取只保留看视频」—— 去掉「分享获得」，只留一枚通栏按钮。
+     * v0.35：倍率 10 → 5（用户要求），单次 2×5 = 10 点。 */
     function renderEnergy() {
       var cy = sheetBg(600, 660);
       sheetTitle('免费体力', cy, 660);
@@ -6356,6 +6486,8 @@
         fireBtn: fireBtn, syncEnergy: syncEnergy, onlineClaim: onlineClaim,
         applySkin: applySkin, grantFreeEnergy: grantFreeEnergy,
         doRevive: doRevive,
+        /* v0.35：本关看视频额度（提示/复活/×5 合计 3 次） */
+        adLvLeft: adLvLeft, adLvLimit: adLvLimit, adStart: adStart, adFinish: adFinish,
         /* v0.27：三类视觉风格切换，供截图/验收直接驱动 */
         applyBgFx: applyBgFx, applyPieceStyle: applyPieceStyle, applySfxStyle: applySfxStyle,
         /* v0.15：在线奖励（6 档 / 每日 0 点清零）与查找道具 */

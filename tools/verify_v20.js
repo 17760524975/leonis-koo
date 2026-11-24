@@ -179,7 +179,7 @@ function profile(file) {
 
   /* ================= 1. 配置 ================= */
   section('1. 版本与提示配置');
-  check('版本 v0.20 起（v0.21 继续沿用本版规则）', /^v0\.2[0-9](\.\d+)?$/.test(CFG.version), CFG.version);
+  check('版本 v0.20 起（v0.21 继续沿用本版规则）', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
   check('提示没有档位概念', H.maxTier === undefined && H.names === undefined && H.descs === undefined,
     `maxTier=${H.maxTier} names=${H.names} descs=${H.descs}`);
   check('没有"高亮时长"配置（不再定时消失）', H.showMs === undefined, 'showMs=' + H.showMs);
@@ -293,30 +293,22 @@ function profile(file) {
   check('两端都没有旧的 1500 / 2600Hz 噪声',
     !/noise\(\s*0\.0\d+,\s*0\.\d+,\s*(1500|2600)/.test(gPrev) &&
     !/noiseBurst\(\s*0\.0\d+,\s*0\.\d+,\s*(1500|2600)/.test(gMp));
-  /* v0.28 起音效改为「配置驱动」：SFX_BASE.snap = {f,d,g,to,f2,d2,g2}，
-   * buildSfxSynth() 按风格缩放播放，源码里不再有硬编码的 tone(196,...,147)。
-   * v0.20 的旧正则因此失效（实现本身没退化）。验证意图保持不变：
-   * 吸附音必须是 196→147Hz 低频下滑 + 98Hz 的「笃」，且两端一致；
+  /* v0.31：音效引擎换成模态合成（modal synthesis），SFX_BASE 只留「基频/时长/增益」，
+   * 低频下滑（glide）与半频分音（.50）挪进了材质表 SFX_MAT.wood。
+   * 断言按新实现改口径，但意图不变：吸附音仍然必须"低频为体 + 音高下坠"；
    * 下方还有对 sfx_snap.wav 的实测频谱断言（0~300Hz 占比、衰减、高频占比）。 */
-  const snapCfg = s => {
-    const m = s.match(/snap:\s*\{([^}]*)\}/);
-    if (!m) return null;
-    const num = k => {
-      const x = m[1].match(new RegExp('\\b' + k + ':\\s*([0-9.]+)'));
-      return x ? +x[1] : null;
-    };
-    return { f: num('f'), to: num('to'), f2: num('f2') };
-  };
-  const snapPrev = snapCfg(gPrev), snapMp = snapCfg(gMp);
-  const snapOk = c => !!c && c.f === 196 && c.to === 147 && c.f2 === 98;
-  check('吸附音改成低频下滑（196→147 + 98Hz，配置驱动）',
-    snapOk(snapPrev) && snapOk(snapMp),
-    snapPrev && snapMp
-      ? `preview ${snapPrev.f}→${snapPrev.to}+${snapPrev.f2}Hz / miniprogram ${snapMp.f}→${snapMp.to}+${snapMp.f2}Hz`
-      : '未找到 SFX_BASE.snap 配置');
+  const snapF = s => { const m = s.match(/snap:\s*\{\s*f:\s*(\d+)/); return m ? +m[1] : null; };
+  const woodSub = /wood:\s*\{[^}]*\[\.50,\s*\.40,\s*\.062\][^}]*glide:\s*-\.05/;
+  check('吸附音仍是「低频为体 + 音高下坠」（198Hz + 半频分音）',
+    snapF(gPrev) === 198 && snapF(gMp) === 198 &&
+    woodSub.test(gPrev) && woodSub.test(gMp),
+    `preview f=${snapF(gPrev)} miniprogram f=${snapF(gMp)} 材质=${woodSub.test(gPrev) && woodSub.test(gMp)}`);
   check('通关音去掉了 1568Hz 的高频冠音', gPrev.indexOf('1567.98') < 0 && gMp.indexOf('1567.98') < 0);
-  check('通关音仍保留 242ms 顶点（鲜花动效对齐）',
-    /0\.242/.test(gPrev) && /0\.242/.test(gMp));
+  /* v0.31：通关音改成「素材优先（重制的钟琴琶音 mp3）+ 合成兜底」，
+   * 顶点不再写死 242ms；但两条路径必须都在，否则缺素材的机型会变哑。 */
+  check('通关音：素材优先 + 合成兜底都在',
+    /name === 'sfx_win'/.test(gPrev) && /name === 'sfx_win'/.test(gMp) &&
+    /sfx_win:\s*function/.test(gPrev) && /sfx_win:\s*function/.test(gMp));
 
   for (const f of ['sfx_tap.wav', 'sfx_pick.wav', 'sfx_snap.wav']) {
     const a = path.join(ROOT, 'preview/assets/audio', f);

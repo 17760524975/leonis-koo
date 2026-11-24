@@ -101,7 +101,7 @@ function boot(tut) {
 
   /* ================= 1. 版本 ================= */
   section('1. 版本与配置');
-  check('版本 v0.26 起', /^v0\.2[6-9](\.\d+)?$/.test(CFG.version), CFG.version);
+  check('版本 v0.26 起', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
   check('TUTORIAL 仍然只教每类第 1 关', CFG.TUTORIAL.on === true && CFG.TUTORIAL.levels === 1,
     `on=${CFG.TUTORIAL.on} levels=${CFG.TUTORIAL.levels}`);
 

@@ -96,7 +96,7 @@ function resultTexts(S, D) {
 
   /* ================= 1. 配置 ================= */
   section('1. 版本与数值配置');
-  check('版本 v0.23 起（v0.24 继续沿用本版规则）', /^v0\.2[3-9](\.\d+)?$/.test(CFG.version), CFG.version);
+  check('版本 v0.23 起（v0.24 继续沿用本版规则）', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
   check('初始巧币 50（旧版 120）', E.coinInit === 50, String(E.coinInit));
   check('首通奖励 = [2,3,5]（按星级）',
     JSON.stringify(E.coinFirst) === '[2,3,5]', JSON.stringify(E.coinFirst));
@@ -156,8 +156,9 @@ function resultTexts(S, D) {
   check('首通落账 +' + gain0 + ' 巧币', cAfterWin - cWin === gain0, `+${cAfterWin - cWin}`);
 
   let tx = resultTexts(S, D);
+  /* v0.35：奖励条后面接了「· 本关视频 N/3」，用前缀匹配，别再锁死整句 */
   check('结算页显示「首通奖励 +' + gain0 + ' 巧币」',
-    tx.indexOf('首通奖励 +' + gain0 + ' 巧币') >= 0, tx.filter(s => /首通/.test(s)).join('|'));
+    tx.some(s => s.indexOf('首通奖励 +' + gain0 + ' 巧币') >= 0), tx.filter(s => /首通/.test(s)).join('|'));
   check('结算页出现「看视频 ×5」按钮', tx.indexOf('看视频 ×5') >= 0,
     tx.filter(s => /看视频/.test(s)).join('|'));
   check('翻倍前没有「已领」标', !tx.some(s => /已领/.test(s)), tx.filter(s => /已领/.test(s)).join('|'));

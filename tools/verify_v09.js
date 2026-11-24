@@ -169,8 +169,12 @@ function tapD(x, y) {
   const BOARD = CFG.LAYOUT.BOARD;
   check('LAYOUT.AD 已删除', !('AD' in CFG.LAYOUT), 'keys=' + Object.keys(CFG.LAYOUT).join(','));
   check('ADS.banner 已删除', !(CFG.ADS && CFG.ADS.banner));
-  check('卡纸上移到原广告位起点（BOARD.y = 184）', BOARD.y === 184, 'y=' + BOARD.y);
-  check('卡纸放大到 726（吃掉整条 702 宽预留区）', BOARD.size === 726, 'size=' + BOARD.size);
+  /* v0.35：卡纸再往托盘方向长了一截（y 184→176、size 726→734、纸面 h=842），
+   * 断言改成「卡纸顶已越过原广告位起点，且盘面用满屏宽减 8px 边距」。 */
+  check('卡纸顶越过原广告位起点（BOARD.y ≤ 184）', BOARD.y <= 184, 'y=' + BOARD.y);
+  check('盘面用满屏宽（BOARD.size = 750 − 2×8 = 734）', BOARD.size === 734, 'size=' + BOARD.size);
+  check('v0.35 纸面比盘面高（吃掉卡纸底～托盘的空白带）',
+    BOARD.h === 842 && BOARD.h > BOARD.size, 'h=' + BOARD.h + ' size=' + BOARD.size);
   /* 只查真实调用（带左括号），注释里提到这两个名字是给后人看的退役说明，不算残留 */
   check('core.js 里没有 syncBanner / adRect 调用残留',
     !/\b(syncBanner|adRect)\s*\(/.test(src),
