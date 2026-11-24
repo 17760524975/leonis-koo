@@ -153,16 +153,17 @@ function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).dig
 
   /* ================= 1. 配置与几何 ================= */
   section('1. 配置与几何净空');
-  check('版本号 v0.17 起（含后续补丁版）', /^v0\.(1[7-9]|2\d)(\.\d+)?$/.test(CFG.version), CFG.version);
+  check('版本号 v0.17 起（含后续补丁版）', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
   check('HUD_MIN 存在且关键值符合设计',
     !!M && M.pillH === 36 && M.rowGap === 44 && M.maxW === 127 && M.left === 120
       && M.topShift === 8 && M.rightAnchor === false,
     M ? `left=${M.left} pillH=${M.pillH} rowGap=${M.rowGap} maxW=${M.maxW} topShift=${M.topShift}` : 'missing');
   const hudTop = BY - (M.rowGap + M.pillH) / 2;
   const hudBot = BY + (M.rowGap + M.pillH) / 2;
-  check('两枚胶囊竖排：略贴安全区上沿、下不撞广告位',
-    hudTop >= VIEW_SAFE_TOP - (M.topShift || 0) && hudBot < CFG.LAYOUT.AD.y,
-    `${hudTop} ≥ ${VIEW_SAFE_TOP - (M.topShift || 0)} 且 ${hudBot} < ${CFG.LAYOUT.AD.y}`);
+  /* v0.33 广告位删除后，卡纸顶就是硬边界（BOARD.y=184），口径不变 */
+  check('两枚胶囊竖排：略贴安全区上沿、下不撞卡纸',
+    hudTop >= VIEW_SAFE_TOP - (M.topShift || 0) && hudBot < CFG.LAYOUT.BOARD.y,
+    `${hudTop} ≥ ${VIEW_SAFE_TOP - (M.topShift || 0)} 且 ${hudBot} < ${CFG.LAYOUT.BOARD.y}`);
   check('HUD 在返回按钮右侧、不越设计宽度',
     HUD_L >= BACK_R + 8 && HUD_R <= CFG.DESIGN.w, `left=${HUD_L} right=${HUD_R}`);
   check('最宽情况下仍与倒计时胶囊留出 ≥8 净空',

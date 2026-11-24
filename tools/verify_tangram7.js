@@ -1,5 +1,5 @@
 /* v0.3 正式版 · 七巧板 60 关验收（读「已落盘」的数据，不用内存里的生成结果）
- * 1. 面积闭合 16u² + 7 块拼回 4×4 正方形 + unitScale=107（375 宽轮廓≥150 CSS px）
+ * 1. 面积闭合 16u² + 7 块拼回 4×4 正方形 + unitScale=96（375 宽轮廓≥138 CSS px）
  * 2. 60 关逐关标准解可解（coverage/overflow/真重叠/面积）
  * 3. 提示三档数据（splitLines / hintTier）
  * 4. 10 关 × 4 类反例判负 + 判定层 N=7 生效（高序号板重叠能检出）
@@ -40,8 +40,12 @@ check('7 块板、面积比 4:4:2:1:1:2:2', ORDER.length === 7 && sumU === 16,
   ORDER.join(',') + '  Σ=' + sumU.toFixed(6) + 'u²');
 const areaErrPct = Math.abs(sumU - 16) / 16 * 100;
 check('面积闭合误差 < 0.1%', areaErrPct < 0.1, areaErrPct.toFixed(6) + '%');
-/* v0.3 A2：unitScale=107。375 宽下正方形轮廓 = 4U×0.702×0.5 = 150.2 CSS px ≥ 150 */
-check('unitScale=107（375 宽正方形轮廓 ≥150 CSS px）', U === 107 && U !== S4.dataset.unitScale,
+/* v0.34：107→96。用户要求「单位缩放也稍微缩小」，把 1000 逻辑盘的可容长度
+ * 从 9.35u 提到 10.4u，人物/大字母不再顶出卡纸。
+ * 代价是 375 宽下正方形轮廓 4U×0.726×0.5 = 139.4 CSS px（旧 155.4）。
+ * 断言下限随之从 150 降到 138 —— 这是口径调整，不是放宽标准：
+ * 仍要求两套数据集各用各的 U，且正方形不能小到看不清。 */
+check('unitScale=96（375 宽正方形轮廓 ≥138 CSS px）', U === 96 && U !== S4.dataset.unitScale,
   'U=' + U + ' / 四巧=' + S4.dataset.unitScale + ' / ' + (4 * U * C.LAYOUT.BOARD.size / 1000 * 0.5).toFixed(1) + ' CSS px');
 // 顶点 45° 网格 + 内角 45° 整数倍
 {

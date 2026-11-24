@@ -10,7 +10,8 @@
  *   ① ×5 与「下一关 / 返回」同排：同一 y、互不重叠、整排水平居中、都不出卡
  *   ② 奖励条只剩一句结果文案，且水平居中（fillText 的 x = 设计宽/2）
  *   ③ 「回列表」全部改「返回」（含最后一关的主按钮）
- *   ④ 没有 ×5 可领时主按钮回落到 360 宽居中，不留下空位
+ *   ④ 没有 ×5 可领时主按钮仍按 primaryW 单独居中，不留下空位
+ *   ⑦ v0.34：两枚主按钮等宽等高（primaryW === adMulW），且任何情况下都不再放大到 360
  *   ⑤ 发光：resT < 120 不画光带，进场后画 3 层金色描边，且强度随相位呼吸
  *   ⑥ 广告播放期整页不可点（hits 清空），与 v0.23 的锁页口径一致
  */
@@ -95,9 +96,9 @@ function hit(hits, id) { return hits.find(h => h.id === id); }
 
   /* ================= 1. 配置 ================= */
   section('1. 版本与版式配置');
-  check('版本 v0.24 起（v0.24.1 继续沿用本版规则）', /^v0\.2[4-9](\.\d+)?$/.test(CFG.version), CFG.version);
-  check('新增 primaryW / adMulW / btnGap 三个版式参数',
-    W.primaryW === 320 && W.adMulW === 210 && W.btnGap === 22,
+  check('版本 v0.24 起（v0.24.1 继续沿用本版规则）', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
+  check('v0.34：两枚主按钮等宽（primaryW === adMulW === 265）',
+    W.primaryW === 265 && W.adMulW === 265 && W.btnGap === 22,
     `${W.primaryW}/${W.adMulW}/${W.btnGap}`);
   const rowW = W.adMulW + W.btnGap + W.primaryW;
   check('并排总宽 552 不超过卡片可用宽（620-2×30=560）', rowW <= W.cardW - 60,
@@ -135,9 +136,9 @@ function hit(hits, id) { return hits.find(h => h.id === id); }
     `left=${(DW / 2 - rowL).toFixed(1)} right=${(rowR - DW / 2).toFixed(1)}`);
   check('整排不出卡片（与卡边各留 ≥ 30）', rowL - (DW / 2 - W.cardW / 2) >= 30,
     `边距 ${(rowL - (DW / 2 - W.cardW / 2)).toFixed(1)}`);
-  check('×5 热区宽 210（按钮视觉 210×74；热区高保底 88 是 MIN_HIT 的既有规则）',
-    hAd.w === W.adMulW && Math.abs(hNext.h - hAd.h) < 0.5, `${hAd.w}×${hAd.h}`);
-  check('主按钮尺寸缩到 320 宽与 ×5 配套', hNext.w === W.primaryW, String(hNext.w));
+  check('×5 与下一关等宽等高（v0.34 用户要求「相同大小」）',
+    hAd.w === W.adMulW && hNext.w === W.primaryW && hAd.w === hNext.w &&
+    Math.abs(hNext.h - hAd.h) < 0.5, `${hAd.w}×${hAd.h} vs ${hNext.w}×${hNext.h}`);
 
   /* ================= 3. 奖励文案居中 ================= */
   section('3. 奖励信息居中');
@@ -164,7 +165,7 @@ function hit(hits, id) { return hits.find(h => h.id === id); }
   f = frame(S, D, 2000);
   const hNext2 = hit(f.hits, 'next');
   check('翻倍后 ×5 热区消失', !hit(f.hits, 'win_ad5'), f.hits.map(h => h.id).join(','));
-  check('翻倍后主按钮回落 360 宽', hNext2 && hNext2.w === 360, hNext2 ? String(hNext2.w) : '-');
+  check('翻倍后主按钮仍是 265 宽（不再放大到 360）', hNext2 && hNext2.w === W.primaryW, hNext2 ? String(hNext2.w) : '-');
   check('翻倍后主按钮居中（x 中心 = 375）',
     hNext2 && Math.abs(hNext2.x + hNext2.w / 2 - DW / 2) < 0.6,
     hNext2 ? String(hNext2.x + hNext2.w / 2) : '-');
@@ -179,7 +180,7 @@ function hit(hits, id) { return hits.find(h => h.id === id); }
   f = frame(S, D, 2000);
   const hNext3 = hit(f.hits, 'next');
   check('重复通关也没有 ×5 入口', !hit(f.hits, 'win_ad5'), f.hits.map(h => h.id).join(','));
-  check('重复通关主按钮仍居中 360', hNext3 && hNext3.w === 360 &&
+  check('重复通关主按钮仍居中且等宽', hNext3 && hNext3.w === W.primaryW &&
     Math.abs(hNext3.x + hNext3.w / 2 - DW / 2) < 0.6, String(hNext3.w));
 
   /* ================= 6. 最后一关：主按钮「返回」 ================= */

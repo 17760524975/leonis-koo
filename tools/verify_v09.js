@@ -161,24 +161,21 @@ function tapD(x, y) {
   check('计时数字中心落在屏幕中线 ±80 内', Math.abs(timeCx - CFG.DESIGN.w / 2) <= 80,
     'cx=' + timeCx.toFixed(0));
 
-  /* ---------- 3. 广告位 ---------- */
-  section('3. 顶部广告位');
-  const AD = CFG.LAYOUT.AD, BOARD = CFG.LAYOUT.BOARD;
-  check('广告位在顶栏之下、棋盘之上', AD.y > 88 + 56 && AD.y + AD.h <= BOARD.y,
-    `ad ${AD.y}~${AD.y + AD.h} board ${BOARD.y}`);
-  check('广告位与棋盘间距 ≤ 24（不浪费屏）', BOARD.y - (AD.y + AD.h) <= 24, 'gap=' + (BOARD.y - AD.y - AD.h));
-  check('广告位宽度 ≥ 300 CSS px（banner 下限，375 屏）', AD.w * SCALE >= 300, 'css=' + AD.w * SCALE);
-  const shown = cloudLog.banner.filter(b => b.show);
-  check('进对局页挂 banner', shown.length >= 1, JSON.stringify(cloudLog.banner.map(b => b.show)));
-  if (shown.length) {
-    const r = shown[shown.length - 1].rect;
-    check('banner 用 CSS 坐标、落在广告位框内',
-      Math.abs(r.y - AD.y * SCALE) < 1.5 && Math.abs(r.h - AD.h * SCALE) < 1.5 && r.w > 300,
-      JSON.stringify(r));
-  }
+  /* ---------- 3. 广告位（v0.33 已下线）----------
+   * 个人主体没有流量主资格，顶栏下 702×112 的 banner 预留区自 v0.9 起一直空着。
+   * v0.33 把整块让给卡纸（702→726、y 302→184），banner 相关代码全部删除。
+   * 这 6 条旧断言测的是已删除的能力，改为「确实删干净 + 卡纸吃掉了这块空间」。 */
+  section('3. 顶部广告位已下线（v0.33）');
+  const BOARD = CFG.LAYOUT.BOARD;
+  check('LAYOUT.AD 已删除', !('AD' in CFG.LAYOUT), 'keys=' + Object.keys(CFG.LAYOUT).join(','));
+  check('ADS.banner 已删除', !(CFG.ADS && CFG.ADS.banner));
+  check('卡纸上移到原广告位起点（BOARD.y = 184）', BOARD.y === 184, 'y=' + BOARD.y);
+  check('卡纸放大到 726（吃掉整条 702 宽预留区）', BOARD.size === 726, 'size=' + BOARD.size);
+  /* 只查真实调用（带左括号），注释里提到这两个名字是给后人看的退役说明，不算残留 */
+  check('core.js 里没有 syncBanner / adRect 调用残留',
+    !/\b(syncBanner|adRect)\s*\(/.test(src),
+    'calls=' + (src.match(/\b(syncBanner|adRect)\s*\(/g) || []).length);
   game._debug.go('home');
-  check('回主页摘掉 banner', cloudLog.banner[cloudLog.banner.length - 1].show === false);
-  check('广告位不注册点击热区', !/addHit\(\s*AD\./.test(src));
 
   /* ---------- 4. 托盘散放 ---------- */
   section('4. 托盘改为散放（去掉 2×2 大槽位）');
@@ -198,8 +195,14 @@ function tapD(x, y) {
     }
     check(name + '：落点两两间距 ≥ 30', minD >= 30, 'minD=' + minD.toFixed(0));
   });
-  const trayH = CFG.LAYOUT.TRAY.bottom - CFG.LAYOUT.TRAY.top;
-  check('工具区高度 ≤ 300（v0.8 为 370）', trayH <= 300, 'h=' + trayH);
+  /* v0.34：带子本身留给手指（386 高），用户要缩的是「板件簇实际占的地方」。
+   * 用 PILE.spanW/spanH 把 7 块压进居中 470×300，断言改成量实际簇尺寸。 */
+  const b4c = game._debug.buildSet('tangram4'), b7c = game._debug.buildSet('tangram7');
+  const clusterH = Math.max(b4c.fit.totalH, b7c.fit.totalH);
+  const clusterW = Math.max(b4c.fit.totalW, b7c.fit.totalW);
+  check('v0.34：板件簇实际占用 ≤ 300 高 / ≤ 500 宽（旧版摊满 706 宽整条带子）',
+    clusterH <= 300 && clusterW <= 500 && CFG.LAYOUT.PILE.spanW <= 500,
+    `簇 ${Math.round(clusterW)}×${Math.round(clusterH)} / spanW=${CFG.LAYOUT.PILE.spanW}`);
   check('托盘不压工具栏', CFG.LAYOUT.TRAY.bottom <= CFG.LAYOUT.TOOLBAR.y - 10,
     `tray.bottom=${CFG.LAYOUT.TRAY.bottom} toolbar=${CFG.LAYOUT.TOOLBAR.y}`);
 

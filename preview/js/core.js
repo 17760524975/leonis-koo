@@ -97,11 +97,25 @@
       for (var dx = -1; dx <= 1; dx++) for (var dy = -1; dy <= 1; dy++) near[(ix + dx) * 4096 + (iy + dy)] = 1;
     }
     var midX = (bx0 + bx1) / 2, midY = (by0 + by1) / 2;
+    /* v0.34：居中收窄的候选区（spanW）。板件必须叠着挤进中心一条，
+     * 不再摊满整条带子 —— 用户要的是「这块区域占得小一点」。
+     * 放不下（某块比 spanW 还宽）时退回整条带子，绝不丢板。 */
+    var spanW = PL.spanW || 0;
+    var sx0 = spanW ? Math.max(bx0, midX - spanW / 2) : bx0;
+    var sx1 = spanW ? Math.min(bx1, midX + spanW / 2) : bx1;
+    /* spanH 同理：把板件簇压在带子中线上下 spanH/2 之内，带子本身仍留够手指活动区 */
+    var spanH = PL.spanH || 0;
+    var sy0 = spanH ? Math.max(by0, midY - spanH / 2) : by0;
+    var sy1 = spanH ? Math.min(by1, midY + spanH / 2) : by1;
     for (var qi = 0; qi < queue.length; qi++) {
       var it = queue[qi], best = null;
-      var loX = bx0 - it.minX, hiX = bx1 - it.maxX;
-      var loY = by0 - it.minY, hiY = by1 - it.maxY;
-      for (var gx = loX; gx <= hiX + 0.01; gx += step) {
+      for (var pass = 0; pass < 2 && !best; pass++) {
+        var rx0 = pass === 0 ? sx0 : bx0, rx1 = pass === 0 ? sx1 : bx1;
+        var ry0 = pass === 0 ? sy0 : by0, ry1 = pass === 0 ? sy1 : by1;
+        var loX = rx0 - it.minX, hiX = rx1 - it.maxX;
+        var loY = ry0 - it.minY, hiY = ry1 - it.maxY;
+        if (hiX < loX || hiY < loY) continue;
+        for (var gx = loX; gx <= hiX + 0.01; gx += step) {
         for (var gy = loY; gy <= hiY + 0.01; gy += step) {
           var cov = 0, c;
           for (c = 0; c < it.cells.length; c++) {
@@ -122,6 +136,7 @@
             + Math.abs(gx - midX) * 0.012
             + Math.abs(gy - midY) * 0.010;
           if (!best || cost < best.cost) best = { x: gx, y: gy, cost: cost, cov: covR };
+        }
         }
       }
       if (!best) best = { x: midX, y: midY, cost: 0, cov: 1 };   // 带子放不下时的兜底
@@ -349,6 +364,40 @@
       return true;
     }
 
+    /* ---------------- v0.34 全局钱包 ----------------
+     * 巧币 / 体力 / 每日免费体力次数 / 查找道具是「玩家」的资源，不是「四巧板这套题」的。
+     * 之前它们各自塞在两套存档里：切到七巧板就像换了个账号，余额各算各的，
+     * 在一边看广告领的体力到另一边用不了。用户要求「作用于整个游戏」。
+     * 做法沿用 v0.31 视觉设置那套：独立一个键，读档时覆盖、写档时同步。
+     * 两份存档里仍保留同名字段（云同步 payload 不变），但本地一律以钱包为准。
+     * 首次升级没有钱包键时，用当前读到的这份存档就地播种，不清零任何余额。 */
+    var WALLET_KEY = 'tangram_wallet_v1';
+    var WALLET_FIELDS = ['coin', 'energy', 'energyMax', 'energyTs',
+      'freeEnergyUsed', 'freeEnergyDay', 'hintItems'];
+    function loadWallet() {
+      var raw = null;
+      try { raw = env.storage.get(WALLET_KEY); } catch (e) { raw = null; }
+      if (!raw) return null;
+      var o = raw;
+      if (typeof raw === 'string') { try { o = JSON.parse(raw); } catch (e) { return null; } }
+      return (o && typeof o === 'object') ? o : null;
+    }
+    function writeWallet(src) {
+      var s = src || (state && state.save) || {};
+      var o = {}, i;
+      for (i = 0; i < WALLET_FIELDS.length; i++) o[WALLET_FIELDS[i]] = s[WALLET_FIELDS[i]];
+      try { env.storage.set(WALLET_KEY, JSON.stringify(o)); } catch (e) { /* 隐私模式静默降级 */ }
+    }
+    function applyWalletTo(s) {
+      var w = loadWallet();
+      if (!w) { writeWallet(s); return false; }   // 首次升级：以当前存档播种
+      for (var i = 0; i < WALLET_FIELDS.length; i++) {
+        var f = WALLET_FIELDS[i];
+        if (w[f] !== undefined && w[f] !== null) s[f] = w[f];
+      }
+      return true;
+    }
+
     /* ---------------- 存档 ---------------- */
     function defaultSave() {
       var E = C.ECON;
@@ -471,6 +520,8 @@
        * 没有全局键（首次升级）时保持本档的配色/板件/音效，但背景统一落到「几何轻舞」，
        * 这就是用户说的「进游戏默认几何轻舞」。 */
       if (!applyVisualTo(s)) s.bgFx = 'geometric';
+      /* v0.34：巧币 / 体力一律以全局钱包为准 —— 切数据集不再换余额 */
+      applyWalletTo(s);
       return s;
     }
     /* keepTs=true：只落盘、不刷新 updatedAt。
@@ -479,6 +530,8 @@
     function writeLocal(keepTs) {
       if (!keepTs) state.save.updatedAt = Date.now();
       try { env.storage.set(SAVE_KEY, JSON.stringify(state.save)); } catch (e) { /* 隐私模式静默降级 */ }
+      /* v0.34：钱包跟着每次落盘同步，两套存档里的同名字段只是云同步的镜像 */
+      writeWallet(state.save);
     }
     function persist() {
       writeLocal();
@@ -772,7 +825,7 @@
       CLOUD.load(function (err, remote) {
         state.net.ready = true;
         if (err || !remote || !remote.sets) return;
-        var changed = false, k;
+        var changed = false, k, bestMerged = null, bestTs = -1;
         for (k in remote.sets) {
           var l = readSaveByKey(k), m = mergeSave(l, remote.sets[k]);
           if (!l || (m.updatedAt || 0) > (l.updatedAt || 0) ||
@@ -781,7 +834,12 @@
             writeSaveByKey(k, m);
             changed = true;
           }
+          /* v0.34：钱包是全局权威源。云端那份较新时，把合并后的余额一并推进钱包，
+           * 否则 loadSave() 会拿本地旧钱包把刚从云端合并来的 999 巧币盖成 50。
+           * 两套存档都合并时取 updatedAt 最大的那份，避免第二份旧值把钱包拉回去。 */
+          if ((m.updatedAt || 0) > bestTs) { bestTs = m.updatedAt || 0; bestMerged = m; }
         }
+        if (bestMerged) writeWallet(bestMerged);
         if (changed) {
           state.save = loadSave();          // 当前数据集重新读盘（星星/进度立刻生效）
           initSkin();
@@ -1768,15 +1826,23 @@
     }
 
     function nextLevel() {
-      if (state.levelIdx + 1 < LEVELS.length) {
-        setupLevel(state.levelIdx + 1);
-        state.overlay = null;
-        /* v0.6：离开结算页 → 从欢庆曲切回本关关卡曲 */
-        setLevelScene();
-      } else {
+      if (state.levelIdx + 1 >= LEVELS.length) {
         state.overlay = null;
         go('levels');
+        return;
       }
+      /* v0.34：必须走 openLevel 这个「所有进关入口」的统一口径。
+       * 旧版直接 setupLevel + state.overlay=null，绕过了 spendEnergy ——
+       * 于是从列表点关扣 2 点体力、结算页点「下一关」却白嫖一关。
+       * openLevel 已处理续玩快照 / 教学关 / 重复通关不扣，这里只管切场景。
+       * 体力不足时 openLevel 会自己弹 energy 面板，本次不切关，结算态保留，
+       * 玩家补完体力关掉面板还能再点一次「下一关」。 */
+      if (!openLevel(state.levelIdx + 1)) return;
+      state.overlay = null;
+      state.win = null; state.result = null; state.flower = null;
+      state.adSim = null; state.adWait = null;
+      /* v0.6：离开结算页 → 从欢庆曲切回本关关卡曲 */
+      setLevelScene();
     }
 
     /* ---------------- 吸附（v0.3 三层：顶点 > 边 > 网格） ---------------- */
@@ -5199,7 +5265,9 @@
        * 挤在同一行，主次不清。现在奖励条独占一行讲结果，动作统一收到这一排：
        * 有 ×5 可领时两枚并排（排宽 552 居中），否则主按钮单独 360 居中。 */
       var canAd = res.first && res.gain > 0 && !res.adUsed;
-      var nextW = 360, nextX = C.DESIGN.w / 2, adX = 0;
+      /* v0.34：两枚主按钮同宽同高（W.primaryW === W.adMulW、共用 W.primaryH），
+       * 单独一枚时也不再放大到 360，避免「有广告时小、没广告时大」来回跳。 */
+      var nextW = W.primaryW, nextX = C.DESIGN.w / 2, adX = 0;
       if (canAd) {
         var rowW = W.adMulW + W.btnGap + W.primaryW;
         var rowX0 = C.DESIGN.w / 2 - rowW / 2;

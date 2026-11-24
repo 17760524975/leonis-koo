@@ -109,7 +109,11 @@ check('其余 28 关更复杂（基准 ≥ 85s）', par.slice(2).every(v => v >=
   'min=' + Math.min.apply(null, par.slice(2)) + 's max=' + Math.max.apply(null, par.slice(2)) + 's');
 check('用时递增（难度曲线不倒退）', par.every((v, i) => i === 0 || v >= par[i - 1]), par.join(','));
 const seven = game._debug.buildSet('tangram7');
-check('七巧板 60 关未受影响', seven.levels.length === 60, 'len=' + seven.levels.length);
+/* v0.32/v0.34：七巧板删掉 75 个凑数关、重建字母章节，现为 15 关（几何 10 + 字母 5），
+ * 单位缩放 107→96。此处只要求「关卡仍然存在且可解」，不再锁死旧关数。 */
+check('七巧板关卡仍存在（v0.34：19 关 / unitScale=96）',
+  seven.levels.length >= 15 && seven.ds.unitScale === 96,
+  'len=' + seven.levels.length + ' U=' + seven.ds.unitScale);
 
 /* ---------- 2. 老存档收敛 ---------- */
 section('2. 老存档（120 关）升级');

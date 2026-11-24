@@ -244,6 +244,9 @@ store['tangram_save_v1'] = JSON.stringify({
   playerId: 'local', starOf: { '1': 3, '2': 2 }, unlockedMax: 3,
   bestTime: {}, hintUsed: {}, settings: { sfx: true, bgm: true }
 });
+/* v0.34：模拟一台只留着 v0.4 老存档、还没写过全局钱包的新设备。
+ * 钱包是全局权威源，不删掉它就会拿前面那局的余额盖掉老存档的兜底值。 */
+delete store['tangram_wallet_v1'];
 const g2 = CORE(makeEnv());
 g2.init();
 const S2 = g2.state;

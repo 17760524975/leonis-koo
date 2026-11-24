@@ -23,7 +23,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
-UNIT = 107.0                      # 与 DATA7.unitScale 一致：1u = 107 设计像素
+UNIT = 96.0                       # 与 DATA7.unitScale 一致：1u = 96 设计像素
+# v0.34：107→96。1u 从 77.7px 缩到 69.7px，同样 1000×1000 逻辑盘能容下
+# 10.4u 长的剪影（旧 9.35u），人物/大字母不再顶出卡纸。
+# 已有 15 关（几何 10 关来自 levels85.json，按 107 生成）必须按 k=96/107
+# 绕盘心等比缩放，形状与相对关系一个像素都不变，只是整体变小。
+UNIT_OLD = 107.0
 CENTER = (500.0, 500.0)           # 剪影中心 = 棋盘中心（world 500 ↔ 设计像素 375/653）
 SHAPES = {                        # 与 DATA7.pieces[*].base 一致
     'T1': [[0, 0], [4, 0], [2, 2]],
@@ -228,12 +233,32 @@ def assign_slots(pieces):
     return pieces
 
 
+def rescale_level(l, k):
+    """把按 UNIT_OLD 生成的关卡整体绕盘心缩放到 UNIT，形状不变。"""
+    def mp(pt):
+        return [round(CENTER[0] + (pt[0] - CENTER[0]) * k, 2),
+                round(CENTER[1] + (pt[1] - CENTER[1]) * k, 2)]
+    l['outline'] = [mp(p) for p in l['outline']]
+    l['holes'] = [[mp(p) for p in r] for r in l.get('holes', [])]
+    l['splitLines'] = [[mp(a), mp(b)] for a, b in l.get('splitLines', [])]
+    for st in l['solution']:
+        st['x'] = round(CENTER[0] + (st['x'] - CENTER[0]) * k, 2)
+        st['y'] = round(CENTER[1] + (st['y'] - CENTER[1]) * k, 2)
+    return l
+
+
 def main():
-    names = list('EFNPV')  # 只保留「读得出 + 整幅落在 702px 棋盘内」的字母（A 的右腿有缺口，弃用）
+    # v0.34：单位 107→96 后 A / L / X / Y 也能进卡纸了，一并补上。
+    # 只收「一眼读得出」的：E F L N P V X Y A。
+    # 弃用理由（逐个人工判读）：
+    #   H I K M S W X —— 能精确铺满，但剪影是有缺口的团块 / 读成别的字母，弃用；
+    #   B C D G J O Q R T U Z —— 参考轮廓带曲线，7 块板铺不满（dev>26 或无解）。
+    names = list('AEF LNPVY'.replace(' ', ''))
     new = load_solutions(names)
     print('生成字母关卡 %d 个' % len(new))
     base = json.load(open(os.path.join(HERE, 'out', 'levels85.json'), encoding='utf-8'))
-    keep = [l for l in base if l['id'] <= 10]
+    k = UNIT / UNIT_OLD
+    keep = [rescale_level(dict(l), k) for l in base if l['id'] <= 10]
 
     all_levels = []
     for l in keep:

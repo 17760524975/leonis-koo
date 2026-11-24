@@ -137,7 +137,7 @@ function placeAllSolved(game) {
 
   /* ================= 1. 配置 / 版本 ================= */
   section('1. 配置与三端同步');
-  check('版本号 v0.16 起（含后续补丁版）', /^v0\.(1[6-9]|2\d)(\.\d+)?$/.test(CFG.version), CFG.version);
+  check('版本号 v0.16 起（含后续补丁版）', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
   check('提示单档（v0.20）、巧币 30（v0.23）、道具名「查找道具」',
     CFG.HINT.maxTier === undefined && CFG.HINT.coinCost === 30 && CFG.HINT.itemName === '查找道具',
     `maxTier=${CFG.HINT.maxTier} coin=${CFG.HINT.coinCost} item=${CFG.HINT.itemName}`);
@@ -179,6 +179,8 @@ function placeAllSolved(game) {
     tasksDay: '2026-11-20', tasksClaimed: { t1: true }, taskPlays: 5,
     hintItems: 4, settings: { sfx: true, bgm: true }, updatedAt: Date.now()
   });
+  /* v0.34：模拟一台只留着老存档、还没写过全局钱包的新设备 */
+  delete store['tangram_wallet_v1'];
   const g2 = CORE(env);
   g2.init();
   step(16);

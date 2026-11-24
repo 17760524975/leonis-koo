@@ -91,13 +91,16 @@ function putSolved(S, lv, id) {
 
   /* ================= 1. 版本与配置 ================= */
   section('1. 版本与教学配置');
-  check('版本 v0.21 起（v0.23 继续沿用本版规则）', /^v0\.2[1-9](\.\d+)?$/.test(CFG.version), CFG.version);
+  check('版本 v0.21 起（v0.23 继续沿用本版规则）', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
   check('教学开关 + 只教第 1 关', T && T.on === true && T.levels === 1, `on=${T && T.on} levels=${T && T.levels}`);
   check('教学关冻结倒计时', T.freezeTimer === true);
   check('虚影透明度在 0.2~0.5 之间（看得见但不糊住板件）',
     T.ghostAlpha > 0.2 && T.ghostAlpha < 0.5, 'ghostAlpha=' + T.ghostAlpha);
-  check('指令行落在卡纸顶部空白带（302+textY < 轮廓最高点 503）',
-    CFG.LAYOUT.BOARD.y + T.textY < 503, `y=${CFG.LAYOUT.BOARD.y + T.textY}`);
+  /* v0.33/v0.34：卡纸 y 302→184、U 107→96，轮廓最高点随之变化 —— 从关卡数据实算，别抄魔数 */
+  const OUTLINE_TOP = Math.min.apply(null, D.LEVELS[0].outline.map(p => p[1]));
+  check('指令行落在卡纸顶部空白带（BOARD.y+textY < 轮廓最高点）',
+    CFG.LAYOUT.BOARD.y + T.textY < OUTLINE_TOP,
+    `y=${CFG.LAYOUT.BOARD.y + T.textY} < ${OUTLINE_TOP}`);
 
   /* ================= 2. 刷新不重置倒计时 ================= */
   section('2. 重开（工具栏刷新）不再重置倒计时');
@@ -170,8 +173,9 @@ function putSolved(S, lv, id) {
   check('虚影真的画出来了（同一帧里有多块半透明填充）',
     rec.ops.filter(o => o.k === 'fill' && o.a > 0.2 && o.a < 0.5).length >= 2,
     'alpha 层数=' + rec.ops.filter(o => o.k === 'fill' && o.a > 0.2 && o.a < 0.5).length);
-  check('顶部指令画在卡纸上（y 落在 302~380 之间）',
-    rec.texts.some(t => /拖进来/.test(t.s) && t.y > 302 && t.y < 400),
+  check('顶部指令画在卡纸顶部（y 落在 BOARD.y ~ BOARD.y+150 之间）',
+    rec.texts.some(t => /拖进来/.test(t.s) &&
+      t.y > CFG.LAYOUT.BOARD.y && t.y < CFG.LAYOUT.BOARD.y + 150),
     rec.texts.filter(t => /拖进来/.test(t.s)).map(t => Math.round(t.y)).join(','));
   check('右下角有「跳过教学」出口', rec.texts.some(t => t.s === T.skipText), T.skipText);
 

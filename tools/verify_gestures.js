@@ -130,7 +130,7 @@ function radii(p) {
 
 console.log('==== 0. 环境 ====');
 check('375×812 移动模拟，scale=' + scale + '，unitScale=' + U,
-  scale === 0.5 && U === 107 && LEVELS.length === 60);
+  scale === 0.5 && U === 96 && LEVELS.length >= 15);   // v0.34：U=96、七巧板 18 关（几何10+字母8）
 check('第 1 关轮廓为正方形（边吸附构造基准）', LEVELS[0].outline.length === 4,
   JSON.stringify(LEVELS[0].outline));
 

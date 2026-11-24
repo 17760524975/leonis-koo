@@ -137,8 +137,8 @@ check('首屏是主界面', S.page === 'home', 'page=' + S.page);
 // 主界面渲染若干帧（覆盖动画分支）
 for (let i = 0; i < 30; i++) step(16);
 
-// 点「开始」
-tap(375, 1010);
+// 点「开始」（v0.31：底部锚定后位置随屏高变化，取运行时坐标）
+tap(375, game._debug.homeLayout().startY);
 step(16);
 check('点开始进入对局页', S.page === 'play', 'page=' + S.page);
 check('四块板都在托盘', S.pieces.filter(p => !p.onBoard).length === 4);
@@ -230,8 +230,11 @@ check('结算时 BGM 压低', duckLog.length > 0 && duckLog[duckLog.length - 1] 
 check('星级已计算', S.result && S.result.stars >= 1, JSON.stringify(S.result));
 check('存档有星级', !!S.save.starOf['1'], JSON.stringify(S.save.starOf));
 
-// 下一关（v0.8 结算面板改版：主按钮位置从 config.WIN 读，别再写死）
-tap(375, CFG.WIN.primaryY);
+// 下一关（v0.34：两枚主按钮等宽后，x=375 正好落在中间 22px 的缝里，
+// 不能再写死横坐标 —— 直接从渲染出来的热区表里取「next」按钮中心）
+const nextHit = game._debug.hitList().find(h => h.id === 'next' || h.id === 'to_list');
+tap(nextHit ? nextHit.x + nextHit.w / 2 : 375,
+    nextHit ? nextHit.y + nextHit.h / 2 : CFG.WIN.primaryY);
 step(16);
 check('进入第 2 关', S.levelIdx === 1 && S.page === 'play', 'idx=' + S.levelIdx);
 

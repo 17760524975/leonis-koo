@@ -156,10 +156,12 @@ def solve_letter(nm, max_sol=6, verbose=True):
         dev = (0 if not mult else 30) + left + out      # 与参考轮廓的偏差
         # 该有内孔的字母（A/B/D/O/P/Q/R）不罚孔；其余字母出现孔洞视为拼合缺陷
         hole_pen = 0 if (holes == 0 or nm in 'ABDOPQR') else 200 * holes
-        # 紧凑度：棋盘只有 702px，剪影超过 6.2u（≈663px）就会顶出卡纸
+        # 紧凑度：v0.34 单位缩放 107→96，1u 从 77.7px 缩到 69.7px，
+        # 726px 卡纸能容下 9u 左右的剪影（旧版 6.2u 是 702px 棋盘留下的口径）。
+        # 放宽到 8.6u/8.0u：同样的参考轮廓不再被强行压扁，字母能保持原本的宽高比。
         bb = U.bounds
         maxdim = max(bb[2] - bb[0], bb[3] - bb[1]) / L['u']
-        size_pen = 30 * max(0.0, maxdim - 6.2) + 2 * max(0.0, maxdim - 5.0)
+        size_pen = 30 * max(0.0, maxdim - 8.6) + 2 * max(0.0, maxdim - 8.0)
         score = dev + 2 * dg + hole_pen + size_pen        # 排序用
         scored.append((score, dev, left, out, s, U, holes, mult, dg))
     scored.sort(key=lambda z: z[0])
