@@ -9,7 +9,7 @@
   'use strict';
 
   return {
-    version: 'v0.29.3',
+    version: 'v0.31',
 
     /* ---------- 品牌（v0.6 改名「方寸巧拼」） ----------
      * 游戏名只在这里定义一次：主页标题、分享文案、工程名都从这里取，
@@ -498,8 +498,11 @@
       energyRecoverSec: 300,  // 每 5 分钟恢复 1 点（离线和在线都算）
       energyCostLevel: 2,     // 进入一关消耗（v0.7：1 → 2，用户要求）
       freeEnergyPerDay: 3,    // 每日免费体力次数上限
-      freeEnergyShare: 2,     // 「分享获得」+2
-      freeEnergyAdMul: 4,     // 「4 倍获得」= 2×4 = 8
+      freeEnergyShare: 2,     // 单次基准量（2 点）
+      /* v0.31：用户要求「体力获取只保留看视频」「4 倍改 10 倍」。
+       * 面板里删掉「分享获得」，只剩看视频；一次 = 2×10 = 20 点。
+       * freeEnergyShare 仍是基准量，别直接改成 20 —— 否则以后调倍率会失真。 */
+      freeEnergyAdMul: 10,    // 「10 倍获得」= 2×10 = 20
       /* v0.16：每日任务下线（主页不再有「任务」入口），奖励挪到邀请有礼 */
       inviteCoin: 20,         // 邀请有礼：每日首次分享
       inviteHint: 1,          // 邀请有礼：顺带 1 个查找道具
@@ -592,10 +595,13 @@
 
     /* ---------- v0.5 倒计时 / 生命值 ----------
      * 每关倒计时，时间按三等分映射为 3/2/1 颗心；归零失败。
-     * 关卡数据未定义 timeLimit 时用 parTime×parFactor，并夹在 [minSec,maxSec]。 */
+     * v0.31：用户要求「每关都是 2 分钟」—— 改成固定时限 fixedSec=120，
+     * 不再按 parTime×parFactor 逐关浮动（旧口径夹在 [90,240]，实际多数关是 240）。
+     * parTime 仍然保留，但只用于星级判定（3★ 要求用时 ≤ parTime）。 */
     TIMER: {
+      fixedSec: 120,        // v0.31：全部关卡统一 2 分钟（设为 0 则回落到 parTime×parFactor）
       minSec: 90,
-      maxSec: 240,
+      maxSec: 120,
       parFactor: 2.5,
       hearts: 3,
       warnSec: 20

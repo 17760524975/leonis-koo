@@ -117,55 +117,78 @@
     src.start(t0);
   }
 
-  /* v0.20 音效重做：全部改成「低频为主 + 极短衰减」的木质感。
-   * 依据是把参考视频的音轨拆开实测 —— 操作音的能量 65% 落在 0~1kHz、
-   * 1~3kHz 只占 8%、衰减 10~15ms；而旧版 sfx_snap 是 1500Hz 带通噪声 +
-   * 880→420 方波，1~3kHz 特别重，听感发尖发刺，这就是"难听"的主因。
-   * 现在：tap = 620→480Hz 短点；pick = 392→523Hz 上滑；snap = 196→147Hz
-   * 加 98Hz 的"笃"（只留一丝 700Hz 木质接触声）；win 去掉原来 1568Hz 的高频
-   * 冠音（最刺耳），低音补一层 C5 垫底，242ms 顶点仍与鲜花动效对齐。 */
-  /* v0.27 音效风格：默认木质（原音色）。setSfxStyle 会按 CFG.SFX_STYLES 的参数
-   * 重写三个操作音（tap/pick/snap）——pitch 改频率、decay 改时值、wave 改波形、
-   * bell 追加一层高八度泛音。sfx_win 通关曲保持原样（情绪表达不随风格破坏）。 */
-  var SFX_BASE = {
-    tap:  { f: 620, d: 0.055, g: 0.085, to: 480, f2: 1240, d2: 0.022, g2: 0.028 },
-    pick: { f: 392, d: 0.075, g: 0.115, to: 523, f2: 1046, d2: 0.030, g2: 0.026 },
-    snap: { f: 196, d: 0.085, g: 0.21, to: 147, f2: 98, d2: 0.070, g2: 0.12 }
-  };
-  function buildSfxSynth(key) {
-    var st = (C.SFX_STYLES && C.SFX_STYLES[key]) || C.SFX_STYLES.wood || { pitch: 1, decay: 1, wave: 'sine', bell: false };
-    var p = st.pitch, d = st.decay, w = st.wave, bell = !!st.bell;
-    function mk(b) {
-      return function () {
-        tone(b.f * p, b.d * d, w, b.g, 0, b.to ? b.to * p : 0);
-        tone(b.f2 * p, b.d2 * d, w, b.g2);
-        if (bell) tone(b.f2 * p * 1.5, b.d * d * 0.8, 'sine', b.g * 0.35, 0.008);
-      };
-    }
-    return {
-      sfx_tap: mk(SFX_BASE.tap),
-      sfx_pick: mk(SFX_BASE.pick),
-      sfx_snap: function () { mk(SFX_BASE.snap)(); noise(0.020, 0.055, 700); },
-      /* v0.29.2 新增、v0.29.3 音频回退后仍保留：拼接失败音，低沉短促，比成功音轻。
-       * 木质风格走 sfx_fail.wav 采样，其它风格用这段合成兜底。 */
-      sfx_fail: function () {
-        tone(220 * p, 0.16 * d, w, 0.10, 0, 165 * p);
-        tone(330 * p, 0.08 * d, 'sine', 0.035, 0.005);
-        noise(0.035, 0.028, 500);
-      },
-      sfx_win: function () {
-        tone(523.25, 0.14, 'triangle', 0.10, 0.000);
-        tone(659.25, 0.14, 'triangle', 0.10, 0.082);
-        tone(783.99, 0.15, 'triangle', 0.11, 0.162);
-        tone(1046.50, 0.24, 'sine', 0.13, 0.242);
-        tone(523.25, 0.62, 'sine', 0.07, 0.242);
-        tone(783.99, 0.52, 'sine', 0.06, 0.300);
-        tone(1046.50, 0.50, 'sine', 0.05, 0.340);
+  /* ---------- v0.31 音效引擎：模态合成（modal synthesis） ----------
+ * 旧版每个操作音是「两个正弦 + 6ms 指数渐入」，听起来"假"的两个根因：
+ *   ① 只有 2 个分音 —— 真实物体被敲击是一组非谐分音同时衰减（木、玻璃、金属各不相同）；
+ *   ② 没有瞬态 —— 软起音听不到"碰上了"的那一下，耳朵会直接判定为电子音。
+ * 新引擎：一组非谐分音（各自独立衰减）+ 1.5~3ms 带通噪声瞬态 + 音高微滑。
+ * 材质表 SFX_MAT 同时服务 8 种音效风格；默认「木质」优先播 v0.31 重制的 wav
+ * （生成脚本 tools/sfx_build.py），合成只在缺素材 / 换风格时兜底。 */
+var SFX_BASE = {
+  tap:  { f: 660, d: 0.10, g: 0.11 },
+  pick: { f: 392, d: 0.14, g: 0.15 },
+  snap: { f: 198, d: 0.26, g: 0.22 }
+};
+/* p: [分音比, 振幅, 衰减时间]；click/hz/tau: 瞬态强度/中心频率/时长；glide: 音高滑移（负=下坠） */
+var SFX_MAT = {
+  wood:    { p: [[1, 1, .048], [2.02, .52, .030], [3.05, .26, .018], [.50, .40, .062]], click: .50, hz: 2400, tau: .0022, glide: -.05 },
+  bell:    { p: [[1, 1, .90], [2.00, .48, .55], [2.76, .42, .44], [5.40, .18, .22], [8.16, .08, .12]], click: .12, hz: 7000, tau: .0015, glide: 0 },
+  water:   { p: [[1, 1, .16], [1.50, .34, .10], [2.70, .18, .06]], click: .30, hz: 3000, tau: .0018, glide: .22 },
+  retro:   { p: [[1, 1, .14], [2.00, .40, .09], [3.00, .20, .05]], click: .10, hz: 5000, tau: .0012, glide: 0 },
+  chime:   { p: [[1, 1, 1.30], [2.01, .30, .90], [3.93, .18, .60], [6.80, .08, .35]], click: .06, hz: 8000, tau: .0015, glide: 0 },
+  marimba: { p: [[1, 1, .34], [3.93, .34, .12], [9.20, .14, .05]], click: .26, hz: 1800, tau: .0020, glide: -.02 },
+  bubble:  { p: [[1, 1, .10], [2.20, .30, .05]], click: .26, hz: 2500, tau: .0016, glide: .38 },
+  synth:   { p: [[1, 1, .20], [2.00, .45, .12], [4.00, .20, .07]], click: .06, hz: 4200, tau: .0014, glide: 0 }
+};
+
+/* 一次敲击：分音组 + 瞬态。delay 用于琶音排程。 */
+function strike(f0, dur, gain, mat, wave, delay) {
+  if (!AC) return;
+  var t0 = AC.currentTime + (delay || 0);
+  for (var i = 0; i < mat.p.length; i++) {
+    var r = mat.p[i][0], a = mat.p[i][1], tau = mat.p[i][2];
+    try {
+      var o = AC.createOscillator(), g = AC.createGain();
+      o.type = (wave && wave !== 'sine') ? wave : 'sine';
+      o.frequency.setValueAtTime(f0 * r, t0);
+      if (mat.glide) {
+        o.frequency.exponentialRampToValueAtTime(Math.max(20, f0 * r * (1 + mat.glide)), t0 + 0.06);
       }
-    };
+      var life = Math.min(dur, Math.max(0.05, tau * 4.5));
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(Math.max(0.0004, gain * a), t0 + 0.0012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + life);
+      o.connect(g); g.connect(masterGain);
+      o.start(t0); o.stop(t0 + life + 0.02);
+    } catch (e) {}
   }
-  var synth = buildSfxSynth('wood');
-  var sfxStyleKey = 'wood';
+  if (mat.click > 0) noise(mat.tau * 3, gain * mat.click * 0.5, mat.hz, delay);
+}
+
+function buildSfxSynth(key) {
+  var st = (C.SFX_STYLES && C.SFX_STYLES[key]) ||
+    (C.SFX_STYLES && C.SFX_STYLES.wood) || { pitch: 1, decay: 1, wave: 'sine' };
+  var mat = SFX_MAT[key] || SFX_MAT.wood;
+  var p = st.pitch || 1, d = st.decay || 1, w = st.wave;
+  return {
+    sfx_tap:  function () { strike(SFX_BASE.tap.f * p, SFX_BASE.tap.d * d, SFX_BASE.tap.g, mat, w); },
+    sfx_pick: function () { strike(SFX_BASE.pick.f * p, SFX_BASE.pick.d * d, SFX_BASE.pick.g, mat, w); },
+    sfx_snap: function () { strike(SFX_BASE.snap.f * p, SFX_BASE.snap.d * d, SFX_BASE.snap.g, mat, w); },
+    /* 失败音永远是「闷」的木质：换风格也不该把"拼错了"变成清脆铃音 */
+    sfx_fail: function () { strike(168, 0.26, 0.14, SFX_MAT.wood, 'sine'); },
+    /* 通关琶音：C5-E5-G5-C6 钟琴分音，尾巴接鲜花动效（素材缺失时兜底） */
+    sfx_win: function () {
+      var ns = [523.25, 659.25, 783.99, 1046.50];
+      for (var i = 0; i < ns.length; i++) {
+        strike(ns[i], 1.1, 0.11 - i * 0.005, SFX_MAT.bell, 'sine', i * 0.085);
+      }
+      strike(261.63, 1.3, 0.06, SFX_MAT.bell, 'sine', 0.255);
+    }
+  };
+}
+var synth = buildSfxSynth('wood');
+var sfxStyleKey = 'wood';
+
 
   /* ---- 预加载：fetch → decodeAudioData ---- */
   function loadBuffers() {
@@ -481,8 +504,6 @@
   }
   function playSfx(name) {
     if (!enabled.sfx) return;
-    // v0.3.4 A4b：通关 sting 强制走合成，避免既有 sfx_win.mp3 抢先播旧三音
-    if (name === 'sfx_win') { if (synth.sfx_win) synth.sfx_win(); return; }
     if (name === 'sfx_snap' && snapVoices >= C.AUDIO.snapVoices) return;
     if (name === 'sfx_tap') {                 // 连点丢帧，避免机关枪
       var t = Date.now();
@@ -493,8 +514,9 @@
     var rate = 1 + (Math.random() * 0.10 - 0.05);
     var gain = (C.AUDIO.sfxGain[name] || 0.9) * (0.95 + Math.random() * 0.10);
     /* v0.27：非木质风格必须走合成（wav 缓冲是固定的木质录音，换风格听不出差别）。
-     * wood 保持原优先级（buffer → element → synth），零回归。 */
-    if (sfxStyleKey === 'wood') {
+     * wood 保持原优先级（buffer → element → synth），零回归。
+     * v0.31：通关音属于"情绪表达"，不随材质风格变，任何风格都优先播重制素材。 */
+    if (sfxStyleKey === 'wood' || name === 'sfx_win') {
       if (buf[name] && AC) {
         try {
           var s = AC.createBufferSource();

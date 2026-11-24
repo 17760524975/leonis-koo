@@ -68,7 +68,8 @@ function polysOf(solution) {
 }
 function judgeSol(lv, solution) {
   const judge = new J.Judge();
-  judge.setTarget(lv.outline);
+  /* v0.32：字母 P 这类关卡自带内孔，目标与面积都要扣掉孔 */
+  judge.setTarget(lv.outline, lv.holes || undefined);
   const polys = polysOf(solution);
   const r = judge.judge(polys);
   const areas = polys.map(p => G.area(p[0]));
@@ -80,7 +81,8 @@ function judgeSol(lv, solution) {
     if (ov > lim) bad = { key: p.key, ov, lim };
   }
   const sumA = polys.reduce((s, p) => s + G.area(p[0]), 0);
-  const outA = G.area(lv.outline);
+  const holeA = (lv.holes || []).reduce((s, h) => s + G.area(h), 0);
+  const outA = G.area(lv.outline) - holeA;
   return { coverage: r.coverage, overflow: r.overflow, bad, areaErrPct: Math.abs(sumA - outA) / outA * 100 };
 }
 console.log('\n==== 2. 逐关标准解（coverage≥99% / 真重叠 0）====');
@@ -118,7 +120,7 @@ console.log('\n==== 3.5 提示三档数据（splitLines 由标准解生成 / hin
     if (lv.hintTier === 1) nT1++; else if (lv.hintTier === 2) nT2++; else nT3++;
     minSplit = Math.min(minSplit, lv.splitLines.length);
   }
-  check('60 关 splitLines / hintTier 全部合法', ok,
+  check(S7.levels.length + ' 关 splitLines / hintTier 全部合法', ok,
     `档1×${nT1} 档2×${nT2} 档3×${nT3}  最少分割线 ${minSplit} 条`);
   // 档 1 的分割线必须真的在轮廓内部（取中点做点包含测试）
   const lv1 = S7.levels[0];
@@ -256,14 +258,19 @@ check('首屏是主界面、默认四巧板', S.page === 'home' && S.setKey === 
 }
 
 // 点主界面「七巧板」入口
-tap(375, 1250);
+tap(375, game._debug.homeLayout().set7Y);   // v0.31：底部锚定后位置自适应，取运行时坐标
 step(16);
 check('点「七巧板」进入七巧板关卡列表', S.page === 'levels' && S.setKey === 'tangram7',
   'page=' + S.page + ' set=' + S.setKey + ' 关卡数=' + game._debug.LEVELS.length);
-check('60 关 = 6 章 × 10 关（数据集自带）',
-  game._debug.LEVELS.length === 60 && S7.chapPer === 10 && S7.chapNames.length === 6 &&
-  Array.isArray(S7.chapTitles) && S7.chapTitles.length === 6,
-  'chapPer=' + S7.chapPer + ' 章名=' + S7.chapNames.join('/'));
+/* v0.30：关卡数随参考图扩展（60 → 85），断言改为「章数 = ceil(关数/每章上限)」，
+ * 不再硬编码 6 章 ×10 关，这样以后再加章节也不用改验收脚本。 */
+const nChapExpect = Math.ceil(S7.levels.length / S7.chapPer);
+check('关卡数 / 章节数与数据集自洽',
+  game._debug.LEVELS.length === S7.levels.length && S7.chapPer === 10 &&
+  S7.chapNames.length === nChapExpect &&
+  Array.isArray(S7.chapTitles) && S7.chapTitles.length === nChapExpect,
+  '关卡=' + game._debug.LEVELS.length + ' chapPer=' + S7.chapPer +
+  ' 章数=' + S7.chapNames.length + '/' + nChapExpect + ' 章名=' + S7.chapNames.join('/'));
 check('七巧板独立存档 key', game._debug.saveKey === 'tangram7_save_v1' && S4.saveKey === 'tangram_save_v1');
 check('结算文案按数据集（A7）', S7.completeTitle === '七巧板全部完成' && S4.completeTitle === '四巧板全部完成',
   S7.completeTitle + ' / ' + S4.completeTitle);
@@ -308,5 +315,5 @@ check('进入第 3 关', S.page === 'play' && S.levelIdx === 2 && S.pieces.lengt
     'keys=' + Object.keys(store).join(','));
 }
 
-console.log('\n' + (fail === 0 ? 'v0.3 正式版 · 七巧板 60 关验收全部通过' : `!! ${fail} 项未通过`));
+console.log('\n' + (fail === 0 ? `七巧板 ${S7.levels.length} 关验收全部通过` : `!! ${fail} 项未通过`));
 process.exit(fail === 0 ? 0 : 1);

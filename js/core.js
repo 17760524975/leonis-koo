@@ -315,7 +315,39 @@
     };
 
     var hits = [];        // 每帧重建的可点区域
-    var view = { scale: 1, ox: 0, oy: 0, w: 0, h: 0, dpr: 1, safeTop: C.SAFE.top, safeBottom: C.SAFE.bottom };
+    var view = { scale: 1, ox: 0, oy: 0, w: 0, h: 0, dh: C.DESIGN.h, dpr: 1, safeTop: C.SAFE.top, safeBottom: C.SAFE.bottom };
+
+    /* ---------------- v0.31 全局视觉设置 ----------------
+     * 四巧板 / 七巧板各自一份存档（SAVE_KEY 不同），皮肤/背景/板件/音效风格
+     * 原先混在这两份存档里 → 换个玩法就变回默认，等于「按游戏分别设置」。
+     * 用户要求「皮肤相关设置作用于整个游戏」，所以把这一组抽成独立的一个键，
+     * 与数据集无关：写的时候两边都写（兼容旧存档），读的时候以全局键为准。 */
+    var VIS_KEY = 'tangram_visual_v1';
+    var VIS_FIELDS = ['skin', 'bgFx', 'pieceStyle', 'sfxStyle'];
+    function loadVisual() {
+      var raw = null;
+      try { raw = env.storage.get(VIS_KEY); } catch (e) { raw = null; }
+      if (!raw) return null;
+      var o = raw;
+      if (typeof raw === 'string') { try { o = JSON.parse(raw); } catch (e) { return null; } }
+      return (o && typeof o === 'object') ? o : null;
+    }
+    function saveVisual(src) {
+      var s = src || (state && state.save) || {};
+      var o = {};
+      for (var i = 0; i < VIS_FIELDS.length; i++) o[VIS_FIELDS[i]] = s[VIS_FIELDS[i]];
+      try { env.storage.set(VIS_KEY, JSON.stringify(o)); } catch (e) { /* 隐私模式静默降级 */ }
+    }
+    /* 把全局设置盖到一份存档上；非法值收敛回默认，避免渲染分支落空 */
+    function applyVisualTo(s) {
+      var v = loadVisual();
+      if (!v) return false;
+      if (v.skin && C.SKINS && C.SKINS[v.skin]) s.skin = v.skin;
+      if (v.bgFx && C.BG_FX && C.BG_FX[v.bgFx]) s.bgFx = v.bgFx;
+      if (v.pieceStyle && C.PIECE_STYLES && C.PIECE_STYLES[v.pieceStyle]) s.pieceStyle = v.pieceStyle;
+      if (v.sfxStyle && C.SFX_STYLES && C.SFX_STYLES[v.sfxStyle]) s.sfxStyle = v.sfxStyle;
+      return true;
+    }
 
     /* ---------------- 存档 ---------------- */
     function defaultSave() {
@@ -333,7 +365,7 @@
         inviteCount: 0, inviteDay: '',
         skin: 'warm',
         /* v0.27 视觉升级：三类独立风格，缺省为经典组合 */
-        bgFx: 'classic',          // 主页动态背景特效（见 C.BG_FX）
+        bgFx: 'geometric',        // v0.31：默认「几何轻舞」（用户指定），全局生效
         pieceStyle: 'classic',    // 板件样式（见 C.PIECE_STYLES）
         sfxStyle: 'wood',         // 音效风格（见 C.SFX_STYLES）
         bgmIdx: 0,
@@ -395,7 +427,7 @@
             s.profile = (o.profile && typeof o.profile === 'object') ? o.profile : null;
             s.skin = o.skin || 'warm';
             /* v0.27：老存档缺视觉风格字段 → 缺省经典组合；非法值也收敛，避免渲染分支落空 */
-            s.bgFx = (C.BG_FX && C.BG_FX[o.bgFx]) ? o.bgFx : 'classic';
+            s.bgFx = (C.BG_FX && C.BG_FX[o.bgFx]) ? o.bgFx : 'geometric';
             s.pieceStyle = (C.PIECE_STYLES && C.PIECE_STYLES[o.pieceStyle]) ? o.pieceStyle : 'classic';
             s.sfxStyle = (C.SFX_STYLES && C.SFX_STYLES[o.sfxStyle]) ? o.sfxStyle : 'wood';
             s.bgmIdx = (typeof o.bgmIdx === 'number') ? o.bgmIdx : 0;
@@ -435,6 +467,10 @@
         seen.push(sk2);
       }
       s.streakSeen = seen;
+      /* v0.31：全局视觉设置优先于「这套存档自己的」设置 —— 四巧板 / 七巧板共用一份。
+       * 没有全局键（首次升级）时保持本档的配色/板件/音效，但背景统一落到「几何轻舞」，
+       * 这就是用户说的「进游戏默认几何轻舞」。 */
+      if (!applyVisualTo(s)) s.bgFx = 'geometric';
       return s;
     }
     /* keepTs=true：只落盘、不刷新 updatedAt。
@@ -538,7 +574,7 @@
       var need = state.overlay === 'settings' && profileCanAuth() && !state.me.auth;
       if (!need) { hideProfileButton(); return; }
       var P = C.PLAYER;
-      var r = cssRect(C.DESIGN.w / 2, C.DESIGN.h / 2 + P.authBtn.dy, P.authBtn.w, P.authBtn.h);
+      var r = cssRect(C.DESIGN.w / 2, DH() / 2 + P.authBtn.dy, P.authBtn.w, P.authBtn.h);
       r.label = P.authLabel;
       r.fontSize = Math.round(28 * view.scale);
       try { PROFILE.place(r); } catch (e) { /* 老基础库没有这个 API，退回纯画布按钮 */ }
@@ -656,6 +692,9 @@
        * 取 max 或 union 都没有意义（两份快照拼不到一起）。 */
       out.resume = newer.resume || null;
       out.updatedAt = Math.max(a.updatedAt || 0, b.updatedAt || 0);
+      /* v0.31：视觉设置是全局的，合并后仍然以全局键为准 —— 否则换设备登录后
+       * 会拿云端那份旧配色把本机刚选的皮肤盖掉。 */
+      applyVisualTo(out);
       return out;
     }
 
@@ -873,10 +912,13 @@
       persist();
       if (why && n) toast(why + (n > 0 ? ' +' : ' ') + n + ' 巧币');
     }
-    function addEnergy(n, why) {
+    /* overflow=true：允许超过上限（看视频 / 在线奖励这类"白给的"）。
+     * v0.31：看视频一次 +20，而上限只有 16 —— 若照旧封顶，4 点会被吞掉，
+     * 玩家只会看到"我看了 30 秒广告，体力只涨到 16"。与在线奖励同一口径。 */
+    function addEnergy(n, why, overflow) {
       var s = state.save; if (!s) return;
       var was = s.energy || 0;
-      s.energy = Math.min(s.energyMax, was + n);
+      s.energy = overflow ? (was + n) : Math.min(s.energyMax, was + n);
       if (was >= s.energyMax) s.energyTs = Date.now();
       persist();
       var got = s.energy - was;
@@ -894,10 +936,15 @@
       return true;
     }
 
-    /* 每关时限：关卡自带 timeLimit 优先，否则 parTime×parFactor 并夹到区间 */
+    /* 每关时限：v0.31 起全关统一 fixedSec（2 分钟，用户要求）。
+     * 旧口径「parTime×parFactor 夹在 [90,240]」退化为 fixedSec=0 时的兜底；
+     * parTime 现在只用于星级判定，不再决定时限。 */
     function timeLimitOf(lv) {
       var T = C.TIMER;
-      if (lv && typeof lv.timeLimit === 'number' && lv.timeLimit > 0) return lv.timeLimit;
+      if (T.fixedSec > 0) return T.fixedSec;
+      if (lv && typeof lv.timeLimit === 'number' && lv.timeLimit > 0) {
+        return clampN(lv.timeLimit, T.minSec, T.maxSec);
+      }
       var pt = (lv && lv.parTime) || 60;
       return clampN(Math.round(pt * T.parFactor), T.minSec, T.maxSec);
     }
@@ -921,7 +968,7 @@
       if (freeEnergyLeft() <= 0) { toast('今日次数已用完'); return false; }
       s.freeEnergyUsed = (s.freeEnergyUsed || 0) + 1;
       var n = byAd ? E.freeEnergyShare * E.freeEnergyAdMul : E.freeEnergyShare;
-      addEnergy(n, byAd ? '看广告' : '分享获得');
+      addEnergy(n, byAd ? '看广告' : '分享获得', !!byAd);
       return true;
     }
 
@@ -1075,7 +1122,7 @@
     function refreshPalette() {
       var sk = C.SKINS[state.save.skin || 'warm'];
       if (sk) { for (var k in sk) { if (k !== 'name') COL[k] = sk[k]; } }
-      var fx = C.BG_FX && C.BG_FX[state.save.bgFx || 'classic'];
+      var fx = C.BG_FX && C.BG_FX[state.save.bgFx || 'geometric'];
       state.darkFx = !!(fx && fx.dark);
       if (state.darkFx && C.DARK_PAL) {
         for (var d in C.DARK_PAL) { COL[d] = C.DARK_PAL[d]; }
@@ -1086,6 +1133,7 @@
       if (!sk) return;
       state.save.skin = key;
       refreshPalette();
+      saveVisual();          // v0.31：同步到全局键，另一套玩法立即一致
       persist();
       toast('皮肤：' + sk.name);
     }
@@ -1103,12 +1151,14 @@
       state.save.bgFx = key;
       state.fxParts = null;          // 换了特效 → 下一帧重新生成粒子
       refreshPalette();              // v0.28：深/浅特效切换时同步换字色 / 卡色
+      saveVisual();                  // v0.31：全局生效
       persist();
       toast('背景：' + C.BG_FX[key].name);
     }
     function applyPieceStyle(key) {
       if (!C.PIECE_STYLES || !C.PIECE_STYLES[key]) return;
       state.save.pieceStyle = key;
+      saveVisual();                  // v0.31：全局生效
       persist();
       toast('板件：' + C.PIECE_STYLES[key].name);
     }
@@ -1116,6 +1166,7 @@
       if (!C.SFX_STYLES || !C.SFX_STYLES[key]) return;
       state.save.sfxStyle = key;
       if (env.audio && env.audio.setSfxStyle) env.audio.setSfxStyle(key);
+      saveVisual();                  // v0.31：全局生效
       persist();
       env.audio.play('sfx_pick');    // 立即试听，切换手感可感知
       toast('音效：' + C.SFX_STYLES[key].name);
@@ -1457,7 +1508,9 @@
       state.lastTap = null;  // v0.4 A1：重开关卡不残留双击配对
       state.hint = null;
       state.judge = new J.Judge();
-      state.judge.setTarget(lv.outline);
+      /* v0.32：支持内孔（字母 A/P 这类轮廓中间必须挖空）
+       * lv.holes 可选，缺省时行为与旧版完全一致。 */
+      state.judge.setTarget(lv.outline, lv.holes);
       state.running = true;
       state.lastSnap = null;
       state.lastEdge = null;
@@ -1472,8 +1525,10 @@
         /* v0.26：续玩 —— 时间、用时、步数、复活次数、已在板上的块全部照搬。
          * 这里绝不能回满：否则"快没时间就返回再进"就是免费续命。 */
         var r0 = opts.resume;
-        state.timeLimit = r0.tl || tl;
-        state.timeLeft = Math.max(0, r0.left || 0);
+        /* v0.31：时限口径改成 2 分钟后，旧快照里可能是 240 秒 —— 夹到当前时限，
+         * 否则「老存档续玩」会白拿 2 分钟。剩余时间同理不能超过时限。 */
+        state.timeLimit = Math.min(r0.tl || tl, tl);
+        state.timeLeft = Math.max(0, Math.min(r0.left || 0, state.timeLimit));
         state.hearts = heartsOf(state.timeLeft, state.timeLimit);
         state.reviveUsed = r0.rv || 0;
         state.elapsed = Math.max(0, r0.el || 0);
@@ -2158,6 +2213,7 @@
           break;
         /* v0.15：在线奖励从「点一下直接领」改成「进页面按档领」 */
         case 'online_claim': state.overlay = 'online'; break;
+        /* v0.31：分享入口已下线（体力只走看视频），这里保留分支只为兼容旧热区/脚本 */
         case 'free_share': grantFreeEnergy(false); break;
         case 'free_ad': adStart('energy'); break;
         case 'ad_revive': adStart('revive'); break;
@@ -3042,14 +3098,14 @@
       for (var i = 0; i < n; i++) {
         var s = spots[i];
         var px = C.DESIGN.w * s[0] + Math.sin(t * (0.42 + i * 0.10) + s[3]) * 136;
-        var py = C.DESIGN.h * s[1] + Math.cos(t * (0.33 + i * 0.08) + s[3]) * 104;
+        var py = DH() * s[1] + Math.cos(t * (0.33 + i * 0.08) + s[3]) * 104;
         var r = C.DESIGN.w * s[2] * (1 + 0.07 * Math.sin(t * 0.55 + i));
         var gr = ctx.createRadialGradient(px, py, r * 0.10, px, py, r);
         gr.addColorStop(0, 'rgba(255,244,214,0.34)');
         gr.addColorStop(0.55, 'rgba(255,232,190,0.12)');
         gr.addColorStop(1, 'rgba(255,232,190,0)');
         ctx.fillStyle = gr;
-        ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
+        ctx.fillRect(0, 0, C.DESIGN.w, DH());
       }
       drawHomeSweep(t);
     }
@@ -3100,7 +3156,7 @@
         var n = P.count || 64;
         for (i = 0; i < n; i++) {
           r1 = fxRnd(i * 3 + 1); r2 = fxRnd(i * 3 + 2); r3 = fxRnd(i * 3 + 3);
-          out.items.push({ x: r1 * C.DESIGN.w, y: r2 * C.DESIGN.h,
+          out.items.push({ x: r1 * C.DESIGN.w, y: r2 * DH(),
             r: 1 + r3 * 2.4, ph: r1 * 6.28, sp: 0.6 + r2 * 1.4, big: r3 > 0.94 });
         }
         out.shoot = null;
@@ -3111,7 +3167,7 @@
           r1 = fxRnd(i * 4 + 1); r2 = fxRnd(i * 4 + 2); r3 = fxRnd(i * 4 + 3);
           var r4 = fxRnd(i * 4 + 4);
           out.items.push({
-            x: r1 * C.DESIGN.w, y: r2 * C.DESIGN.h,
+            x: r1 * C.DESIGN.w, y: r2 * DH(),
             size: mode === 'bubbles' ? (10 + r3 * 34)
                 : mode === 'firefly' ? (2 + r3 * 4.5)
                 : mode === 'snow' ? (4.5 + r3 * 9) : (10 + r3 * 16),
@@ -3129,7 +3185,7 @@
         var rn = P.count || 60;
         for (i = 0; i < rn; i++) {
           r1 = fxRnd(i * 3 + 1); r2 = fxRnd(i * 3 + 2); r3 = fxRnd(i * 3 + 3);
-          out.items.push({ x: r1 * C.DESIGN.w, y: r2 * C.DESIGN.h,
+          out.items.push({ x: r1 * C.DESIGN.w, y: r2 * DH(),
             len: 22 + r3 * 46, sp: 480 + r3 * 560, ph: r1 * 6.28,
             alpha: 0.18 + r2 * 0.36, sway: r1 * 6 });
         }
@@ -3137,7 +3193,7 @@
         var cn = P.clouds || 6;
         for (i = 0; i < cn; i++) {
           r1 = fxRnd(i * 3 + 1); r2 = fxRnd(i * 3 + 2); r3 = fxRnd(i * 3 + 3);
-          out.items.push({ x: r1 * C.DESIGN.w, y: r2 * C.DESIGN.h,
+          out.items.push({ x: r1 * C.DESIGN.w, y: r2 * DH(),
             r: 160 + r3 * 240, ph: r1 * 6.28, speed: 0.10 + r2 * 0.14,
             color: ['#7B5CE8', '#3E7FE0', '#C451D6', '#4BC6E8', '#9B6BFF', '#E85C9E'][i % 6] });
         }
@@ -3162,7 +3218,7 @@
       var F = state.fxParts;
       var low = !!state.lowFps;
       var n = F.items.length;
-      var W = C.DESIGN.w, H = C.DESIGN.h;
+      var W = C.DESIGN.w, H = DH();          // v0.31：粒子按真实可用高度分布，细长屏也铺满
       var dt = Math.min(0.05, dtMs / 1000);
       F.t += dt;
 
@@ -3325,7 +3381,7 @@
 
     /* 深色夜空底：深蓝 / 深紫渐变 + 顶部微光，铺在粒子之下、卡片之下 */
     function drawFxDarkBase(mode) {
-      var W = C.DESIGN.w, H = C.DESIGN.h;
+      var W = C.DESIGN.w, H = DH();
       var g = ctx.createLinearGradient(0, 0, W * 0.3, H);
       if (mode === 'nebula') {
         g.addColorStop(0, '#1A1038'); g.addColorStop(0.55, '#120E2C'); g.addColorStop(1, '#070A1C');
@@ -3364,28 +3420,29 @@
       var fx = withArt && !state.reduceMotion;
       var t = state.time / 1000;
       var img = withArt && env.images && env.images.home_bg_desk;
+      var bgh = DH();        // v0.31：底图/渐变铺到真实可用高度，细长屏不留边
       if (img) {
-        var sc = Math.max(C.DESIGN.w / (img.width || 1), C.DESIGN.h / (img.height || 1)) * (fx ? 1.06 : 1);
+        var sc = Math.max(C.DESIGN.w / (img.width || 1), bgh / (img.height || 1)) * (fx ? 1.06 : 1);
         var dw = (img.width || 1) * sc, dh = (img.height || 1) * sc;
         var dx = (C.DESIGN.w - dw) / 2 + (fx ? Math.sin(t * 0.26) * 22 : 0);
-        var dy = (C.DESIGN.h - dh) / 2 + (fx ? Math.cos(t * 0.19) * 18 : 0);
+        var dy = (bgh - dh) / 2 + (fx ? Math.cos(t * 0.19) * 18 : 0);
         ctx.drawImage(img, dx, dy, dw, dh);
         /* v0.5：皮肤色罩——主界面用固定背景图，不叠罩则换肤几乎看不出 */
-        if (COL.tint) { ctx.fillStyle = COL.tint; ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h); }
+        if (COL.tint) { ctx.fillStyle = COL.tint; ctx.fillRect(0, 0, C.DESIGN.w, bgh); }
       } else {
-        var g = ctx.createLinearGradient(0, 0, 0, C.DESIGN.h);
+        var g = ctx.createLinearGradient(0, 0, 0, bgh);
         g.addColorStop(0, COL.bgTop || COL.card || '#FBF3E6');   // v0.5：随皮肤变化
         g.addColorStop(0.45, COL.bg);
         g.addColorStop(1, COL.bgDeep);
         ctx.fillStyle = g;
-        ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
+        ctx.fillRect(0, 0, C.DESIGN.w, bgh);
         // 左上柔光
         var rg = ctx.createRadialGradient(180, 180, 20, 180, 180, 620);
         rg.addColorStop(0, 'rgba(255,255,255,0.85)');
         rg.addColorStop(0.55, 'rgba(255,255,255,0.22)');
         rg.addColorStop(1, 'rgba(255,255,255,0)');
         ctx.fillStyle = rg;
-        ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
+        ctx.fillRect(0, 0, C.DESIGN.w, bgh);
         /* v0.3.1 A1：删除原「极淡木纹」9 条横向贝塞尔线——
          * 关卡页 drawBg(false) 走渐变分支，这些线在米色底上形成贯穿横条，
          * 用户反馈「布局错乱」。保留渐变 + 左上柔光即可。 */
@@ -3394,6 +3451,20 @@
     }
 
     /* ---------------- 主界面 ---------------- */
+    /* v0.31 主页竖向布局：底部三件套（继续 / 两套入口 / 星数）锚在安全区上方。
+     * 抽成函数是为了让 verify_v06 / verify_tangram7 直接取运行时坐标 ——
+     * 以前它们抄 CFG.LAYOUT.HOME 的固定值，布局一自适应就会点空。 */
+    function homeLayout() {
+      var HL = C.LAYOUT.HOME;
+      var bottom = Math.max(140, (view.safeBottom || 0) + 40);
+      var starY = DH() - bottom;
+      var set7Y = starY - 86;
+      var set4Y = set7Y - 126;
+      var startY = set4Y - 138;
+      return { starY: starY, set7Y: set7Y, set4Y: set4Y, startY: startY,
+        shift: Math.max(0, startY - HL.startY) };
+    }
+
     function renderHome() {
       drawBg(true);
       /* v0.27：背景特效粒子层——画在底图之上、标题/装饰之下，不写热区不吞点击。
@@ -3401,6 +3472,17 @@
       drawFxLayer(state.time / 1000, state.dt || 16);
       var t = state.time / 1000;
       var float = Math.sin(t * 1.4) * 3;
+
+      /* v0.31 底部锚定（vivo X200s 2.222:1 等细长屏）：
+       * 设计稿 1624 高、星数行固定在 1360，本身就留了 264 的底部空白；
+       * 再加上全面屏多出的高度（本机 42.7），合成截图里就是一大片空地。
+       * 现在把「继续 / 四巧板 / 七巧板 / 星数」整组锚在安全区上方，
+       * 多出来的高度由这组按钮吃掉；装饰帆船按位移的 45% 跟着下移，
+       * 让上半屏与按钮之间的气口保持不变，不会上头挤、下头空。
+       * 坐标由 homeLayout() 统一算 —— 验收脚本读同一个函数，不再抄死数字。 */
+      var HL = homeLayout();
+      var starY = HL.starY, set7Y = HL.set7Y, set4Y = HL.set4Y, startY = HL.startY;
+      var homeShift = HL.shift;
 
       /* v0.6：标题 / 副标题 / 装饰恒定，不随数据集联动。
        * 旧版标题写死「四巧 · 七巧」、装饰取当前数据集头 4 块，
@@ -3434,7 +3516,7 @@
 
       /* 固定装饰：坐标见 config.HOME_DECO，四巧/七巧怎么切都不动一个像素 */
       var deco = C.HOME_DECO;
-      var decoX = C.DESIGN.w / 2 + deco.cxOff, decoY = deco.cy + float;
+      var decoX = C.DESIGN.w / 2 + deco.cxOff, decoY = deco.cy + float + homeShift * 0.45;
       /* v0.27：帆船底座柔光晕 + 环绕星点，让主视觉「浮起来」并随呼吸变化 */
       if (V.decoHalo !== false && !state.reduceMotion) {
         ctx.save();
@@ -3459,9 +3541,9 @@
       }
       for (var i = 0; i < deco.pieces.length; i++) {
         var d = deco.pieces[i];
-        var bob = float + Math.sin(t * 1.1 + i * 0.9) * 3;
+        var bob = Math.sin(t * 1.1 + i * 0.9) * 3;
         ctx.save();
-        ctx.translate(C.DESIGN.w / 2 + deco.cxOff, deco.cy + bob);
+        ctx.translate(C.DESIGN.w / 2 + deco.cxOff, decoY + bob);
         ctx.beginPath();
         for (var k = 0; k < d.pts.length; k++) {
           if (k === 0) ctx.moveTo(d.pts[k][0], d.pts[k][1]);
@@ -3587,7 +3669,7 @@
       var startLabel = state.save.unlockedMax > 1
         ? '继续 第 ' + Math.min(state.save.unlockedMax, LEVELS.length) + ' 关'
         : '开始';
-      var b1 = { id: 'start', x: C.DESIGN.w / 2, y: H.startY, w: 420, h: 108, label: startLabel, variant: 'primary', size: 32 };
+      var b1 = { id: 'start', x: C.DESIGN.w / 2, y: startY, w: 420, h: 108, label: startLabel, variant: 'primary', size: 32 };
       addHit(b1.x, b1.y, b1.w, b1.h, 'start');
       drawButton(b1);
       /* v0.27：主按钮周期流光——一道窄高光沿按钮内从左扫到右，
@@ -3692,14 +3774,14 @@
           ctx.restore();
         }
       }
-      setEntry('set_t4', 'tangram4', 't4', H.set4Y);
-      setEntry('set_t7', 'tangram7', 't7', H.set7Y);
+      setEntry('set_t4', 'tangram4', 't4', set4Y);
+      setEntry('set_t7', 'tangram7', 't7', set7Y);
 
       /* v0.7：设置从右上角挪到右列底部，样式与其它入口统一成「图标 + 下方小字」。
        * v0.16：左列「任务」下线后，右列仍保持 3 个入口（排行榜 / 在线奖励 / 设置）。 */
       homeEntry('settings', 'gear', '设置', rx, e0 + eg * 3);
 
-      text('已获得 ' + totalStars() + '/' + (LEVELS.length * 3) + ' 星', C.DESIGN.w / 2, 1360, 24, COL.textSub, 'center');
+      text('已获得 ' + totalStars() + '/' + (LEVELS.length * 3) + ' 星', C.DESIGN.w / 2, starY, 24, COL.textSub, 'center');
     }
 
     /* ---------------- 关卡选择（v0.2：按章分页） ----------------
@@ -3717,7 +3799,7 @@
      * 取 bbox 后等比缩放居中画进图形区（不拉伸）。
      * 配色沿用对局页目标轮廓：targetFill 填充 + targetEdge 描边；
      * 未解锁关走 disabled 系（灰化），一眼区分「能玩 / 还没开」。 */
-    function drawLevelThumb(outline, cx, cy, maxW, maxH, fill, edge) {
+    function drawLevelThumb(outline, cx, cy, maxW, maxH, fill, edge, holes) {
       if (!outline || outline.length < 3) return;
       var bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
       for (var i = 0; i < outline.length; i++) {
@@ -3739,7 +3821,19 @@
         if (j === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
       }
       ctx.closePath();
-      ctx.fillStyle = fill; ctx.fill();
+      /* v0.32：带内孔的剪影（字母 A/P 等）用奇偶填充，避免缩略图画成实心块 */
+      var hs = holes || [];
+      for (var m2 = 0; m2 < hs.length; m2++) {
+        var hr2 = hs[m2];
+        if (!hr2 || hr2.length < 3) continue;
+        ctx.moveTo(ox + (hr2[0][0] - bx0) * s, oy + (hr2[0][1] - by0) * s);
+        for (var n2 = 1; n2 < hr2.length; n2++) {
+          ctx.lineTo(ox + (hr2[n2][0] - bx0) * s, oy + (hr2[n2][1] - by0) * s);
+        }
+        ctx.closePath();
+      }
+      ctx.fillStyle = fill;
+      if (hs.length) ctx.fill('evenodd'); else ctx.fill();
       ctx.lineWidth = 2.5; ctx.lineJoin = 'round';
       ctx.strokeStyle = edge; ctx.stroke();
       ctx.restore();
@@ -3760,7 +3854,13 @@
       state.lvPage = page;
 
       /* 章节胶囊 */
-      var pw = 96, ph = 64, pgap = 10;
+      /* v0.30：章节数从 6 增到 9，固定 96px 胶囊会超出 750 设计宽
+       * （9×96 + 8×10 = 944）。改为按可用宽度自适应：先取理想值 96，
+       * 放不下就等比收窄并压缩间隙，字号保持不变（2 个汉字 48px 仍放得下）。 */
+      var ph = 64;
+      var pgap = nCh > 7 ? 6 : 10;
+      var avail = C.DESIGN.w - 32;
+      var pw = Math.min(96, Math.floor((avail - (nCh - 1) * pgap) / nCh));
       var ptotal = nCh * pw + (nCh - 1) * pgap;
       var px0 = (C.DESIGN.w - ptotal) / 2 + pw / 2;
       var py = view.safeTop + 96 + ph / 2;
@@ -3811,7 +3911,7 @@
         var lv = LEVELS[idx];
         drawLevelThumb(lv.outline, cx, cellY - 30, 116, 104,
           locked ? COL.disabledIcon : COL.targetFill,
-          locked ? COL.textSub : COL.targetEdge);
+          locked ? COL.textSub : COL.targetEdge, lv.holes);
         if (locked) {
           drawIcon('lock', cx, cellY + 46, COL.disabledIcon, 0.8);
         } else {
@@ -4244,8 +4344,17 @@
       ctx.moveTo(outline[0][0], outline[0][1]);
       for (var o = 1; o < outline.length; o++) ctx.lineTo(outline[o][0], outline[o][1]);
       ctx.closePath();
+      /* v0.32：内孔用奇偶填充挖空（字母 A/P 等轮廓本身就带洞） */
+      var holes = lv.holes || [];
+      for (var hh = 0; hh < holes.length; hh++) {
+        var hr = holes[hh];
+        if (!hr || hr.length < 3) continue;
+        ctx.moveTo(w2d(hr[0][0]), h2d(hr[0][1]));
+        for (var hk = 1; hk < hr.length; hk++) ctx.lineTo(w2d(hr[hk][0]), h2d(hr[hk][1]));
+        ctx.closePath();
+      }
       ctx.fillStyle = drawTier === 3 ? COL.targetSilhouette : COL.targetFill;
-      ctx.fill();
+      if (holes.length) ctx.fill('evenodd'); else ctx.fill();
       if (drawTier === 1) {
         ctx.lineWidth = 3;
         ctx.strokeStyle = COL.targetEdge;
@@ -4973,7 +5082,7 @@
     function renderResult() {
       var W = C.WIN;
       ctx.fillStyle = COL.mask;
-      ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
+      ctx.fillRect(0, 0, C.DESIGN.w, DH());
       /* v0.17：结算会现场加巧币/体力，余额就摆在屏幕顶部（与对局页同位置），
        * 不用等玩家退回主页才发现数字变了。 */
       playHud(view.safeTop + 40);
@@ -5284,7 +5393,7 @@
       var R = C.RANK;
       var W = 660, H = 900, cy = 812;
       ctx.fillStyle = COL.mask;
-      ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
+      ctx.fillRect(0, 0, C.DESIGN.w, DH());
       var e = G.easeOutCubic(Math.min(1, state.rankT / 180));
       ctx.save();
       ctx.globalAlpha = e;
@@ -5384,11 +5493,11 @@
     function renderSettings() {
       var P = C.PLAYER;
       ctx.fillStyle = COL.mask;
-      ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
+      ctx.fillRect(0, 0, C.DESIGN.w, DH());
       /* v0.14：加了一张「玩家资料」卡 + 一个授权按钮，卡片从 620 长到 812。
        * 设计稿 1624 高，卡片上下各留 406，仍不会压到安全区。 */
-      drawCard(C.DESIGN.w / 2, C.DESIGN.h / 2, 588, 812, 32);
-      var cy = C.DESIGN.h / 2;
+      drawCard(C.DESIGN.w / 2, DH() / 2, 588, 812, 32);
+      var cy = DH() / 2;
       text('设置', C.DESIGN.w / 2, cy - 352, 44, COL.text, 'center', '600');
 
       /* ---- 玩家资料卡：头像 + 昵称 + 一行状态 ---- */
@@ -5458,8 +5567,8 @@
     /* 弹窗外壳：遮罩 + 白卡 + 返回卡片中心 y */
     function sheetBg(w, h) {
       ctx.fillStyle = COL.mask;
-      ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
-      var cy = C.DESIGN.h / 2;
+      ctx.fillRect(0, 0, C.DESIGN.w, DH());
+      var cy = DH() / 2;
       drawCard(C.DESIGN.w / 2, cy, w, h, 32);
       return cy;
     }
@@ -5487,8 +5596,8 @@
       if (!state.adSim) return;
       var p = Math.min(1, state.adSim.t / C.ECON.adSimMs);
       ctx.fillStyle = 'rgba(20,24,36,0.55)';
-      ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
-      var cy = C.DESIGN.h / 2;
+      ctx.fillRect(0, 0, C.DESIGN.w, DH());
+      var cy = DH() / 2;
       drawCard(C.DESIGN.w / 2, cy, 460, 240, 26);
       text('广告播放中…', C.DESIGN.w / 2, cy - 46, 32, COL.text, 'center', '600');
       ctx.save();
@@ -5601,25 +5710,27 @@
       adLayer();
     }
 
-    /* 免费体力弹窗（参考图 2） */
+    /* 免费体力弹窗（参考图 2）
+     * v0.31：用户要求「体力获取只保留看视频」「4 倍改 10 倍」——
+     * 去掉「分享获得」，只留一枚通栏的看视频按钮；单次 2×10 = 20 点。 */
     function renderEnergy() {
       var cy = sheetBg(600, 660);
       sheetTitle('免费体力', cy, 660);
       var top = cy - 660 / 2;
-      drawIcon('energy', C.DESIGN.w / 2, top + 190, '#3DBEF0', 3.4);
-      text('+2', C.DESIGN.w / 2 + 96, top + 236, 34, COL.text, 'center', '700');
+      var per = C.ECON.freeEnergyShare * C.ECON.freeEnergyAdMul;
+      /* 图标 + 数字作为一组居中：旧版图标压在正中、数字挂在右边，视觉重心偏右 */
+      drawIcon('energy', C.DESIGN.w / 2 - 62, top + 200, '#3DBEF0', 3.2);
+      text('+' + per, C.DESIGN.w / 2 + 56, top + 200, 40, COL.text, 'center', '700');
 
       var used = freeEnergyUsedToday(), total = C.ECON.freeEnergyPerDay;
       var leftN = Math.max(0, total - used);
       var can = leftN > 0 && !state.adSim;
-      var half = 220;
-      var bShare = { id: 'free_share', x: C.DESIGN.w / 2 - half / 2 - 12, y: top + 400, w: half, h: 96,
-        label: '分享获得', variant: 'primary', size: 28, disabled: !can, icon: 'share' };
-      var bAd = { id: 'free_ad', x: C.DESIGN.w / 2 + half / 2 + 12, y: top + 400, w: half, h: 96,
-        label: '4 倍获得', variant: 'danger', size: 28, disabled: !can, icon: 'tv' };
-      addHit(bShare.x, bShare.y, bShare.w, bShare.h, 'free_share');
+      var bAd = { id: 'free_ad', x: C.DESIGN.w / 2, y: top + 400, w: 460, h: 96,
+        label: C.ECON.freeEnergyAdMul + ' 倍获得', variant: 'danger', size: 30, disabled: !can, icon: 'tv' };
       addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'free_ad');
-      drawButton(bShare); drawButton(bAd);
+      drawButton(bAd);
+      text('单次 ' + C.ECON.freeEnergyShare + ' 点 × ' + C.ECON.freeEnergyAdMul + ' 倍 · 每日 ' + total + ' 次',
+        C.DESIGN.w / 2, top + 470, 21, COL.textSub, 'center');
       text('使用次数 ' + used + '/' + total, C.DESIGN.w / 2, top + 510, 24, COL.textSub, 'center');
       sheetClose(top + 700, 'close_energy');
       adLayer();
@@ -5998,9 +6109,9 @@
       ctx.save();
       ctx.globalAlpha = a;
       var tw = Math.min(560, 40 + state.toast.text.length * 26);
-      rr(C.DESIGN.w / 2 - tw / 2, C.DESIGN.h - 300, tw, 68, 34);
+      rr(C.DESIGN.w / 2 - tw / 2, DH() - 300, tw, 68, 34);
       ctx.fillStyle = 'rgba(44,58,75,0.90)'; ctx.fill();
-      text(state.toast.text, C.DESIGN.w / 2, C.DESIGN.h - 266, 26, '#FFFFFF', 'center', '600');
+      text(state.toast.text, C.DESIGN.w / 2, DH() - 266, 26, '#FFFFFF', 'center', '600');
       ctx.restore();
     }
 
@@ -6046,20 +6157,31 @@
         ctx.save();
         ctx.globalAlpha = 1 - state.fade;
         ctx.fillStyle = COL.bg;
-        ctx.fillRect(0, 0, C.DESIGN.w, C.DESIGN.h);
+        ctx.fillRect(0, 0, C.DESIGN.w, DH());
         ctx.restore();
       }
       ctx.restore();
     }
 
     /* ---------------- 尺寸 ---------------- */
+    /* v0.31 全面屏兼容：设计稿是 750×1624（2.165:1），而 vivo X200s 这类机器是
+     * 1260×2800（2.222:1）、部分机型更极端。旧版 scale 取 min(w/750, h/1624) 后
+     * 把设计框垂直居中 —— 多出来的高度变成上下两条米色空白（实测 X200s 各 37 物理 px），
+     * 用户截图反馈「主页顶部和尾部有空白」就是它。
+     * 现在：宽度照旧决定 scale（保证排版宽度一致），竖向不再留边，
+     * 用 view.dh 记录「当前屏在设计坐标系里的真实可用高度」，页面把多出来的高度吃掉。 */
+    function DH() { return view.dh || C.DESIGN.h; }
+
     function resize() {
       var s = env.size();
       var dpr = env.dpr ? env.dpr() : 1;
       view.w = s.w; view.h = s.h; view.dpr = dpr;
       view.scale = Math.min(s.w / C.DESIGN.w, s.h / C.DESIGN.h);
+      /* dh 只会 ≥ 设计高：宽受限（细长屏）时伸展，高受限（方屏/横屏）时保持 1624。
+       * oy 恒为 0 —— 竖向从设计原点起排，不再上下留白。 */
+      view.dh = Math.max(C.DESIGN.h, s.h / view.scale);
       view.ox = (s.w - C.DESIGN.w * view.scale) / 2;
-      view.oy = (s.h - C.DESIGN.h * view.scale) / 2;
+      view.oy = 0;
       var si = env.safeInsets ? env.safeInsets() : { top: 0, bottom: 0 };
       view.safeTop = Math.max(C.SAFE.top, (si.top || 0) / view.scale);
       view.safeBottom = Math.max(C.SAFE.bottom, (si.bottom || 0) / view.scale);
@@ -6095,6 +6217,15 @@
       state.lowFps = fpsAvg > 25;
       update(dt);
       var dpr = view.dpr || 1;
+      /* v0.31：先把整块画布铺成当前皮肤的深底色，再上设计坐标系。
+       * 细长屏（宽受限）时 oy=0 不会留边；方屏 / 平板（高受限）左右会有 ox>0 的边，
+       * 这一层保证那些边也是游戏底色，而不是页面默认的米白色。 */
+      var cv0 = ctx.canvas;
+      if (cv0 && cv0.width && cv0.height) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = COL.bgDeep || COL.bg || '#0B1020';
+        ctx.fillRect(0, 0, cv0.width, cv0.height);
+      }
       ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.ox, dpr * view.oy);
       render();
       rafFn(frame);
@@ -6109,6 +6240,9 @@
       state.settingsFx = state.save.settings.sfx !== false;
       state.settingsBgm = state.save.settings.bgm !== false;
       initSkin();                    // v0.5：载入存档里的皮肤配色（必须在首次渲染前）
+      /* v0.31：首次升级时把当前设置落成全局键（此后两套玩法共用一份）。
+       * 放在 initSkin 之后：确保默认「几何轻舞」已经被 loadSave 写进 state.save。 */
+      saveVisual();
       applyAudio();
       /* v0.14：先用本地缓存的昵称头像起步（不闪、断网也有名字），再等云端覆盖 */
       if (state.save.profile) applyProfile(state.save.profile, false);
@@ -6196,6 +6330,8 @@
         onlineClaimCount: onlineClaimCount, onlineClock: onlineClock,
         onlineSync: onlineSync, useHintItem: useHintItem, onlineTick: onlineTick,
         timeLimitOf: timeLimitOf, heartsOf: heartsOf, totalStars: totalStars,
+        /* v0.31：主页自适应布局（细长屏底部锚定）—— 验收脚本据此取点击坐标 */
+        homeLayout: homeLayout, designH: DH,
         /* v0.9：云同步 / 广告 / 榜单，供 verify_v09 直接驱动 */
         cloudPush: cloudPush, cloudPull: cloudPull, cloudRank: cloudRank,
         openRank: openRank, netText: netText, adRect: adRect, syncBanner: syncBanner, go: go,
@@ -6226,7 +6362,8 @@
         get saveKey() { return SAVE_KEY; }, buildSet: buildSet,
         /* v0.6：品牌 / 主页版式 / 持续小花流，供 verify_v06 直接断言 */
         get BRAND() { return C.BRAND; },
-        get homeLayout() { return C.LAYOUT.HOME; },
+        /* v0.31：homeLayout 由「设计基准对象」改成「运行时坐标函数」——
+         * 底部锚定后位置随屏高变化，旧的固定值会点到空气（见上方 homeLayout）。 */
         flowerStream: function () { return flowerStreamParticles(state.setKey, state.levelIdx); },
         drawWinStreamAt: function (t) { drawWinStream(t, false); } }
     };

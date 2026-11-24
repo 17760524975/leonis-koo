@@ -53,6 +53,8 @@
           var idx = cellRow * CELLS + cellCol;
           if (mode === 'target') {
             if (cellCnt[idx] < 255) cellCnt[idx]++;
+          } else if (mode === 'hole') {
+            if (cellCnt[idx] > 0) cellCnt[idx]--;
           } else {
             if (cellCnt[idx] < 250) cellCnt[idx]++;
             if (pieceBit) cellBits[idx] |= pieceBit;
@@ -70,10 +72,15 @@
     this.targetTotal = 0;
   }
 
-  /* 设置目标轮廓（每关一次）。outline 为 1000 坐标系多边形 */
-  Judge.prototype.setTarget = function (outline) {
+  /* 设置目标轮廓（每关一次）。outline 为 1000 坐标系多边形；
+   * holes 可选，为该轮廓内部需要挖掉的孔（如字母 A/P 的内孔）。
+   */
+  Judge.prototype.setTarget = function (outline, holes) {
     var t = new Uint8Array(CELLS * CELLS);
     rasterize(outline, t, null, 0, 'target');
+    if (holes && holes.length) {
+      for (var hi = 0; hi < holes.length; hi++) rasterize(holes[hi], t, null, 0, 'hole');
+    }
     this.targetFrac = t;
     var total = 0;
     for (var i = 0; i < t.length; i++) total += t[i];

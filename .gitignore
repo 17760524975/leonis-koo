@@ -18,3 +18,13 @@ audio/*.mp3
 
 # 小游戏工程目录里误留的内嵌仓库（2.6MB，克隆时不需要）
 miniprogram/.git/
+
+# v0.32 关卡重制的中间产物（参考图裁切、放大图、求解渲染）
+tools/alpha/out/
+tools/tanref/out/
+tools/tanref2/out/
+tools/tanref3/out/
+tools/tanref*/*.png
+tools/tanref*/*.jpg
+tools/tanref*/*.npy
+tools/tanref*/*.npz
