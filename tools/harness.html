@@ -108,10 +108,20 @@
       ctx: ctx,
       size: function () {
         var m = q.match(/w=(\d+)/);
+        var mh = q.match(/[&?]h=(\d+)/);
+        /* v0.46：支持 &h=（物理高 CSS px），用来模拟真机纵横比。
+         * 默认仍按设计比例 1624 推出来（w=750 时就是 1624）。 */
+        if (m && mh) return { w: +m[1], h: +mh[1] };
         return m ? { w: +m[1], h: 1624 * (+m[1]) / 750 } : { w: 750, h: 1624 };
       },
       dpr: function () { return 1; },
-      safeInsets: function () { return { top: 0, bottom: 0 }; },
+      /* v0.46：&safeTop=<CSS px> 模拟真机安全区（灵动岛机型 iPhone 15/16/17 = 59~62）。
+       * 不传时为 0，走 config.SAFE.top=88 的设计基准 —— 与验收脚本口径一致。 */
+      safeInsets: function () {
+        var st = q.match(/safeTop=(\d+)/);
+        var sb = q.match(/safeBottom=(\d+)/);
+        return { top: st ? +st[1] : 0, bottom: sb ? +sb[1] : 0 };
+      },
       bindInput: function (fn) { inputFn = fn; },
       storage: { get: function () { return null; }, set: function () {} },
       audio: { unlock: function () {}, setEnabled: function () {}, play: function () {}, duck: function () {} },

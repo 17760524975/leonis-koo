@@ -60,6 +60,9 @@ function createFriend() {
           w: Math.round(opt.w || 566),
           h: Math.round(opt.h || 588),
           k: Math.max(1, Math.min(3, opt.k || 2)),
+          /* v0.47：主域当前的配色（开放数据域读不到 config，只能随消息带过去）。
+           * 不带时那边用内置的浅色默认值，行为与旧版一致。 */
+          pal: opt.pal || null,
           me: opt.me || null
         });
         return true;

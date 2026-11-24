@@ -154,10 +154,9 @@ check('left + maxW < 255（不压倒计时）', M.left + M.maxW < CAP_L,
 check('胶囊右沿与倒计时净空 ≥ 8', CAP_L - (M.left + M.maxW) >= 8,
   `净空=${CAP_L - (M.left + M.maxW)}`);
 check('胶囊左沿与返回键旧左沿 32 对齐（占住腾出的左上角）', M.left === 32, `left=${M.left}`);
-check('其余字段保持原值（rowGap/pillH/maxW/topShift/rightAnchor 未动）',
-  M.rowGap === 44 && M.pillH === 36 && M.maxW === 127 &&
-  M.topShift === 8 && M.rightAnchor === false,
-  `rowGap=${M.rowGap} pillH=${M.pillH} maxW=${M.maxW} topShift=${M.topShift} rightAnchor=${M.rightAnchor}`);
+check('v0.37 的核心成果保持：left=32 且右锚定关闭（其余字段 v0.46 已放大，见 verify_v046）',
+  M.left === 32 && M.rightAnchor === false,
+  `left=${M.left} rightAnchor=${M.rightAnchor} | 现 pillH=${M.pillH} rowGap=${M.rowGap} maxW=${M.maxW} topPad=${M.topPad}`);
 
 /* ================= 5. 糖果可爱风 ================= */
 section('5. 返回按钮糖果底 + 圆润「←」图标');

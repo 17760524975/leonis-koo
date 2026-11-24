@@ -30,6 +30,11 @@
 
   var COL = C.COLORS, LAY = C.LAYOUT;
   var WS = LAY.BOARD.size / 1000;              // 世界单位 → 设计像素（与数据集无关）
+  /* v0.46：卡纸顶/高会被 resize() 按安全区改写，这里先留一份「设计基准值」，
+   * 每次 resize 都从基准重算（而不是在上一帧的结果上累加），转屏/切设备都不会漂。 */
+  var BASE_BOARD_Y = LAY.BOARD.y;
+  var BASE_BOARD_H = LAY.BOARD.h;
+  var BOARD_MAX_NUDGE = 90;                    // 卡纸最多下移 90（再多纸就矮得放不下盘面了）
 
   /* v0.3 Phase 0：两套数据集并存，四巧板零改动。
    * 四巧板仍走 D.dataset / D.levels（现成工具与 harness 的 fake 关卡照旧）；
@@ -1097,6 +1102,14 @@
       try {
         env.friend.show({
           w: L.w, h: L.h, k: k,
+          /* v0.47：把当前皮肤的一小组配色一起送进开放数据域。
+           * 那边是独立 JS 环境，读不到 config，配色只能抄一份写死；
+           * 深色皮肤下不传的话，好友榜会在深色卡片里贴一张浅色列表。 */
+          pal: {
+            text: COL.text, sub: COL.textSub, rowBg: COL.surface,
+            me: COL.surfaceHi, meText: COL.accentText,
+            gold: COL.gold, line: COL.line
+          },
           me: { nick: meNick(), avatar: meAvatarUrl(), cleared: fs.cleared, streak: fs.streak }
         });
       } catch (e) { /* 开放数据域不可用 → 界面走降级文案 */ }
@@ -4828,8 +4841,11 @@
 
       /* 顶栏 v0.9：关号靠左（关名放第二行），倒计时胶囊**居中**。
        * 旧版倒计时贴在右上角，和返回/关号同一水平线，玩家专注拼图时根本注意不到
-       * （用户反馈「很容易忽略」）。居中后它成了这一行唯一的视觉重心。 */
-      var by = view.safeTop + 40;
+       * （用户反馈「很容易忽略」）。居中后它成了这一行唯一的视觉重心。
+       * v0.46：锚点抽成 hudAnchorY()，与两枚余量胶囊共用一条中心线 ——
+       * 以前这里写死 safeTop+40，胶囊却用 topShift 自己往上顶，两条线本来就不一致，
+       * 放大胶囊后更容易看出高低不齐。 */
+      var by = hudAnchorY();
       /* 计时胶囊几何先算出来：关名截断要用它算可用宽度（写成 var 会因提升拿到 undefined） */
       var capW = 240, capH = 56, capCx = C.DESIGN.w / 2, capL = capCx - capW / 2;
       /* v0.37：返回键下移方便单手操作 —— 中心 y 由 by(安全区+40) 挪到 1130，
@@ -4855,16 +4871,21 @@
       var warn = leftS <= C.TIMER.warnSec;
       ctx.save();
       rr(capL, by - capH / 2, capW, capH, capH / 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.86)';
+      /* v0.47：胶囊底与字色走 pillBg / pillInk —— 旧版写死 0.86 白底 + COL.btnText，
+       * 深色皮肤下 btnText 变 #2A1D00（给金色按钮用的近黑），压在白色胶囊上虽然能读，
+       * 但这枚胶囊会是深色页面里最亮的一块，和左边两枚深色余量胶囊明显不是一套。 */
+      ctx.fillStyle = COL.pillBg || 'rgba(255,255,255,0.86)';
       ctx.fill();
       ctx.lineWidth = 2;
-      ctx.strokeStyle = warn ? 'rgba(229,72,77,0.55)' : 'rgba(227,233,242,0.95)';
+      ctx.strokeStyle = warn ? hexA(COL.dangerText || '#E5484D', 0.55) : COL.cardEdge;
       ctx.stroke();
       ctx.restore();
       var hcnt = C.TIMER.hearts;
       for (var hi = 0; hi < hcnt; hi++) {
         var hx = capL + 26 + hi * 26;
-        drawIcon('heart', hx, by, hi < state.hearts ? '#FF5A5A' : 'rgba(150,162,180,0.42)', 0.62);
+        /* v0.47：空心的颜色跟着皮肤走 —— 原来写死 rgba(150,162,180,0.42)，
+         * 深色胶囊上基本看不见，玩家会以为"只有 1 颗心" */
+        drawIcon('heart', hx, by, hi < state.hearts ? '#FF5A5A' : (COL.disabledIcon || 'rgba(150,162,180,0.42)'), 0.62);
       }
       /* 数字按实测宽度定位，脉冲以数字中心为原点缩放（否则会左右抖） */
       ctx.save();
@@ -4876,7 +4897,7 @@
       ctx.save();
       ctx.translate(timeCx, by);
       ctx.scale(pl, pl);
-      text(timeTxt, 0, 0, 34, warn ? '#E5484D' : COL.btnText, 'center', '700');
+      text(timeTxt, 0, 0, 34, warn ? (COL.dangerText || '#E5484D') : (COL.pillInk || COL.btnText), 'center', '700');
       ctx.restore();
 
       /* v0.17：顶栏右侧常驻巧币 / 体力余量（局内买提示、复活都要扣巧币）。
@@ -5738,7 +5759,7 @@
       ctx.fillRect(0, 0, C.DESIGN.w, DH());
       /* v0.17：结算会现场加巧币/体力，余额就摆在屏幕顶部（与对局页同位置），
        * 不用等玩家退回主页才发现数字变了。 */
-      playHud(view.safeTop + 40);
+      playHud(hudAnchorY());
       var appear = Math.min(1, state.resT / C.ANIM.panelFade);
       var e = G.easeOutCubic(appear);
       ctx.save();
@@ -6003,9 +6024,11 @@
     function rankRow(item, y, idx, highlight) {
       var L = C.RANK.list, x0 = L.x, w = L.w, h = L.rowH;
       ctx.save();
-      if (highlight) shadow(10, 4, 'rgba(255,120,80,0.18)');
+      if (highlight) shadow(10, 4, hexA(COL.gold || '#FFB93D', 0.20));
       rr(x0, y - h / 2, w, h, 16);
-      ctx.fillStyle = highlight ? '#FDE7DF' : 'rgba(246,243,238,0.95)';
+      /* v0.47：行底走语义色 —— 旧版写死 '#FDE7DF' / 'rgba(246,243,238,0.95)'，
+       * 深色皮肤下白字压浅米底，整行昵称直接消失（用户截图就是这个问题）。 */
+      ctx.fillStyle = highlight ? COL.surfaceHi : COL.surface;
       ctx.fill();
       noShadow();
       ctx.restore();
@@ -6014,12 +6037,14 @@
         var medal = ['#F5B73D', '#C9D3DD', '#E0A276'][idx];
         ctx.beginPath(); ctx.arc(x0 + 42, y, 23, 0, Math.PI * 2);
         ctx.fillStyle = medal; ctx.fill();
-        text(String(idx + 1), x0 + 42, y + 1, 24, '#FFFFFF', 'center', '700');
+        /* 金银铜三色都偏亮，名次字统一用深墨色（浅色皮肤下原来是白字，
+         * 银牌 #C9D3DD 上的白字只有 1.5:1，本来就偏糊） */
+        text(String(idx + 1), x0 + 42, y + 1, 24, '#3A2A12', 'center', '700');
       } else {
         /* 自己那行显示真实名次（榜尾固定条）；名次过百按「99+」收敛宽度 */
         var rk = idx + 1;
         text(String(rk > 99 ? '99+' : rk), x0 + 42, y + 1, rk > 99 ? 20 : 24,
-          highlight ? '#E2624A' : COL.textSub, 'center', '700');
+          highlight ? COL.accentText : COL.textSub, 'center', '700');
       }
       // 头像：v0.14 起优先用微信头像，取不到图仍退回「首字 + 底色」
       drawAvatar(x0 + 96, y, C.PLAYER.rankAvatarR, item.n, item.a, item.c || COL.gold);
@@ -6027,7 +6052,7 @@
       text(item.n, x0 + 136, y + 1, 24, COL.text, 'left', highlight ? '700' : '500');
       // 数值
       var unit = C.RANK.unit[state.rankTab] || '关';
-      text(item.v + ' ' + unit, x0 + w - 28, y + 1, 26, highlight ? '#E2624A' : COL.text, 'right', '700');
+      text(item.v + ' ' + unit, x0 + w - 28, y + 1, 26, highlight ? COL.accentText : COL.text, 'right', '700');
     }
 
     /* v0.18：好友榜。真机走开放数据域（离屏画布整块贴进来）；
@@ -6076,9 +6101,12 @@
       for (var i = 0; i < 3; i++) {
         var tx = tx0 + i * (tw + gap) + tw / 2, ty = 495 + (y0 - cy);
         rr(tx - tw / 2, ty - 27, tw, 54, 27);
-        ctx.fillStyle = state.rankTab === i ? COL.gold : 'rgba(240,235,226,0.95)';
+        ctx.fillStyle = state.rankTab === i ? COL.gold : COL.chipOff;
         ctx.fill();
-        text(R.tabs[i], tx, ty + 1, 24, state.rankTab === i ? '#7A4A00' : COL.textSub, 'center', '700');
+        /* v0.47：选中页签的字色改用 COL.btnText（深棕，浅色皮肤下与旧值 #7A4A00 一致），
+         * 未选中的字色本来是 COL.textSub —— 它跟着皮肤变，浅底却不跟着变，深色下就糊了。
+         * 现在底走 chipOff、字走 textSub，两边都随皮肤，凑成一对。 */
+        text(R.tabs[i], tx, ty + 1, 24, state.rankTab === i ? COL.btnText : COL.textSub, 'center', '700');
         addHit(tx, ty, tw + 12, 80, 'rank_t' + i);
       }
 
@@ -6130,7 +6158,9 @@
 
       // 关闭（卡片外的圆形按钮，参考图同位置）
       ctx.beginPath(); ctx.arc(C.DESIGN.w / 2, 1300, 38, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.fill();
+      /* v0.47：这枚钮浮在遮罩上，不再是"白卡上的一块白"，改走 COL.disc ——
+       * 深色皮肤下换成半透明白纱，里面的 × 用 COL.text（近白）才看得见。 */
+      ctx.fillStyle = COL.disc; ctx.fill();
       drawIcon('close', C.DESIGN.w / 2, 1300, COL.text, 1.0);
       addHit(C.DESIGN.w / 2, 1300, 100, 100, 'close_rank');
       ctx.restore();
@@ -6173,7 +6203,9 @@
       /* ---- 玩家资料卡：头像 + 昵称 + 一行状态 ---- */
       var cw = P.card.w, ch = P.card.h, ccy = cy + P.card.dy;
       rr(C.DESIGN.w / 2 - cw / 2, ccy - ch / 2, cw, ch, 24);
-      ctx.fillStyle = 'rgba(247,243,236,0.95)'; ctx.fill();
+      /* v0.47：底走 COL.surface —— 原来是写死的浅米色，深色皮肤下昵称/状态
+       * 两行近白字压上去完全看不见（和排行榜同一类问题）。 */
+      ctx.fillStyle = COL.surface; ctx.fill();
       var ax = C.DESIGN.w / 2 - cw / 2 + 34 + P.card.avatarR;
       drawAvatar(ax, ccy, P.card.avatarR, meNick(), meAvatarUrl(), COL.gold);
       var nx = ax + P.card.avatarR + P.card.gap;
@@ -6187,7 +6219,7 @@
         addHit(ebx, ccy - 26, 120, 56, 'profile_rename');
       }
       textFit(profileStateText(), nx, ccy + 22, 18,
-        state.me.err ? '#E5484D' : COL.textSub, 'left', null, C.DESIGN.w / 2 + cw / 2 - 24 - nx);
+        state.me.err ? (COL.dangerText || '#E5484D') : COL.textSub, 'left', null, C.DESIGN.w / 2 + cw / 2 - 24 - nx);
 
       /* ---- 主操作：未授权 → 用微信昵称头像；已授权 / 不支持 → 改昵称 ---- */
       var b1 = { id: authable ? 'profile_auth' : 'profile_rename',
@@ -6212,7 +6244,7 @@
 
       /* v0.9：让玩家看得见「我的进度已存到云上」——这是接云开发后的信任基础 */
       text('云端存档：' + netText(), C.DESIGN.w / 2, cy - 38, 19,
-        state.net.err ? '#E5484D' : COL.textSub, 'center');
+        state.net.err ? (COL.dangerText || '#E5484D') : COL.textSub, 'center');
 
       var rows = [
         { label: '音效', id: 'toggle_sfx', on: state.settingsFx },
@@ -6351,7 +6383,7 @@
       sheetTitle('复活', cy, 820);
       /* v0.17：这一页要花巧币复活，余额必须可见 —— 弹层遮罩会把对局页顶栏压暗，
        * 所以在这里把常驻 HUD 重画一遍（位置与对局页完全相同，看起来是浮在遮罩上）。 */
-      playHud(view.safeTop + 40);
+      playHud(hudAnchorY());
       var s = state.save;
       var top = cy - 820 / 2;
       // 大红心
@@ -7207,6 +7239,22 @@
      * 用 view.dh 记录「当前屏在设计坐标系里的真实可用高度」，页面把多出来的高度吃掉。 */
     function DH() { return view.dh || C.DESIGN.h; }
 
+    /* ---------------- v0.46 顶部栈（对局页） ----------------
+     * 「顶部栈」= 左上两枚余量胶囊（竖排）+ 屏幕中线的倒计时胶囊。
+     * 三者的中心线都锚在同一个 y（hudAnchorY），差别只在各自的高度：
+     *   · 胶囊栈：顶沿 = safeTop + topPad，总高 = topPad + rowGap + pillH
+     *   · 倒计时：capH 56，居中后上下各溢出 7，仍落在胶囊栈的范围里
+     * 卡纸顶（BOARD.y）必须在栈底之下留出 gapToCard，否则就是用户截图里那种
+     * 「胶囊被卡纸盖掉一截」—— 而且卡纸是在 playHud 之后画的，直接压上去。 */
+    function hudStackH() {
+      var M = LAY.HUD_MIN;
+      return (M.topPad || 0) + M.rowGap + M.pillH;
+    }
+    function hudAnchorY() {
+      var M = LAY.HUD_MIN;
+      return view.safeTop + (M.topPad || 0) + M.pillH / 2 + M.rowGap / 2;
+    }
+
     function resize() {
       var s = env.size();
       var dpr = env.dpr ? env.dpr() : 1;
@@ -7220,6 +7268,15 @@
       var si = env.safeInsets ? env.safeInsets() : { top: 0, bottom: 0 };
       view.safeTop = Math.max(C.SAFE.top, (si.top || 0) / view.scale);
       view.safeBottom = Math.max(C.SAFE.bottom, (si.bottom || 0) / view.scale);
+      /* v0.46：卡纸顶按安全区自适应下移，**底部钉住不动**（纸只是变矮，盘面原点下移）。
+       * 设计基准 208 是按 safeTop=88 定的；灵动岛机型 safeTop≈116 时再下移十几像素，
+       * 保证「第二枚胶囊底 + 12」压不到卡纸顶。底部不动 → 进度条/托盘/工具栏一个都不动，
+       * 而托盘里板件的散放位置是 buildSet 时按 TRAY 一次算好的，本来也动不了。 */
+      var needTop = view.safeTop + hudStackH() + (LAY.HUD_MIN.gapToCard || 0);
+      var nudge = Math.max(0, Math.min(BOARD_MAX_NUDGE, needTop - BASE_BOARD_Y));
+      LAY.BOARD.y = BASE_BOARD_Y + nudge;
+      LAY.BOARD.h = BASE_BOARD_H - nudge;
+      view.boardNudge = nudge;
       /* v0.14：原生授权按钮同理，重算一次位置（不然转屏后会错位） */
       if (state.overlay === 'settings') syncProfileButton();
       var cv = ctx.canvas;

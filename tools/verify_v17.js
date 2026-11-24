@@ -123,9 +123,11 @@ const BACK_OLD_L = 32;                            // v0.37 前返回按钮左沿
 const WX_MENU_L = 556;
 const VIEW_SAFE_TOP = Math.max(CFG.SAFE.top, 20 / SCALE);
 const M = CFG.LAYOUT.HUD_MIN;
-/* v0.37：返回按钮已下移到托盘带左侧，胶囊占原左上角位置（left=32），
- * 仍整体上移 topShift；其余顶栏中线口径不变。 */
-const BY = VIEW_SAFE_TOP + 40 - (M.topShift || 0); // 顶栏中线（含上移量）
+/* v0.37：返回按钮已下移到托盘带左侧，胶囊占原左上角位置（left=32）。
+ * v0.46：整条顶部栈放大一档（pillH 36→42 / rowGap 44→50），并把上移量从
+ *   topShift（往上顶进状态栏）改成 topPad（正向贴着安全区），
+ *   这里按 core.js hudAnchorY() 的同一公式重算中线，不再抄一份魔数。 */
+const BY = VIEW_SAFE_TOP + (M.topPad || 0) + M.pillH / 2 + M.rowGap / 2;
 const HUD_L = M.left;
 const HUD_R = HUD_L + M.maxW;
 
@@ -158,16 +160,17 @@ function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).dig
   /* ================= 1. 配置与几何 ================= */
   section('1. 配置与几何净空');
   check('版本号 v0.17 起（含后续补丁版）', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
-  check('HUD_MIN 存在且关键值符合设计（v0.37：left 120→32）',
-    !!M && M.pillH === 36 && M.rowGap === 44 && M.maxW === 127 && M.left === 32
-      && M.topShift === 8 && M.rightAnchor === false,
-    M ? `left=${M.left} pillH=${M.pillH} rowGap=${M.rowGap} maxW=${M.maxW} topShift=${M.topShift}` : 'missing');
+  check('HUD_MIN 存在且关键值符合设计（v0.37：left 120→32；v0.46 整体放大一档）',
+    !!M && M.pillH === 42 && M.rowGap === 50 && M.maxW === 146 && M.left === 32
+      && M.topPad === 2 && M.rightAnchor === false,
+    M ? `left=${M.left} pillH=${M.pillH} rowGap=${M.rowGap} maxW=${M.maxW} topPad=${M.topPad}` : 'missing');
   const hudTop = BY - (M.rowGap + M.pillH) / 2;
   const hudBot = BY + (M.rowGap + M.pillH) / 2;
-  /* v0.33 广告位删除后，卡纸顶就是硬边界（BOARD.y=184），口径不变 */
-  check('两枚胶囊竖排：略贴安全区上沿、下不撞卡纸',
-    hudTop >= VIEW_SAFE_TOP - (M.topShift || 0) && hudBot < CFG.LAYOUT.BOARD.y,
-    `${hudTop} ≥ ${VIEW_SAFE_TOP - (M.topShift || 0)} 且 ${hudBot} < ${CFG.LAYOUT.BOARD.y}`);
+  /* v0.33 广告位删除后卡纸顶就是硬边界；v0.46 起卡纸顶还会按 safeTop 自适应下移，
+   * 所以这里在 safeTop=88 的设计基准下校验「顶沿贴安全区、底沿不撞卡纸」。 */
+  check('两枚胶囊竖排：顶沿贴安全区上沿、下不撞卡纸',
+    hudTop >= VIEW_SAFE_TOP + (M.topPad || 0) - 0.5 && hudBot < CFG.LAYOUT.BOARD.y,
+    `${hudTop} ≥ ${VIEW_SAFE_TOP + (M.topPad || 0)} 且 ${hudBot} < ${CFG.LAYOUT.BOARD.y}`);
   /* v0.37：旧的「胶囊避开返回按钮右沿 108」约束随按钮下移失效，
    * 换成 v0.37 的真实几何：不与倒计时胶囊冲突（left+maxW < CAP_L），
    * 且胶囊左沿 ≥ 画布 / 安全区左沿、右沿不越设计宽度（不出血）。 */
@@ -176,9 +179,9 @@ function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).dig
     `left=${HUD_L} left+maxW=${M.left + M.maxW} < capL=${CAP_L} right=${HUD_R}`);
   check('最宽情况下仍与倒计时胶囊留出 ≥8 净空',
     CAP_L - HUD_R >= 8, `hudRight=${HUD_R} capLeft=${CAP_L} 净空=${CAP_L - HUD_R}`);
-  check('v0.37：返回键下移后 HUD 占住左上角并仍上移 8px',
-    M.rightAnchor === false && M.left === 32 && M.topShift === 8,
-    `left=${M.left} topShift=${M.topShift}`);
+  check('v0.37：返回键下移后 HUD 占住左上角（v0.46 起上移量改由 topPad 表达）',
+    M.rightAnchor === false && M.left === 32 && M.topPad === 2 && M.topShift === 0,
+    `left=${M.left} topPad=${M.topPad} topShift=${M.topShift}`);
 
   /* ================= 2. 对局页：数字真的画出来了 ================= */
   section('2. 对局页画出两枚余量胶囊');

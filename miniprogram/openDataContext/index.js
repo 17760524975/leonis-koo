@@ -22,11 +22,23 @@ var ctx = sc.getContext('2d');
  * 改版式时两边一起改，verify_v18 会断言这两组数相等） */
 var L = { w: 566, h: 588, rowH: 74, step: 84, rows: 7 };
 
-/* 与 config.COLORS 对齐的一小份配色 */
+/* 与 config.COLORS 对齐的一小份配色（主域每次 show 都会带 pal 过来覆盖，
+ * v0.47：这组只剩「兜底」用途 —— 深色皮肤下主域会传深色的一套，
+ * 否则好友榜会在深色卡片里贴一张浅色列表） */
 var K = {
   text: '#2C3A4B', sub: '#7A8A9C', rowBg: 'rgba(246,243,238,0.95)',
   me: '#FDE7DF', meText: '#E2624A', gold: '#FFB93D', line: '#E3E9F2'
 };
+var K_DEFAULT = {};
+(function () { for (var k in K) K_DEFAULT[k] = K[k]; })();
+/* 只认这几个 key，其它字段一律忽略（防止主域改名后把配色带崩） */
+function applyPal(pal) {
+  for (var k in K_DEFAULT) K[k] = K_DEFAULT[k];
+  if (!pal) return;
+  for (var j in K_DEFAULT) {
+    if (typeof pal[j] === 'string' && pal[j]) K[j] = pal[j];
+  }
+}
 var MEDAL = ['#F5B73D', '#C9D3DD', '#E0A276'];
 var FALLBACK = ['#FF8A5B', '#4FA8E0', '#63C88B', '#A87BE8', '#D96A9B', '#FFC53D', '#3FB8B0'];
 
@@ -226,7 +238,7 @@ function draw() {
       ctx.fillStyle = MEDAL[i];
       ctx.fill();
       ctx.restore();
-      text(String(rk), 42, y + 1, 24, '#FFFFFF', 'center', '700');
+      text(String(rk), 42, y + 1, 24, '#3A2A12', 'center', '700');
     } else {
       text(String(rk > 99 ? '99+' : rk), 42, y + 1, rk > 99 ? 20 : 24,
         hl ? K.meText : K.sub, 'center', '700');
@@ -244,6 +256,7 @@ wx.onMessage(function (msg) {
   cfg.w = Math.max(200, Math.round(msg.w || L.w));
   cfg.h = Math.max(200, Math.round(msg.h || L.h));
   cfg.k = Math.max(1, Math.min(3, msg.k || 2));
+  applyPal(msg.pal);        // v0.47：主域把当前皮肤的配色一起送过来
   cfg.me = msg.me || null;
   load();                 // 每次切到好友榜都重新拉一次：好友进度可能刚变
 });

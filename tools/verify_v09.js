@@ -170,12 +170,16 @@ function tapD(x, y) {
   const BOARD = CFG.LAYOUT.BOARD;
   check('LAYOUT.AD 已删除', !('AD' in CFG.LAYOUT), 'keys=' + Object.keys(CFG.LAYOUT).join(','));
   check('ADS.banner 已删除', !(CFG.ADS && CFG.ADS.banner));
-  /* v0.35：卡纸再往托盘方向长了一截（y 184→176、size 726→734、纸面 h=842），
-   * 断言改成「卡纸顶已越过原广告位起点，且盘面用满屏宽减 8px 边距」。 */
-  check('卡纸顶越过原广告位起点（BOARD.y ≤ 184）', BOARD.y <= 184, 'y=' + BOARD.y);
+  /* v0.35：卡纸再往托盘方向长了一截（y 184→176、size 726→734、纸面 h=842）。
+   * v0.46：灵动岛机型 safeArea.top 高达 116 设计 px，卡纸顶 176 会压住第二枚胶囊，
+   * 因此回落到 216（纸面 h 802），底部仍钉在 1018 —— 这里改测「仍在原广告位起点
+   * 302 之上」这个真实意图，具体数值由 verify_v046 覆盖。 */
+  check('卡纸顶仍在原广告位起点之上（BOARD.y < 302；v0.46 为避安全区回落到 216）',
+    BOARD.y < 302 && BOARD.y >= 176, 'y=' + BOARD.y);
   check('盘面用满屏宽（BOARD.size = 750 − 2×8 = 734）', BOARD.size === 734, 'size=' + BOARD.size);
-  check('v0.35 纸面比盘面高（吃掉卡纸底～托盘的空白带）',
-    BOARD.h === 842 && BOARD.h > BOARD.size, 'h=' + BOARD.h + ' size=' + BOARD.size);
+  check('纸面比盘面高、且底边仍钉在 1018（吃掉卡纸底～托盘的空白带）',
+    BOARD.h === (BOARD.bottom || 1018) - BOARD.y && BOARD.h > BOARD.size,
+    'h=' + BOARD.h + ' size=' + BOARD.size + ' bottom=' + BOARD.bottom);
   /* 只查真实调用（带左括号），注释里提到这两个名字是给后人看的退役说明，不算残留 */
   check('core.js 里没有 syncBanner / adRect 调用残留',
     !/\b(syncBanner|adRect)\s*\(/.test(src),

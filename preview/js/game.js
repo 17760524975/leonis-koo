@@ -233,6 +233,17 @@ var sfxStyleKey = 'wood';
    * 只 clearInterval 拦不住已经排好的音——切到关卡后还会再响一整小节（2.4s），
    * 听起来就是"主页音乐切不过去"。闸门 30ms 拉到 0、随后硬停振荡器。 */
   var HOME_OSC = [], homeGate = null, homeLead = null, homeSeq = null;
+  /* v0.47：上一代正在淡出的振荡器（详见 miniprogram/game.js 同处注释）。
+   * 旧版把 stop() 挂在 190ms 定时器上，这段时间内又 homeStart 的话，
+   * 闸门被拉回 1 → 上一代已排程的音符重新出声，听起来就是两首主页曲叠在一起。 */
+  var homeDead = [], homeDeadTimer = 0;
+
+  function flushHomeDead() {
+    if (homeDeadTimer) { clearTimeout(homeDeadTimer); homeDeadTimer = 0; }
+    var list = homeDead;
+    homeDead = [];
+    for (var i = 0; i < list.length; i++) { try { list[i].stop(); } catch (e) {} }
+  }
 
   function homeInit() {
     if (!AC || homeGate) return;
@@ -271,7 +282,16 @@ var sfxStyleKey = 'wood';
     g.gain.exponentialRampToValueAtTime(0.0001, at + d);
     o.connect(g); g.connect(dest || homeGate);
     o.start(at); o.stop(at + d + 0.05);
+    o._end = at + d + 0.05;
     HOME_OSC.push(o);
+    /* v0.47：长驻主页时按"响完没有"清一遍，避免几百个已结束的振荡器一直被引用 */
+    if (HOME_OSC.length > 300) {
+      var keep = [], nowT = AC.currentTime;
+      for (var pi = 0; pi < HOME_OSC.length; pi++) {
+        if ((HOME_OSC[pi]._end || 0) > nowT) keep.push(HOME_OSC[pi]);
+      }
+      HOME_OSC = keep;
+    }
   }
   /* 木琴音：基音 + 很弱的 4 倍频泛音（给一点"木"的亮度，不是钟声） */
   function homeMallet(freq, at, dur, peak, dest) {
@@ -319,6 +339,7 @@ var sfxStyleKey = 'wood';
     var beat = 60 / (H.bpm || 100), bar = beat * 4;
     /* 闸门直接置 1：每个音自带 5~20ms 起音，闸门不需要再淡入；
      * 用 ramp 反而要看音频时钟推进，页面在后台时会停在 0 → 误判"没声音"。 */
+    flushHomeDead();   // v0.47：开闸前先停掉上一代，否则旧曲会被重新放出来
     try {
       if (homeGate.gain.cancelScheduledValues) homeGate.gain.cancelScheduledValues(AC.currentTime);
       homeGate.gain.value = 1;
@@ -351,9 +372,14 @@ var sfxStyleKey = 'wood';
       } catch (e) { try { homeGate.gain.value = 0; } catch (e2) {} }
     }
     /* 闸门归零后再硬停振荡器，避免已经排进时间轴的音继续响 */
-    var dead = HOME_OSC; HOME_OSC = [];
-    setTimeout(function () {
-      for (var i = 0; i < dead.length; i++) { try { dead[i].stop(); } catch (e) {} }
+    /* v0.47：挂进 homeDead，淡出走完再硬停；若中途又 homeStart，那边会先同步清场 */
+    if (homeDead.length) flushHomeDead();
+    homeDead = HOME_OSC; HOME_OSC = [];
+    if (homeDeadTimer) clearTimeout(homeDeadTimer);
+    homeDeadTimer = setTimeout(function () {
+      homeDeadTimer = 0;
+      var list = homeDead; homeDead = [];
+      for (var i = 0; i < list.length; i++) { try { list[i].stop(); } catch (e) {} }
     }, soft ? 190 : 60);
   }
 

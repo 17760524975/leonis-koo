@@ -354,6 +354,55 @@ setImmediate(async function () {
   check('重叠失败时确实调用 sfx_fail',
     /overlaps\.length[\s\S]{0,300}env\.audio\.play\('sfx_fail'\)/.test(coreSrc));
 
+  console.log('\n== 13. v0.47：快速切页不许把两代主页曲叠在一起 ==');
+  /* 用户反馈：「快速进入游戏主页几次音乐有重叠，隔一会又好了」。
+   * 根因：homeStop() 只是「闸门淡出 150ms + 190ms 定时器里硬停振荡器」，
+   * 在这 190ms 内又 homeStart() 的话闸门会被拉回 1，上一代已经排进时间轴的
+   * 一整小节重新出声 —— 听起来就是同一首曲子叠了两三遍。
+   * 修法：上一代挂进 homeDead，homeStart 开闸前先 flushHomeDead() 同步停掉。
+   *
+   * 断言口径：看「这一代还在时间轴上的音符数」。
+   * 旧版快速切 8 次会涨到 8 倍（54/80/105…），现在必须稳定在基线。 */
+  audio.setScene('home');
+  await sleep(40);
+  const liveBase = audio.bgmInfo().live;
+  check('基线：单代主页曲的音符数 > 10', liveBase > 10, 'live=' + liveBase);
+  let maxLive = 0;
+  for (let i = 0; i < 8; i++) {
+    audio.setScene('lv1');          // 与真实操作同节奏：60ms 内来回一趟
+    await sleep(20);
+    audio.setScene('home');
+    await sleep(40);
+    maxLive = Math.max(maxLive, audio.bgmInfo().live);
+  }
+  check('快速进出 8 次，音符数始终不超过基线的 1.2 倍（不叠代）',
+    maxLive <= Math.ceil(liveBase * 1.2), `基线 ${liveBase}，峰值 ${maxLive}`);
+  check('每次回主页都只有一代在放（dead 里不留残余）',
+    audio.bgmInfo().dead === 0, 'dead=' + audio.bgmInfo().dead);
+  await sleep(240);
+  check('稳定后仍只有一代', audio.bgmInfo().live === liveBase && audio.bgmInfo().dead === 0,
+    `live=${audio.bgmInfo().live} dead=${audio.bgmInfo().dead}`);
+
+  /* 慢速（> 190ms）本来就没有重叠问题，这里做反向对照：修复不能把慢速切页弄坏 */
+  for (let i = 0; i < 2; i++) {
+    audio.setScene('lv1');
+    await sleep(260);
+    audio.setScene('home');
+    await sleep(260);
+  }
+  check('慢速切换后仍在正常播放', audio.bgmInfo().home === true && audio.bgmInfo().gate > 0.9,
+    'home=' + audio.bgmInfo().home + ' gate=' + audio.bgmInfo().gate);
+
+  const _mini = fs.readFileSync(path.join(ROOT, 'miniprogram/game.js'), 'utf8');
+  const _pv = fs.readFileSync(path.join(ROOT, 'preview/js/game.js'), 'utf8');
+  check('两端都有「上一代」队列与同步清场', /homeDead/.test(_mini) && /homeDead/.test(_pv) &&
+    /function flushHomeDead/.test(_mini) && /function flushHomeDead/.test(_pv));
+  check('两端 homeStart 开闸前先清场',
+    /flushHomeDead\(\);[\s\S]{0,200}gateTo\(1\)/.test(_mini) &&
+    /flushHomeDead\(\);[\s\S]{0,260}gain\.value = 1/.test(_pv));
+  check('不再留「裸 setTimeout + 局部 dead」的旧写法',
+    !/var dead = HOME_OSC;/.test(_mini) && !/var dead = HOME_OSC;/.test(_pv));
+
   console.log('\n' + (fail === 0 ? '音频验收全部通过' : `!! ${fail} 项未通过`));
   process.exit(fail === 0 ? 0 : 1);
 });

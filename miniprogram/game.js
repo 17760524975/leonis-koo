@@ -256,6 +256,31 @@ function loadBuffers() {
  * 时间轴的，只 clearInterval 拦不住已排好的音，会再响一整小节（2.4s）。
  * 闸门归零 + 硬停振荡器，才能做到进关卡时主页曲当场消失。 */
 var HOME_OSC = [], homeGate = null, homeLead = null, homeSeq = null;
+/* v0.47：上一代正在淡出的振荡器。旧版 homeStop 把 stop() 挂在 190ms 的定时器上，
+ * 这段时间里如果又 homeStart（快速进出主页 / 关卡列表来回切），闸门被拉回 1，
+ * 上一代已经排进时间轴的一整小节会**重新出声**，和新排的那小节叠在一起 ——
+ * 用户听到的就是"两首主页曲同时放，隔一会儿又好了"。现在这一代先挂在这里，
+ * 下一次 homeStart 打开闸门之前必须先把它们同步停掉（flushHomeDead）。 */
+var homeDead = [], homeDeadTimer = 0;
+
+/* 把上一代彻底停掉（同步）。stop() 不带参数 = 立刻停：
+ * 那些还没到开声时刻的音符，start 在 stop 之后，等于永远不出声。 */
+function flushHomeDead() {
+  if (homeDeadTimer) { clearTimeout(homeDeadTimer); homeDeadTimer = 0; }
+  var list = homeDead;
+  homeDead = [];
+  for (var i = 0; i < list.length; i++) { try { list[i].stop(); } catch (e) {} }
+}
+
+/* 当前这一代里还有多少音"在时间轴上"（尚未到 stop 时刻）—— 供验收断言用 */
+function homeOscLive() {
+  if (!AC) return 0;
+  var now = AC.currentTime, n = 0;
+  for (var i = 0; i < HOME_OSC.length; i++) {
+    if ((HOME_OSC[i]._end || 0) > now) n++;
+  }
+  return n;
+}
 
 /* v0.14.2：WebAudio 会被系统挂起 —— 回主页没声音的根因
  *
@@ -322,7 +347,17 @@ function homePartial(freq, at, dur, peak, type, attack, dest) {
   g.gain.exponentialRampToValueAtTime(0.0001, at + d);
   o.connect(g); g.connect(dest || homeGate);
   o.start(at); o.stop(at + d + 0.05);
+  o._end = at + d + 0.05;
   HOME_OSC.push(o);
+  /* v0.47：主页放久了 HOME_OSC 只增不减（每个音都自己停下了，但引用还留着）。
+   * 超过 300 个就按"是否已经响完"清一遍，长驻主页也不会几百个对象不释放。 */
+  if (HOME_OSC.length > 300) {
+    var keep = [], nowT = AC.currentTime;
+    for (var pi = 0; pi < HOME_OSC.length; pi++) {
+      if ((HOME_OSC[pi]._end || 0) > nowT) keep.push(HOME_OSC[pi]);
+    }
+    HOME_OSC = keep;
+  }
 }
 function homeMallet(freq, at, dur, peak, dest) {
   homePartial(freq, at, dur, peak, 'sine', 0.006, dest);
@@ -362,6 +397,9 @@ function homeStart() {
   var H = CONFIG.AUDIO.home;
   if (!H || !H.prog) return;
   var beat = 60 / (H.bpm || 100), bar = beat * 4;
+  /* v0.47：开闸之前必须先把上一代清干净 —— 否则淡出中的旧曲会被这道闸门
+   * 重新放出来，与新排的一整小节叠在一起（快速进出主页时的"重叠音"）。 */
+  flushHomeDead();
   gateTo(1);
   homeSeq = { bar: 0, nextT: AC.currentTime + 0.04, timer: 0, watch: 0 };
   var tick = function () {
@@ -408,9 +446,16 @@ function homeStop(soft) {
       g.linearRampToValueAtTime(0, AC.currentTime + ramp);
     } catch (e) { try { homeGate.gain.value = 0; } catch (e2) {} }
   }
-  var dead = HOME_OSC; HOME_OSC = [];
-  setTimeout(function () {
-    for (var i = 0; i < dead.length; i++) { try { dead[i].stop(); } catch (e) {} }
+  /* v0.47：这一代挂进 homeDead，等淡出走完再硬停；在此之前若又 homeStart，
+   * flushHomeDead() 会把它们同步停掉。旧版这里是裸 setTimeout + 局部变量，
+   * 新起的曲子无从得知"上一代还没停"，于是两代一起响。 */
+  if (homeDead.length) flushHomeDead();          // 更早的一代直接停（极少出现）
+  homeDead = HOME_OSC; HOME_OSC = [];
+  if (homeDeadTimer) clearTimeout(homeDeadTimer);
+  homeDeadTimer = setTimeout(function () {
+    homeDeadTimer = 0;
+    var list = homeDead; homeDead = [];
+    for (var i = 0; i < list.length; i++) { try { list[i].stop(); } catch (e) {} }
   }, soft ? 190 : 60);
 }
 
@@ -658,7 +703,11 @@ audio.bgmInfo = function () {
     gain: bgmGain && bgmGain.gain ? bgmGain.gain.value : null,
     file: bgmFileNow, playing: n, ctxs: Object.keys(BGM_CTX).length,
     volume: curCtx ? curCtx.volume : null, paused: curCtx ? curCtx.paused : null,
-    preloaded: bgmPreloaded, ac: AC ? AC.state : null
+    preloaded: bgmPreloaded, ac: AC ? AC.state : null,
+    /* v0.47：主页曲的"代际"健康度 —— verify_audio 用它们断言快速切页时不会叠音。
+     * live = 还在时间轴上（尚未到 stop 时刻）的音符数；
+     * dead = 上一代正等淡出结束的音符数（正常应 ≤ 一次淡出的量）。 */
+    live: homeOscLive(), dead: homeDead.length
   };
 };
 globalThis.__audio = audio;
