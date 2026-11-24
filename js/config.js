@@ -9,7 +9,7 @@
   'use strict';
 
   return {
-    version: 'v0.47',
+    version: 'v0.48',
 
     /* ---------- 品牌（v0.6 改名「方寸巧拼」） ----------
      * 游戏名只在这里定义一次：主页标题、分享文案、工程名都从这里取，
@@ -742,6 +742,15 @@
       warnSec: 20
     },
 
+    /* v0.48：超时失败的动画节奏（ms）。state.reduceMotion 为真时整段跳过，
+     * 卡片/按钮位置与静态版完全一致（热区不会错位）。 */
+    FAIL_ANIM: {
+      flashMs: 320,        // 全屏红闪
+      enterMs: 460,        // 卡片下滑 + 轻微缩放进场
+      heartMs: 640,        // 大红心弹性放大
+      bannerMs: 1300       // 「时间到！」横幅砸下 + 停留 + 淡出
+    },
+
     /* ---------- v0.5 皮肤（只覆盖配色，绝不改布局/几何） ----------
      * 切换时把子集写回 COLORS 并 persist；缺省字段沿用暖木原值。 */
     SKINS: {
@@ -1021,7 +1030,9 @@
       sfxVolume: 1.0,
       /* v0.20：音效整体重做成"低频为主"的木质感（见 game.js 的 synth 注释），
        * 三个短音的响度重新配平：吸附最响（反馈最重要）、点击最轻。 */
-      sfxGain: { sfx_snap: 1.00, sfx_win: 0.95, sfx_pick: 0.85, sfx_tap: 0.70, sfx_fail: 0.55 },
+      sfxGain: { sfx_snap: 1.00, sfx_win: 0.95, sfx_pick: 0.85, sfx_tap: 0.70, sfx_fail: 0.55,
+        /* v0.48：超时失败乐句（纯合成，不读 wav，这项只为统一口径） */
+        sfx_timeup: 0.85 },
       fadeMs: 220,
       tapGuardMs: 40,
       snapVoices: 2

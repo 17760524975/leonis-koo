@@ -375,7 +375,8 @@
       S.page = 'play'; S.fade = 1; S.pageT = 9999;
       S.timeLimit = game._debug.timeLimitOf(LIBF[fLv]);
       S.timeLeft = 0; S.hearts = 0;
-      S.overlay = 'fail'; S.failT = 0;
+      /* v0.48：failT=<ms> 用来定格失败动画的某一帧（不传=0，即红闪最亮那一刻） */
+      S.overlay = 'fail'; S.failT = +(q.match(/failT=(\d+)/) || [])[1] || 0;
       /* v0.18：失败时 streak 已经清零落盘，断点前的值放在 streakBeforeFail 里
        * v0.19：连胜改成「段内去重」，断点集合也要一起恢复才画得对 */
       S.save.streak = 0; S.streakBeforeFail = 7; S.save.bestStreak = 9;
@@ -496,7 +497,15 @@
     var qEn = +(q.match(/(?:^|[&?])energy=(\d+)/) || [])[1];
     if (!isNaN(qEn)) S.save.energy = Math.min(qEn, S.save.energyMax);
     S.fade = 1;              // 截图时强制淡入完成，避免截到页面过渡中间态
+    /* v0.48：&freezeFail=1 把 failT 钉成常量，避免 rAF 推进导致截图帧不确定 */
+    if ((q.match(/freezeFail=(\d+)/) || [])[1] === '1' && screen === 'fail') {
+      var fixedT = +(q.match(/failT=(\d+)/) || [])[1] || 0;
+      Object.defineProperty(S, 'failT', {
+        get: function () { return fixedT; }, set: function () {}, configurable: true
+      });
+    }
     window.__ready = true;
+
   }
 
   function one() { if (++loaded >= need) boot(); }

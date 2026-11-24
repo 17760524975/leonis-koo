@@ -207,6 +207,16 @@ function buildSfxSynth(key) {
         strike(ns[i], 1.1, 0.11 - i * 0.005, SFX_MAT.bell, 'sine', i * 0.085);
       }
       strike(261.63, 1.3, 0.06, SFX_MAT.bell, 'sine', 0.255);
+    },
+    /* v0.48 时间到（超时失败）：A 小调下行 A4→F4→D4→A3，每音 0.19s 错开，
+     * 尾巴补一个 A2 闷音收句。和 sfx_win 一样属于"情绪表达"，不随木质/铃音
+     * 等材质风格切换，也不读 wav 素材（纯合成，零文件）。总长约 1.55s。 */
+    sfx_timeup: function () {
+      var ns = [440.00, 349.23, 293.66, 220.00];
+      for (var i = 0; i < ns.length; i++) {
+        strike(ns[i], 0.46, 0.13 - i * 0.014, SFX_MAT.bell, 'sine', i * 0.19);
+      }
+      strike(110.00, 1.05, 0.09, SFX_MAT.wood, 'sine', 0.62);
     }
   };
 }
@@ -588,6 +598,14 @@ function bgmSetScene(key) {
   if (!unlocked || !enabled.bgm) return;
   bgmPlay(key);
 }
+/* v0.48：超时失败时给失败乐句让出安静的背景。
+ * 只停声、不改 bgmScene —— 复活时 core.js 的 setLevelScene() 会按原场景恢复。
+ * 不用 setScene('home')：那会把主页曲放起来，比关卡曲还吵。 */
+function bgmHalt() {
+  pauseAll(null);
+  homeStop(false);
+  curCtx = null; bgmFileNow = '';
+}
 /* 第一次用户手势（解锁音频）后进入：主页直接起播 */
 function startBgm() {
   if (!unlocked || !enabled.bgm) { applyBgmGain(); return; }
@@ -626,7 +644,8 @@ function playSfx(name) {
   var gain = (CONFIG.AUDIO.sfxGain[name] || 0.9) * (0.95 + Math.random() * 0.10);
   /* v0.27：非木质风格必须走合成（wav 缓冲是固定的木质录音，换风格听不出差别）。
    * v0.31：通关音是"情绪表达"、不属于材质风格，任何风格都优先播重制后的素材。 */
-  if (sfxStyleKey === 'wood' || name === 'sfx_win') {
+  /* v0.48：sfx_timeup 与 sfx_win 同属情绪表达，任何音效风格下都直接走合成 */
+  if (sfxStyleKey === 'wood' || name === 'sfx_win' || name === 'sfx_timeup') {
     if (buf[name] && AC) {
       try {
         var s = AC.createBufferSource();
@@ -674,6 +693,7 @@ var audio = {
   },
   duck: function (on) { ducked = !!on; applyBgmGain(); },
   setScene: function (k) { bgmSetScene(k); },   // v0.5：主页 / 关卡多场景 BGM
+  halt: function () { bgmHalt(); },             // v0.48：失败乐句前让背景安静（不改场景）
   setSfxStyle: function (key) {                  // v0.27：切换交互音效风格
     if (!CONFIG.SFX_STYLES || !CONFIG.SFX_STYLES[key]) key = 'wood';
     sfxStyleKey = key;

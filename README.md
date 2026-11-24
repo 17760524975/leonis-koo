@@ -118,6 +118,8 @@ animation/ art-src/ audio-src/   动效演示、素材源文件
 
 | v0.47（深色主题配色 + BGM 重叠修复） | ① 黑色主题下排行榜昵称整行消失：根因是正文色已翻成近白、但排行行/资料卡/关闭钮/页签写死浅米底，白字压浅底。新增 6 个语义色 token（`surface`/`surfaceHi`/`chipOff`/`disc`/`accentText`/`dangerText`，浅色皮肤维持原观感、深色/ dusk 各覆盖一份），另加 `pillBg`/`pillStroke` 让倒计时胶囊在深色下翻成深底浅字。好友榜开放数据域独立上下文拿不到主域配色，改由 `friend.show()` 把 palette 一并 `postMessage` 过去。逐屏拍了 12 张深浅对照图（排行/设置/奖励/邀请/皮肤/结算/对局/失败/体力/关卡/主页/提示），未发现新的同类冲突。② 快速进出主页几次音乐叠成一层、隔会又好：根因 `homeStop(soft)` 的闸门 150ms 淡出 + 190ms 后才硬停，窗口内 `homeStart()` 把闸门拉回 1，上一代已排程音符复活。探针实测 8 次快切峰值 213 个同时发声振荡器（基线 27）。两端改为代际清场：新增 `homeDead[]` + `flushHomeDead()`，`homeStart()` 在开闸门**之前**同步停掉所有上一代；`bgmInfo()` 暴露 live/dead 计数。修复后峰值恒为 27。详见 `docs/v0.47-深色主题配色与BGM重叠修复.md`（用户同批反馈的失败动画 + 失败音乐尚未实现，留待下版） |
 
+| v0.48（超时失败动画与失败音乐） | 用户要「倒计时结束 = 失败，配失败动画 + 失败音乐」。音乐：两端新增 `sfx_timeup`（A 小调下行 A4→F4→D4→A3 + A2 闷音收句，约 1.55s，纯合成零文件），与 `sfx_win` 同属情绪表达、不随材质风格切换；失败时先 `audio.halt()` 停关卡曲再播，`halt` 不改 `bgmScene`，复活时原有 `setLevelScene()` 自然恢复（不切 home 是因为主页曲更吵）。旧的失败提示音 `sfx_tap`（其实是拼接重叠音）不再叠上去。动画：`FAIL_ANIM` 四段节奏 —— 全屏红闪 320ms、卡片下滑缩放进场 460ms、红心 easeOutBack 弹出 640ms + 裂纹、「时间到！」横幅从上方砸下再淡出 1300ms。两条硬约束：变换全包 save/restore（1500ms 后与静态版逐像素相同）、动画期不注册热区防错位点击；`state.failT` 只在 fail 页推进，`reduceMotion` 直接走静态版。踩坑：横幅前移时 `var cy` 声明落在后面 → NaN 画到画布外；harness 的 rAF 帧数不定导致截图时间线不可复现，加 `&freezeFail=1` 定格。详见 `docs/v0.48-超时失败动画与音乐.md` |
+
 ## 素材替换
 - 图片：`assets/img/` 下同名替换即可，代码零改动。
 - 音频：默认代码合成 5 首场景曲（零文件）；换真人 BGM 把音频放进 `assets/audio/` 并将 `config.AUDIO.useSynthBgm` 设为 `false`。

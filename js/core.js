@@ -1547,7 +1547,12 @@
         cloudPush(true);
         publishFriend();
       }
-      env.audio.play('sfx_tap');
+      /* v0.48：超时失败不再弹「点击」音 —— 先让关卡曲安静下来，再走一段
+       * A 小调下行的失败乐句（sfx_timeup，约 1.55s）。停背景用 halt() 而不是
+       * setScene('home')：后者会把主页曲放起来，比关卡曲还吵。bgmScene 不变，
+       * 复活 / 放弃时各自走 setLevelScene() / go() 恢复。 */
+      if (env.audio.halt) env.audio.halt();
+      env.audio.play('sfx_timeup');
     }
     function doRevive(byAd) {
       var E = C.ECON, s = state.save;
@@ -2922,6 +2927,9 @@
     function update(dt) {
       state.time += dt;
       state.dt = dt;                // v0.27：供背景粒子层按真实帧间隔推进
+      /* v0.48：失败动画的本地时钟，只在复活弹层打开时走。
+       * 关掉弹窗就停；下次失败由 failLevel() 重新归零。 */
+      if (state.overlay === 'fail') state.failT = (state.failT || 0) + dt;
       /* v0.15：在线时长记账（只在前台；切后台由 init 里的 onHide 停表） */
       onlineTick(dt);
       if (state.page === 'play' && state.running && !state.overlay && !state.win) {
@@ -6377,17 +6385,83 @@
       adLayer();
     }
 
-    /* 复活弹窗（参考图 1） */
+    /* 复活弹窗（参考图 1）
+     * v0.48：超时失败加进场动画 —— 全屏红闪 → 卡片下滑 + 轻微缩放 →
+     * 大红心弹性放大（带裂纹）→ 「时间到！」横幅从上方砸下再淡出。
+     *
+     * 两条硬约束：
+     *  ① 所有变换包在 ctx.save/restore 里，动画结束后版面与静态版逐像素相同；
+     *  ② 动画期间不注册热区，避免卡片还在缩小时点到错位按钮。
+     * reduceMotion 为真直接走静态版（低配机与「减少动态效果」设置）。 */
     function renderFail() {
-      var cy = sheetBg(600, 820);
+      var t = state.failT || 0, A = C.FAIL_ANIM || {};
+      var flashMs = A.flashMs || 320, enterMs = A.enterMs || 460;
+      var heartMs = A.heartMs || 640, bannerMs = A.bannerMs || 1300;
+      var anim = !state.reduceMotion;
+      var enter = anim ? Math.min(1, t / enterMs) : 1;
+      var e = G.easeOutCubic(enter);
+      var hitOK = !anim || enter >= 1;   // 动画未落位前不收点击
+
+      /* 1) 遮罩（原本由 sheetBg 画；拆开是为了在遮罩之上叠红闪） */
+      ctx.fillStyle = COL.mask;
+      ctx.fillRect(0, 0, C.DESIGN.w, DH());
+
+      /* 2) 全屏红闪：0 → flashMs，alpha 0.34 → 0 */
+      if (anim && t < flashMs) {
+        ctx.fillStyle = 'rgba(229,72,77,' + (0.34 * (1 - t / flashMs)).toFixed(3) + ')';
+        ctx.fillRect(0, 0, C.DESIGN.w, DH());
+      }
+
+      var cy = DH() / 2;
+
+      /* 4)「时间到！」横幅：从上方 90px 砸下、略带倾斜回正，0.95s 起淡出。
+       * 画在卡片外侧（cy−470），不遮按钮，也不影响热区。 */
+      if (anim && t < bannerMs) {
+        var bp = Math.min(1, t / 420);
+        var byy = (cy - 490) - (1 - G.easeOutBack(bp)) * 90;
+        var ba = t > 950 ? Math.max(0, 1 - (t - 950) / (bannerMs - 950)) : 1;
+        ctx.save();
+        ctx.globalAlpha = ba;
+        ctx.translate(C.DESIGN.w / 2, byy);
+        ctx.rotate(-0.05 * (1 - bp));
+        rr(-165, -34, 330, 68, 34);
+        ctx.fillStyle = 'rgba(214,58,62,0.96)'; ctx.fill();
+        text('时间到！', 0, 1, 38, '#FFFFFF', 'center', '700');
+        ctx.restore();
+      }
+      ctx.save();
+      if (anim && enter < 1) {
+        ctx.translate(C.DESIGN.w / 2, cy);
+        ctx.scale(0.94 + 0.06 * e, 0.94 + 0.06 * e);
+        ctx.translate(-C.DESIGN.w / 2, -cy + (1 - e) * 48);
+      }
+
+      /* 3) 卡片与内容 */
+      drawCard(C.DESIGN.w / 2, cy, 600, 820, 32);
       sheetTitle('复活', cy, 820);
-      /* v0.17：这一页要花巧币复活，余额必须可见 —— 弹层遮罩会把对局页顶栏压暗，
-       * 所以在这里把常驻 HUD 重画一遍（位置与对局页完全相同，看起来是浮在遮罩上）。 */
-      playHud(hudAnchorY());
       var s = state.save;
       var top = cy - 820 / 2;
-      // 大红心
-      drawIcon('heart', C.DESIGN.w / 2, top + 175, '#FF5A5A', 3.2);
+
+      /* 大红心：弹性放大 + 前 700ms 的轻微心跳 */
+      var hp = anim ? G.easeOutBack(Math.min(1, t / heartMs)) : 1;
+      var beat = anim ? 1 + 0.045 * Math.sin(t / 95) * Math.max(0, 1 - t / 700) : 1;
+      drawIcon('heart', C.DESIGN.w / 2, top + 175, COL.dangerText || '#FF5A5A', 3.2 * hp * beat);
+      /* 裂纹：0.28s 出现、0.62s 起淡出 —— 两条折线画在心上 */
+      if (anim && t > 280 && t < 900) {
+        var ca = Math.min(1, (t - 280) / 180) * Math.max(0, 1 - (t - 620) / 280);
+        ctx.save();
+        ctx.globalAlpha = ca * 0.55;
+        ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(C.DESIGN.w / 2 - 16, top + 148);
+        ctx.lineTo(C.DESIGN.w / 2 - 2, top + 178);
+        ctx.lineTo(C.DESIGN.w / 2 - 14, top + 198);
+        ctx.moveTo(C.DESIGN.w / 2 + 14, top + 152);
+        ctx.lineTo(C.DESIGN.w / 2 + 3, top + 178);
+        ctx.lineTo(C.DESIGN.w / 2 + 16, top + 196);
+        ctx.stroke();
+        ctx.restore();
+      }
       /* v0.18：失败瞬间 streak 已经清零落盘了，这里要显示「断点前的值」，
        * 否则复活面板会写「本轮挑战结束」——而复活明明还能把连胜接回来。 */
       var showStreak = Math.max(s.streak || 0, state.streakBeforeFail || 0);
@@ -6404,10 +6478,10 @@
       var bAd = { id: 'ad_revive', x: C.DESIGN.w / 2, y: top + 465, w: 440, h: 108,
         label: adLvOk ? '看广告复活' : '本关看视频次数已用完',
         variant: 'danger', size: adLvOk ? 32 : 26, icon: 'tv', disabled: !adLvOk };
-      if (canAd) addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'ad_revive');
+      if (canAd && hitOK) addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'ad_revive');
       drawButton(bAd);
       /* v0.23：删掉「+90 巧币」—— 广告复活只给心。
-       * 旧版给币 → 看广告比付费复活还划算 → 最优策略是"故意失败"。 */
+       * 旧版给币 → 看广告比付费复活还划算 → 最优策略变成"故意失败"。 */
       text(adLvOk ? ('+1 心 · 继续本关 · 还可看 ' + adLvLeft() + ' 次')
         : '+1 心 · 继续本关',
         C.DESIGN.w / 2, top + 545, 24, COL.textSub, 'center', '600');
@@ -6416,13 +6490,19 @@
       var canCoin = (s.coin || 0) >= C.ECON.coinRevive && !state.adSim;
       var bCoin = { id: 'coin_revive', x: C.DESIGN.w / 2, y: top + 635, w: 380, h: 84,
         label: '花 ' + C.ECON.coinRevive + ' 巧币复活', variant: 'secondary', size: 28, disabled: !canCoin };
-      if (canCoin) addHit(bCoin.x, bCoin.y, bCoin.w, bCoin.h, 'coin_revive');
+      if (canCoin && hitOK) addHit(bCoin.x, bCoin.y, bCoin.w, bCoin.h, 'coin_revive');
       drawButton(bCoin);
 
       // 忍痛放弃（按钮下方）
       var gy = top + 750;
       text('忍痛放弃', C.DESIGN.w / 2, gy, 30, COL.textSub, 'center', '500');
-      addHit(C.DESIGN.w / 2, gy, 240, 86, 'give_up');
+      if (hitOK) addHit(C.DESIGN.w / 2, gy, 240, 86, 'give_up');
+      ctx.restore();
+
+      /* v0.17：常驻 HUD 压在遮罩之上（位置与对局页完全相同），
+       * 放在变换外 —— 它是底色层而不是卡片内容，不该跟着卡片一起弹。 */
+      playHud(hudAnchorY());
+
       adLayer();
     }
 

@@ -183,6 +183,15 @@ function buildSfxSynth(key) {
         strike(ns[i], 1.1, 0.11 - i * 0.005, SFX_MAT.bell, 'sine', i * 0.085);
       }
       strike(261.63, 1.3, 0.06, SFX_MAT.bell, 'sine', 0.255);
+    },
+    /* v0.48 时间到（超时失败）：A 小调下行 A4→F4→D4→A3，尾巴补 A2 闷音。
+     * 与 sfx_win 同属情绪表达，不随材质风格切换、纯合成零文件。 */
+    sfx_timeup: function () {
+      var ns = [440.00, 349.23, 293.66, 220.00];
+      for (var i = 0; i < ns.length; i++) {
+        strike(ns[i], 0.46, 0.13 - i * 0.014, SFX_MAT.bell, 'sine', i * 0.19);
+      }
+      strike(110.00, 1.05, 0.09, SFX_MAT.wood, 'sine', 0.62);
     }
   };
 }
@@ -504,6 +513,13 @@ var sfxStyleKey = 'wood';
     if (!unlocked || !enabled.bgm) return;
     bgmPlay(key);
   }
+  /* v0.48：超时失败时停掉背景曲给失败乐句让路，但保留 bgmScene，
+   * 复活时 setLevelScene() 会自然恢复。 */
+  function bgmHalt() {
+    pauseAll(null);
+    homeStop(false);
+    curEl = null; bgmFileNow = '';
+  }
   /* 第一次用户手势（解锁音频）后进入：主页直接起播 */
   function startBgm() {
     if (!unlocked || !enabled.bgm) { applyBgmGain(); return; }
@@ -542,7 +558,8 @@ var sfxStyleKey = 'wood';
     /* v0.27：非木质风格必须走合成（wav 缓冲是固定的木质录音，换风格听不出差别）。
      * wood 保持原优先级（buffer → element → synth），零回归。
      * v0.31：通关音属于"情绪表达"，不随材质风格变，任何风格都优先播重制素材。 */
-    if (sfxStyleKey === 'wood' || name === 'sfx_win') {
+    /* v0.48：sfx_timeup 与 sfx_win 同属情绪表达，任何音效风格下都直接走合成 */
+    if (sfxStyleKey === 'wood' || name === 'sfx_win' || name === 'sfx_timeup') {
       if (buf[name] && AC) {
         try {
           var s = AC.createBufferSource();
@@ -580,6 +597,7 @@ var sfxStyleKey = 'wood';
     },
     duck: function (on) { ducked = !!on; applyBgmGain(); },
     setScene: function (k) { bgmSetScene(k); },   // v0.5：主页 / 关卡多场景 BGM
+    halt: function () { bgmHalt(); },             // v0.48：失败乐句前让背景安静（不改场景）
     setSfxStyle: function (key) {                  // v0.27：切换交互音效风格
       if (!C.SFX_STYLES || !C.SFX_STYLES[key]) key = 'wood';
       sfxStyleKey = key;
