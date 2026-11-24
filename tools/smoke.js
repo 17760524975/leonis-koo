@@ -110,6 +110,12 @@ function drag(fromD, toD, steps) {
   inputFn('up', b[0], b[1]);
   step(16);
 }
+/* v0.37：对局页返回键已下移到托盘带左侧（中心 70,1130），不能再写死顶栏坐标。
+ * 直接从当帧热区表里取 back_levels 中心（与下面取「next」热区同一套路）。 */
+function tapBackToLevels() {
+  const h = game._debug.hitList().find(h => h.id === 'back_levels');
+  tap(h ? h.x + h.w / 2 : 70, h ? h.y + h.h / 2 : 1130);
+}
 
 /* ---------- 断言 ---------- */
 let fail = 0;
@@ -261,8 +267,8 @@ tap(647, TOOL_Y);
 for (let k = 0; k < 10; k++) step(16);
 check('重来清空棋盘', S.pieces.every(p => !p.onBoard));
 
-// 返回关卡列表
-tap(70, CFG.SAFE.top + 28);
+// 返回关卡列表（v0.37：返回键已下移，坐标从热区表取）
+tapBackToLevels();
 for (let k = 0; k < 10; k++) step(16);
 check('回到关卡列表', S.page === 'levels', 'page=' + S.page);
 
@@ -280,7 +286,7 @@ for (let k = 0; k < 10; k++) step(16);
 check('关卡列表可进第 2 关', S.page === 'play' && S.levelIdx === 1, 'page=' + S.page + ' idx=' + S.levelIdx);
 
 // 设置面板
-tap(70, CFG.SAFE.top + 28);
+tapBackToLevels();
 for (let k = 0; k < 6; k++) step(16);
 check('回到关卡列表', S.page === 'levels');
 tap(70, CFG.SAFE.top + 38);       // 关卡列表的返回箭头

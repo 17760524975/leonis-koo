@@ -114,13 +114,17 @@ const CAP_W = 240;
 const CAP_CX = CFG.DESIGN.w / 2;
 const CAP_L = CAP_CX - CAP_W / 2;
 const CAP_R = CAP_CX + CAP_W / 2;
-const BACK_R = 108;                               // 返回按钮右沿（按钮 32..108）
+/* v0.37：返回按钮已下移到托盘带左侧（中心 70,1130），胶囊占原左上角位置。
+ * 旧的「胶囊必须避开返回按钮右沿 108」约束整体失效，left 由 120 → 32，
+ * 与旧按钮左沿对齐；此处只留旧按钮左沿作「不出血」的下界参照。 */
+const BACK_OLD_L = 32;                            // v0.37 前返回按钮左沿（现为胶囊左沿）
 /* 真机微信原生胶囊（「···」+「○」）在 375 屏约 x 278~368 CSS → 设计 556~736。
  * 它是系统层 UI，盖在画布之上：画在那儿的 HUD 会被压掉一半。 */
 const WX_MENU_L = 556;
 const VIEW_SAFE_TOP = Math.max(CFG.SAFE.top, 20 / SCALE);
 const M = CFG.LAYOUT.HUD_MIN;
-/* v0.29.1：HUD 回到左上角（返回按钮右沿 108 之后），并整体上移 topShift。 */
+/* v0.37：返回按钮已下移到托盘带左侧，胶囊占原左上角位置（left=32），
+ * 仍整体上移 topShift；其余顶栏中线口径不变。 */
 const BY = VIEW_SAFE_TOP + 40 - (M.topShift || 0); // 顶栏中线（含上移量）
 const HUD_L = M.left;
 const HUD_R = HUD_L + M.maxW;
@@ -154,8 +158,8 @@ function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).dig
   /* ================= 1. 配置与几何 ================= */
   section('1. 配置与几何净空');
   check('版本号 v0.17 起（含后续补丁版）', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
-  check('HUD_MIN 存在且关键值符合设计',
-    !!M && M.pillH === 36 && M.rowGap === 44 && M.maxW === 127 && M.left === 120
+  check('HUD_MIN 存在且关键值符合设计（v0.37：left 120→32）',
+    !!M && M.pillH === 36 && M.rowGap === 44 && M.maxW === 127 && M.left === 32
       && M.topShift === 8 && M.rightAnchor === false,
     M ? `left=${M.left} pillH=${M.pillH} rowGap=${M.rowGap} maxW=${M.maxW} topShift=${M.topShift}` : 'missing');
   const hudTop = BY - (M.rowGap + M.pillH) / 2;
@@ -164,12 +168,16 @@ function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).dig
   check('两枚胶囊竖排：略贴安全区上沿、下不撞卡纸',
     hudTop >= VIEW_SAFE_TOP - (M.topShift || 0) && hudBot < CFG.LAYOUT.BOARD.y,
     `${hudTop} ≥ ${VIEW_SAFE_TOP - (M.topShift || 0)} 且 ${hudBot} < ${CFG.LAYOUT.BOARD.y}`);
-  check('HUD 在返回按钮右侧、不越设计宽度',
-    HUD_L >= BACK_R + 8 && HUD_R <= CFG.DESIGN.w, `left=${HUD_L} right=${HUD_R}`);
+  /* v0.37：旧的「胶囊避开返回按钮右沿 108」约束随按钮下移失效，
+   * 换成 v0.37 的真实几何：不与倒计时胶囊冲突（left+maxW < CAP_L），
+   * 且胶囊左沿 ≥ 画布 / 安全区左沿、右沿不越设计宽度（不出血）。 */
+  check('v0.37：胶囊与倒计时不冲突、左沿不出血（替代旧 BACK_R 约束）',
+    M.left + M.maxW < CAP_L && HUD_L >= 0 && HUD_L >= BACK_OLD_L && HUD_R <= CFG.DESIGN.w,
+    `left=${HUD_L} left+maxW=${M.left + M.maxW} < capL=${CAP_L} right=${HUD_R}`);
   check('最宽情况下仍与倒计时胶囊留出 ≥8 净空',
     CAP_L - HUD_R >= 8, `hudRight=${HUD_R} capLeft=${CAP_L} 净空=${CAP_L - HUD_R}`);
-  check('v0.29.1 用户更正：HUD 已回到左上角并上移 8px',
-    M.rightAnchor === false && M.left === 120 && M.topShift === 8,
+  check('v0.37：返回键下移后 HUD 占住左上角并仍上移 8px',
+    M.rightAnchor === false && M.left === 32 && M.topShift === 8,
     `left=${M.left} topShift=${M.topShift}`);
 
   /* ================= 2. 对局页：数字真的画出来了 ================= */
@@ -186,9 +194,9 @@ function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).dig
   check('倒计时仍在、没被挤出屏幕', tx.some(t => /^\d\d:\d\d$/.test(t.s)),
     textsOf(tx.filter(t => /^\d\d:\d\d$/.test(t.s))));
   const coinT = hud.filter(t => t.s === '128')[0];
-  check('巧币数字位于顶栏左侧（返回按钮与倒计时之间）',
-    !!coinT && coinT.x > BACK_R && coinT.x < CAP_L,
-    coinT ? `x=${coinT.x.toFixed(0)} ∈ (${BACK_R}, ${CAP_L})` : 'not found');
+  check('v0.37：巧币数字落在左上角胶囊内（按新 left=32 计算），且不越过倒计时左沿',
+    !!coinT && coinT.x >= HUD_L && coinT.x <= HUD_R && coinT.x < CAP_L,
+    coinT ? `x=${coinT.x.toFixed(0)} ∈ [${HUD_L}, ${HUD_R}] < ${CAP_L}` : 'not found');
   check('数字不越出胶囊右沿',
     !!coinT && coinT.x + 40 <= HUD_R, coinT ? `x=${coinT.x.toFixed(0)} ≤ ${HUD_R}` : '');
   /* v0.17：关号让位到卡纸内（顶栏塞不下四组元素），但仍必须看得见 */
