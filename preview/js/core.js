@@ -3070,7 +3070,7 @@
       ctx.scale(s, s);
       ctx.strokeStyle = color; ctx.fillStyle = color;
       ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      var r = 22;
+      /* v0.37：旧 back 分支用的 r=22 已随细 chevron 一起删掉，这里不再留无用局部量。 */
 
       /* ---------- 彩色徽章系：巧币 / 体力 / 查找 / 排行榜 / 在线奖励 / 礼物 ---------- */
       if (name === 'coin') {
@@ -3193,8 +3193,17 @@
           ctx.fillStyle = dots[di]; ctx.fill();
         }
       } else if (name === 'back') {
+        /* v0.37：可爱风圆滚滚的「←」——粗描边、圆头圆角、带一条短尾巴，
+         * 配糖果底返回按钮；与工具栏的 rotL/rotR/flip/restart 一眼可分。
+         * 坐标是固定小尺寸（±12），由 drawIcon 的 s 与按钮的 iconScale 一起缩放。 */
+        ctx.lineWidth = 5.2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
         ctx.beginPath();
-        ctx.moveTo(6, -r); ctx.lineTo(-8, 0); ctx.lineTo(6, r);
+        ctx.moveTo(6.5, -12); ctx.lineTo(-8, 0); ctx.lineTo(6.5, 12);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(-6.5, 0); ctx.lineTo(9, 0);
         ctx.stroke();
       } else if (name === 'rotL' || name === 'rotR') {
         /* v0.35：圆环箭头重画（可爱版）—— 粗描边 + 圆头 + 实心胖箭头。
@@ -4450,7 +4459,13 @@
       var by = view.safeTop + 40;
       /* 计时胶囊几何先算出来：关名截断要用它算可用宽度（写成 var 会因提升拿到 undefined） */
       var capW = 240, capH = 56, capCx = C.DESIGN.w / 2, capL = capCx - capW / 2;
-      var bb = { id: 'back_levels', x: 70, y: by, w: 76, h: 76, variant: 'tool', icon: 'back' };
+      /* v0.37：返回键下移方便单手操作 —— 中心 y 由 by(安全区+40) 挪到 1130，
+       * 落在卡纸底(1018)下方托盘带的左侧空白区；x 保持 70（左沿 32 与胶囊左沿对齐）。
+       * 顺带换成可爱风糖果按钮：tone 必须内联，下面 renderPlay 尾部的 TOOL_TONE
+       * 因 var 提升在此处拿到的是 undefined，不能引用。 */
+      var bb = { id: 'back_levels', x: 70, y: 1130, w: 76, h: 76, variant: 'tool', icon: 'back',
+        tone: { bg1: '#FFF3E6', bg2: '#FFE2C7', edge: '#FFC79E', ink: '#E07B3A' },
+        iconScale: 0.92 };
       addHit(bb.x, bb.y, bb.w, bb.h, 'back_levels');
       drawButton(bb);
       /* v0.17：关号从顶栏让位到卡纸内左上角（见下方「关卡标题」）。
