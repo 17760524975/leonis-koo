@@ -285,6 +285,17 @@
       streakGain: 0,          // v0.8 本次通关拿到的连胜奖励巧币（0=没到里程碑）
       rankTab: 0,             // v0.8 排行榜当前页签
       skinTab: 0,             // v0.27 皮肤面板分类页签（0配色 1背景 2板件 3音效）
+      inviteCd: 0,            // v0.41 邀请分享冷却（ms 时间戳），防一次点击连发
+      inviteFlash: null,      // v0.41 本次打开邀请面板时结算出的 {added, tiers}，供顶部提示
+      /* v0.42：邀请面板改成可滑动列表（8 档一屏放不下）
+       *   inviteScroll    当前滚动偏移（设计 px）
+       *   inviteScrollMax 本帧算出的最大偏移（内容高 - 视口高，<=0 表示不需要滑）
+       *   inviteList      本帧列表视口的屏幕矩形，供 onDown 判断「按在列表里」
+       *   scrollDrag      滑动中的临时手势状态 {y0, s0, moved} */
+      inviteScroll: 0, inviteScrollMax: 0, inviteList: null, scrollDrag: null,
+      /* v0.39：待确认购买的皮肤项 {kind:'bgfx'|'pstyle', key, price, name}
+       * 点已锁的项先进确认页（巧币不是白来的，100/150 不能一碰就扣）。 */
+      buyItem: null,
       fxParts: null,          // v0.27 背景特效粒子缓存（惰性初始化，按当前 bgFx 生成）
       rankBack: null,         // v0.8 打开排行榜前的浮层（结算页 → 'result'，主页 → null）
       rankT: 0,               // v0.8 排行榜入场动画时钟
@@ -401,6 +412,54 @@
       return true;
     }
 
+    /* ---------------- v0.39 皮肤解锁（巧币买断） ----------------
+     * 背景 3 套 ×150、板件 6 套 ×100（价格写在 config 各条目的 price 字段）。
+     * 与 v0.31 视觉设置同一套思路：解锁记录抽成全局键 tangram_shop_v1，
+     * 四巧板 / 七巧板共用一份 —— 在一边买了，另一边不能再收一次钱。
+     * 不含 price 的项（默认组合）永远免费，不写记录也能选。
+     *
+     * 老玩家升级：把「当前已选中的付费项」就地记为已购。他本来就在用这套，
+     * 更新完突然被锁在门外、还要再付一遍巧币，是明显的体验倒退。
+     * 不迁移任何未选中的项 —— 没买过的还是没买过。 */
+    var SHOP_KEY = 'tangram_shop_v1';
+    var SHOP_MAP = { bgfx: 'BG_FX', pstyle: 'PIECE_STYLES' };
+    function loadShop() {
+      var raw = null;
+      try { raw = env.storage.get(SHOP_KEY); } catch (e) { raw = null; }
+      if (!raw) return null;
+      var o = raw;
+      if (typeof raw === 'string') { try { o = JSON.parse(raw); } catch (e) { return null; } }
+      return (o && typeof o === 'object') ? o : null;
+    }
+    function writeShop(o) {
+      try { env.storage.set(SHOP_KEY, JSON.stringify(o || {})); } catch (e) { /* 隐私模式静默降级 */ }
+    }
+    function itemPrice(kind, key) {
+      var m = C[SHOP_MAP[kind]];
+      var it = m && m[key];
+      return (it && typeof it.price === 'number') ? it.price : 0;
+    }
+    function ownsItem(kind, key) {
+      var o = loadShop();
+      var arr = o && o[kind];
+      return Array.isArray(arr) && arr.indexOf(key) >= 0;
+    }
+    function grantItem(kind, key) {
+      var o = loadShop() || {};
+      if (!Array.isArray(o[kind])) o[kind] = [];
+      if (o[kind].indexOf(key) < 0) o[kind].push(key);
+      writeShop(o);
+    }
+    function itemLocked(kind, key) {
+      return itemPrice(kind, key) > 0 && !ownsItem(kind, key);
+    }
+    /* 升级播种：只补「当前正在用的付费项」，其余一概不送 */
+    function seedShop(s) {
+      if (!loadShop()) writeShop({});
+      if (s.bgFx && itemPrice('bgfx', s.bgFx) > 0) grantItem('bgfx', s.bgFx);
+      if (s.pieceStyle && itemPrice('pstyle', s.pieceStyle) > 0) grantItem('pstyle', s.pieceStyle);
+    }
+
     /* ---------------- v0.36 全局在线状态 ----------------
      * 在线奖励原本和钱包一样，是塞在「四巧 / 七巧各自一份存档」里的
      * （onlineDay / onlineSec / onlineGot）。切一次玩法就等于换了一套计时：
@@ -471,6 +530,10 @@
       var E = C.ECON;
       return {
         playerId: 'local', starOf: {}, unlockedMax: 1, bestTime: {}, hintUsed: {},
+        /* v0.40：每关「已发放的星级奖励累计额」（key = 关卡号）。
+         * 结算时按 starReward[新星级-1] - starPaid[k] 补差 —— 没有这笔账，
+         * 就无法区分「1★ 首通」和「1★ 升到 2★」，补差价会变成重复发。 */
+        starPaid: {},
         settings: { sfx: true, bgm: true },
         /* v0.5 经济 / 体力 / 运营（老存档缺字段由 loadSave 逐项兜底） */
         coin: E.coinInit,
@@ -479,7 +542,11 @@
         /* v0.15：每日在线奖励 —— 当日累计秒数 / 当天已领档位（每日 0 点清空） */
         onlineDay: '', onlineSec: 0, onlineGot: {},
         hintItems: 0,             // v0.16：查找道具（在线奖励 40/60 分钟、邀请有礼给），跨天不清
-        inviteCount: 0, inviteDay: '',
+        /* v0.41 邀请有礼：累计制 + 8 档阶梯
+         *   inviteCount 有效邀请人数（好友完成 ≥4 关才算，跨天不重置）
+         *   invitePend  待确认的邀请时间戳（ms），到点/宿主确认后转入 inviteCount
+         *   inviteGot   已发放的阶梯档位（tier.n），每档只发一次 */
+        inviteCount: 0, invitePend: [], inviteGot: [],
         skin: 'warm',
         /* v0.27 视觉升级：三类独立风格，缺省为经典组合 */
         bgFx: 'geometric',        // v0.31：默认「几何轻舞」（用户指定），全局生效
@@ -516,6 +583,7 @@
           if (o && typeof o === 'object') {
             var E = C.ECON;
             s.starOf = o.starOf || {};
+            s.starPaid = (o.starPaid && typeof o.starPaid === 'object') ? o.starPaid : {};
             s.unlockedMax = o.unlockedMax || 1;
             s.bestTime = o.bestTime || {};
             s.hintUsed = o.hintUsed || {};
@@ -538,8 +606,14 @@
             s.resume = (o.resume && typeof o.resume === 'object' && typeof o.resume.lv === 'number')
               ? o.resume : null;
             /* v0.16：每日任务已下线，老存档里的 tasksDay/tasksClaimed/taskPlays 直接丢弃 */
-            s.inviteCount = (typeof o.inviteCount === 'number') ? o.inviteCount : 0;
-            s.inviteDay = o.inviteDay || '';
+            /* v0.41：老存档只有 inviteDay（每日一次那套）+ inviteCount，
+             * 直接沿用 inviteCount 当起始人数（老玩家邀请过的朋友不该清零），
+             * inviteDay 彻底作废；待确认队列与已发档位缺省为空。 */
+            s.inviteCount = (typeof o.inviteCount === 'number') ? Math.max(0, o.inviteCount) : 0;
+            s.invitePend = Array.isArray(o.invitePend)
+              ? o.invitePend.filter(function (t) { return typeof t === 'number'; }) : [];
+            s.inviteGot = Array.isArray(o.inviteGot)
+              ? o.inviteGot.filter(function (n) { return typeof n === 'number'; }) : [];
             /* v0.14：老存档没有 profile，留 null 让登录后由云端补 */
             s.profile = (o.profile && typeof o.profile === 'object') ? o.profile : null;
             s.skin = o.skin || 'warm';
@@ -570,8 +644,27 @@
       var maxLv = LEVELS.length;
       if (s.unlockedMax > maxLv) s.unlockedMax = maxLv;
       if (s.unlockedMax < 1) s.unlockedMax = 1;
+      /* v0.40：老存档补一笔「已发奖励」账。
+       * 旧口径（v0.23~v0.39）是首通一次性给 1★2 / 2★3 / 3★5，存档只记星级、不记金额。
+       * v0.43 起新总额又回到 2/3/5，两边数值一致，所以：
+       *   · 记旧值 → 老玩家的账正好对上，现有星级不会被重复发币，也不会被少给；
+       *   · 记 0 → 每关都重发一遍，一进游戏凭空多几十巧币。
+       * v0.41/v0.42 存档里的 21/22/24 是错误口径留下的脏账，下面统一夹到新总额，
+       * 免得 starPaid 长期大于 targetTotal（虽然不发放，但账目对不上）。 */
+      var OLD_STAR_COIN = [2, 3, 5];
+      var NEW_TOTALS = C.ECON.starReward;
       for (var k in s.starOf) {
-        if (!(Number(k) >= 1 && Number(k) <= maxLv)) delete s.starOf[k];
+        if (!(Number(k) >= 1 && Number(k) <= maxLv)) {
+          delete s.starOf[k];
+          delete s.starPaid[k];
+          continue;
+        }
+        var pst = s.starOf[k] || 0;
+        if (typeof s.starPaid[k] !== 'number') {
+          s.starPaid[k] = pst > 0 ? (OLD_STAR_COIN[pst - 1] || 0) : 0;
+        }
+        var cap0 = pst > 0 ? (NEW_TOTALS[pst - 1] || 0) : 0;
+        if (s.starPaid[k] > cap0) s.starPaid[k] = cap0;
       }
       /* v0.19：streakSeen 里的关卡号同样要收敛（数据集关卡数可能变少），
        * 顺便去重并丢掉非数字项，避免脏存档把「段内已计」判错。 */
@@ -592,6 +685,8 @@
       applyWalletTo(s);
       /* v0.36：在线时长 / 已领记录一律以全局键为准 —— 切数据集不再重开一轮 */
       applyOnlineTo(s);
+      /* v0.39：付费皮肤解锁记录（全局键）。老存档里正在用的付费项自动视为已购 */
+      seedShop(s);
       return s;
     }
     /* keepTs=true：只落盘、不刷新 updatedAt。
@@ -795,6 +890,12 @@
       var lv;
       for (lv in (a.starOf || {})) out.starOf[lv] = a.starOf[lv] || 0;
       for (lv in (b.starOf || {})) out.starOf[lv] = Math.max(out.starOf[lv] || 0, b.starOf[lv] || 0);
+      /* v0.40：已发奖励额也要合并，且只能取 max。
+       * 两设备各升一次星时若取新的那份，会把另一台已发的账抹掉 → 再升一次又发一遍。
+       * 取 max 等于「记录哪台发得更多」，差价只会算少不会算重。 */
+      out.starPaid = {};
+      for (lv in (a.starPaid || {})) out.starPaid[lv] = a.starPaid[lv] || 0;
+      for (lv in (b.starPaid || {})) out.starPaid[lv] = Math.max(out.starPaid[lv] || 0, b.starPaid[lv] || 0);
       out.unlockedMax = Math.max(a.unlockedMax || 1, b.unlockedMax || 1);
       /* v0.18：当前连胜跟「较新的那份」走。旧版取 Math.max 会出大问题：
        * 这一局输了把 streak 清零并上行，下次启动合并云端旧值时又被 max 复活，
@@ -1259,15 +1360,29 @@
     }
 
     /* ---- 皮肤（只覆盖配色，动态改 COL 字段以让闭包引用同步生效） ---- */
-    /* v0.28 refreshPalette：先铺所选皮肤，再叠「深色背景特效」的暗色板。
-     * 顺序固定 皮肤→暗色板，保证换肤 / 换背景都能得到正确对比度（否则深色夜空配深色字会看不清）。 */
+    /* v0.38：先留一份「浅色基准」快照。COL 就是 C.COLORS 本体、被反复改写，
+     * 所以每次刷新都从基准重建，否则从深色皮肤 / 深色背景切回浅色时，
+     * cardEdge / board / targetFill / mask 这些只出现在深色板里的字段会残留深色。 */
+    var BASE_COL = {};
+    for (var _bk in C.COLORS) BASE_COL[_bk] = C.COLORS[_bk];
+    /* v0.28 refreshPalette：皮肤 → 深色打底 → 深色背景特效，顺序固定。
+     * v0.38：新增「深色皮肤」（dusk 夜间护眼）。它先铺 DARK_PAL 打底保证字段齐全，
+     * 再用皮肤自己的色覆盖，因此深色皮肤下的卡纸 / 描边 / 目标轮廓不会漏出浅色值。 */
     function refreshPalette() {
-      var sk = C.SKINS[state.save.skin || 'warm'];
-      if (sk) { for (var k in sk) { if (k !== 'name') COL[k] = sk[k]; } }
+      var k, sk;
+      for (k in BASE_COL) COL[k] = BASE_COL[k];
+      var key = state.save.skin || 'warm';
+      sk = C.SKINS[key];
+      /* 老存档里的 sunset / ocean 已下线（v0.38 换成夜间护眼），静默回落暖木，
+       * 否则面板里一个都不高亮、COL 也会停在上一套颜色上。 */
+      if (!sk) { key = 'warm'; state.save.skin = key; sk = C.SKINS.warm; }
+      state.darkSkin = !!sk.dark;
+      if (state.darkSkin && C.DARK_PAL) { for (k in C.DARK_PAL) COL[k] = C.DARK_PAL[k]; }
+      for (k in sk) { if (k !== 'name' && k !== 'dark') COL[k] = sk[k]; }
       var fx = C.BG_FX && C.BG_FX[state.save.bgFx || 'geometric'];
       state.darkFx = !!(fx && fx.dark);
       if (state.darkFx && C.DARK_PAL) {
-        for (var d in C.DARK_PAL) { COL[d] = C.DARK_PAL[d]; }
+        for (k in C.DARK_PAL) COL[k] = C.DARK_PAL[k];
       }
     }
     function applySkin(key) {
@@ -1312,6 +1427,36 @@
       persist();
       env.audio.play('sfx_pick');    // 立即试听，切换手感可感知
       toast('音效：' + C.SFX_STYLES[key].name);
+    }
+
+    /* ---- v0.39：付费皮肤 选 / 买 ----
+     * 点卡片分两种：
+     *   · 没锁（免费或已买过）→ 直接应用，和以前一样；
+     *   · 已锁 → 进确认页（state.overlay='buy'），绝不一点就扣巧币。
+     * 购买成功后 key 进全局解锁表，之后两边（四巧/七巧）都是已购状态。 */
+    function pickSkinItem(kind, key) {
+      if (!itemLocked(kind, key)) {
+        if (kind === 'bgfx') applyBgFx(key); else applyPieceStyle(key);
+        return;
+      }
+      var m = C[SHOP_MAP[kind]], it = m && m[key];
+      if (!it) return;
+      env.audio.play('sfx_tap');
+      state.buyItem = { kind: kind, key: key, price: it.price || 0, name: it.name, desc: it.desc };
+      state.overlay = 'buy';
+    }
+    function buySkinItem() {
+      var it = state.buyItem, s = state.save;
+      if (!it) { state.overlay = 'skin'; return; }
+      if ((s.coin || 0) < it.price) { toast('巧币不足，还需 ' + (it.price - (s.coin || 0)) + ' 巧币'); return; }
+      s.coin -= it.price;
+      persist();                     // 扣币立刻落盘（writeLocal 会同步全局钱包）
+      grantItem(it.kind, it.key);
+      if (it.kind === 'bgfx') applyBgFx(it.key); else applyPieceStyle(it.key);
+      state.buyItem = null;
+      state.overlay = 'skin';
+      env.audio.play('sfx_win');
+      toast('已解锁：' + it.name);
     }
 
     /* ---- 模拟广告（个人主体无流量主：adSimMs 进度条后发奖） ---- */
@@ -1431,10 +1576,12 @@
      * 不做「本关永久翻倍」，也不做「下一关自动带着」：
      * 每一关想翻倍都得自己点一次，否则一次观看会被记成一个长期倍率，
      * 奖励结构又回到"看一次广告吃一整局"的老问题。
-     * r.gain 是首通时已经落账的金额，这里补发 (倍率-1) 倍的差额。 */
+     * r.gain 是本次已经落账的金额（首通 / 升星补差都算），这里补发 (倍率-1) 倍的差额。 */
     function grantWinAdMul() {
       var r = state.result;
-      if (!r || !r.first || r.adUsed || !r.gain) { toast('本关没有可翻倍的奖励'); return; }
+      /* v0.40：判定从 r.first 放宽到 r.gain —— 升星补差也能翻倍，
+       * 用户的说法是「看视频对获得的巧币数量进行翻 5 倍」，翻的是这次拿到的钱。 */
+      if (!r || r.adUsed || !r.gain) { toast('本关没有可翻倍的奖励'); return; }
       var mul = (C.ECON.coinWinAdMul || 5);
       var extra = r.gain * (mul - 1);
       state.save.coin = Math.max(0, (state.save.coin || 0) + extra);
@@ -1458,19 +1605,108 @@
       go('levels');
     }
 
-    /* ---- 邀请有礼（模拟分享：微信端可接 wx.shareAppMessage） ----
-     * v0.16：除巧币外再给 1 个查找道具 —— 提示取消免费档后，
-     * 邀请是除在线奖励外唯一的免费获取途径（用户要求）。 */
+    /* ==================== v0.41 邀请有礼（累计制 + 8 档阶梯） ====================
+     * 旧口径（v0.16~v0.40）：每天首次分享当场 +20 巧币 +1 查找道具，一天一次。
+     * 新口径（用户要求）：
+     *   · 不限每日次数，改成**累计**邀请人数；
+     *   · 分享只是「发出邀请」，当场**不发奖**；
+     *   · 被邀请的好友完成任意 needCleared(4) 关，这一位才计入人数；
+     *   · 人数达标后按 INVITE.tiers 逐档发放（每档只发一次，自动到账）。
+     *
+     * 判定入口只有 inviteConfirmed()：接后端时只替换它，
+     * 存档 / 发奖 / UI 都不动。 */
+
+    /* 这一条邀请（ts = 发出时刻）是否已满足「好友完成 4 关」 */
+    function inviteConfirmed(ts) {
+      if (env.invite && typeof env.invite.confirmed === 'function') {
+        try { if (env.invite.confirmed(ts)) return true; } catch (e) { /* 宿主异常 → 退回模拟 */ }
+      }
+      return (Date.now() - ts) >= (C.INVITE.verifySec || 60) * 1000;
+    }
+
+    /* 发一档奖励。体力走 addEnergy(…, overflow=true)：
+     * 邀请奖励和看视频一样允许溢出上限，否则满体力时给的 20 点会被吞掉。 */
+    function grantInviteTier(t) {
+      var s = state.save;
+      if (!t) return;
+      if (t.coin) s.coin = (s.coin || 0) + t.coin;
+      if (t.energy) addEnergy(t.energy, null, true);
+      if (t.hint) s.hintItems = (s.hintItems || 0) + t.hint;
+      if (t.pstyle) grantItem('pstyle', t.pstyle);   // 走全局解锁表，四巧/七巧通用
+      if (t.bgfx) grantItem('bgfx', t.bgfx);
+    }
+
+    /* 按当前人数把「已达标的未发档位」补齐。返回本次新发的档位数组。 */
+    function inviteGrant() {
+      var s = state.save, T = (C.INVITE && C.INVITE.tiers) || [], out = [];
+      if (!s) return out;
+      if (!Array.isArray(s.inviteGot)) s.inviteGot = [];
+      for (var i = 0; i < T.length; i++) {
+        var t = T[i];
+        if ((s.inviteCount || 0) < t.n) break;          // 后面的档位人数只会更高
+        if (s.inviteGot.indexOf(t.n) >= 0) continue;
+        grantInviteTier(t);
+        s.inviteGot.push(t.n);
+        out.push(t);
+      }
+      return out;
+    }
+
+    /* 结算待确认队列 → 计数 → 补发阶梯奖。打开面板、分享、启动时都会调。 */
+    function inviteVerify() {
+      var s = state.save;
+      if (!s) return { added: 0, tiers: [] };
+      var keep = [], added = 0, pend = s.invitePend || [];
+      for (var i = 0; i < pend.length; i++) {
+        if (inviteConfirmed(pend[i])) added++;
+        else keep.push(pend[i]);
+      }
+      s.invitePend = keep;
+      if (added) s.inviteCount = (s.inviteCount || 0) + added;
+      var tiers = inviteGrant();
+      if (added || tiers.length) persist();
+      return { added: added, tiers: tiers };
+    }
+
+    /* 主页入口红点：有没有「已满足条件、还没被算进去」的邀请 */
+    function inviteHasNews() {
+      var s = state.save, pend = (s && s.invitePend) || [];
+      for (var i = 0; i < pend.length; i++) if (inviteConfirmed(pend[i])) return true;
+      return false;
+    }
+    /* 下一个还没达成的档位（面板上写进度用），已满 8 档返回 null */
+    function inviteNextTier() {
+      var s = state.save, T = (C.INVITE && C.INVITE.tiers) || [];
+      for (var i = 0; i < T.length; i++) if ((s.inviteCount || 0) < T[i].n) return T[i];
+      return null;
+    }
+
+    /* v0.42：邀请列表滚动 —— 夹在 [0, inviteScrollMax] 之间，越界只会贴边不会弹飞 */
+    function setInviteScroll(v) {
+      var m = state.inviteScrollMax || 0;
+      state.inviteScroll = Math.max(0, Math.min(m, v));
+    }
+
+    /* 分享 = 发出一张邀请券。不再当场发奖，也不再限每日一次。 */
     function doInviteShare() {
-      var s = state.save, d = todayKey(), E = C.ECON;
-      if (s.inviteDay === d) { toast('今天已经邀请过啦'); return; }
-      s.inviteDay = d;
-      s.inviteCount = (s.inviteCount || 0) + 1;
-      s.coin = (s.coin || 0) + E.inviteCoin;
-      s.hintItems = (s.hintItems || 0) + (E.inviteHint || 0);
+      var s = state.save, V = C.INVITE, now = Date.now();
+      if (!s) return;
+      if (state.inviteCd && now < state.inviteCd) return;      // 冷却中，忽略连点
+      state.inviteCd = now + (V.shareCdMs || 1200);
+      if (!Array.isArray(s.invitePend)) s.invitePend = [];
+      /* 队列满了先结算一轮（可能有的已经完成 4 关），腾出位置再发 */
+      if (s.invitePend.length >= (V.maxPend || 12)) {
+        var r0 = inviteVerify();
+        state.inviteFlash = r0;
+      }
+      if (s.invitePend.length >= (V.maxPend || 12)) {
+        toast('待确认的邀请已满，等好友通关后再来');
+        return;
+      }
+      s.invitePend.push(now);
       persist();
-      toast('邀请成功 +' + E.inviteCoin + ' 巧币 +' + (E.inviteHint || 0) + ' ' + C.HINT.itemName);
       if (env.share) { try { env.share(); } catch (e) {} }
+      toast('邀请已发出 · 好友完成 ' + (V.needCleared || 4) + ' 关后计入');
     }
 
     /* ---------------- 数据集切换（v0.3 Phase 0）----------------
@@ -1868,27 +2104,47 @@
       if (state.elapsed <= lv.parTime && state.steps <= lv.parSteps) stars = 3;
       var k = String(state.levelIdx + 1);
       var s = state.save;
-      /* v0.23：首通判定必须在 starOf 更新**之前**取，否则永远是"已通过"。
-       * 只有首通给巧币（按星级 2/3/5），重复通关是 0 ——
-       * 旧版每次通关都给 20/30，第 1 关 30 秒一局，是全场最高效的刷币点。 */
-      var firstClear = !(s.starOf[k] > 0);
+      /* ---------- v0.40 星级奖励：总额制 + 补差价（v0.43 数值回正） ----------
+       * 口径（用户定义）：1★ 2 / 2★ 3 / 3★ 5，不看视频时每关累计最多 5 巧币。
+       * 已通过的关重玩、星级提高时，补「该星级总额 − 这关已拿过的」差额，
+       * 这笔补差同样能看视频 ×5。
+       *
+       * 于是奖励不再按「本局几星」取，而是按**该关历史最高星级**取总额：
+       *     本局应得 = starReward[bestStars-1] - starPaid[k]
+       *   · 首通 1★ → 2 - 0 = 2
+       *   · 1★ 升 2★ → 3 - 2 = 1
+       *   · 2★ 升 3★ → 5 - 3 = 2
+       *   · 1★ 直接打回 3★ → 5 - 2 = 3（跨级 = 1+2）
+       *   · 已 3★ 再打（哪怕这局只有 1★）→ 5 - 5 = 0
+       * 每关总额恒定封顶 5，重复刷同星级一分不多，所以没有刷币漏洞。
+       *
+       * prevStars 必须在 starOf 更新**之前**取，否则永远"已通过、无提升"。 */
+      var SR = C.ECON.starReward;
+      var prevStars = s.starOf[k] || 0;
+      var bestStars = Math.max(prevStars, stars);
+      var firstClear = prevStars === 0;
+      var targetTotal = SR[bestStars - 1] || 0;
+      /* 没通关的关不该有账（容错：手改存档 / 删星重来时不认残留值） */
+      var paidTotal = prevStars > 0
+        ? (typeof s.starPaid[k] === 'number' ? s.starPaid[k] : (SR[prevStars - 1] || 0))
+        : 0;
+      var gain = Math.max(0, targetTotal - paidTotal);
       state.result = { stars: stars, time: state.elapsed, steps: state.steps,
-        first: firstClear, gain: 0, adUsed: false };
-      s.starOf[k] = Math.max(s.starOf[k] || 0, stars);
+        prevStars: prevStars, bestStars: bestStars,
+        first: firstClear, up: bestStars > prevStars,
+        gain: gain, target: targetTotal, adUsed: false };
+      s.starOf[k] = bestStars;
+      if (gain > 0) {
+        s.coin = Math.max(0, (s.coin || 0) + gain);
+        s.starPaid[k] = targetTotal;
+      }
       if (!s.bestTime[k] || state.elapsed < s.bestTime[k]) s.bestTime[k] = +state.elapsed.toFixed(1);
       if (state.levelIdx + 1 === s.unlockedMax && s.unlockedMax < LEVELS.length) s.unlockedMax = state.levelIdx + 2;
       if (s.unlockedMax > LEVELS.length) s.unlockedMax = LEVELS.length;
       /* v0.5：通关奖励巧币 + 连胜 +1 + 下一关换 BGM 场景（每通一关切下一首）
-       * v0.23：改成**只给首通**，金额跟星级走（2/3/5）。重复通关是 0 ——
-       * 对应地，重复通关也不再扣体力（见 fireBtn 的 start / lvl_ 分支）：
-       * 不给奖励还收门票，是纯惩罚。 */
+       * v0.23：重复通关不再扣体力（见 fireBtn 的 start / lvl_ 分支）——
+       * v0.40 起重玩有「升星补差」可拿，这条「不给奖励还收门票」的问题更站不住。 */
       var E2 = C.ECON;
-      var gain = 0;
-      if (firstClear) {
-        gain = (E2.coinFirst && E2.coinFirst[stars - 1]) || 0;
-        if (gain) s.coin = Math.max(0, (s.coin || 0) + gain);
-      }
-      state.result.gain = gain;
       state.streakGain = 0;
       state.streakBeforeFail = 0;      // 通关 → 本段继续/结束，没有断点
       state.seenBeforeFail = [];       // v0.19：两个断点一起清
@@ -2121,6 +2377,17 @@
     }
     function onMove(x, y) {
       if (!state.activePointer) return;
+      /* v0.42：列表滑动（邀请面板）。位移超过 10px 才认作「滑」，之前仍算点击，
+       * 这样手指略抖也不会把按钮点丢。滑动一旦成立，立刻取消待触发的按钮。 */
+      if (state.scrollDrag) {
+        var sdy = y - state.scrollDrag.y0;
+        if (!state.scrollDrag.moved && Math.abs(sdy) > 10) {
+          state.scrollDrag.moved = true;
+          state.press = null;
+        }
+        if (state.scrollDrag.moved) setInviteScroll(state.scrollDrag.s0 - sdy);
+        return;
+      }
       if (state.drag) {
         var p = pieceOf(state.drag.id);
         if (!p) return;
@@ -2152,6 +2419,10 @@
     function onUp(x, y) {
       if (!state.activePointer) return;
       state.activePointer = false;
+      /* v0.42：滑动松手 —— 拖动过就不算点击（press 已在 move 阶段清掉） */
+      var scr0 = state.scrollDrag;
+      state.scrollDrag = null;
+      if (scr0 && scr0.moved) state.press = null;
       var btn = state.press;
       state.press = null;
       if (btn) {
@@ -2351,7 +2622,18 @@
         case 'hud_energy': state.overlay = 'energy'; break;
         /* v0.28：entry_desktop「添加桌面」已按用户要求下线 */
         case 'entry_skin': state.overlay = 'skin'; break;
-        case 'entry_invite': state.overlay = 'invite'; break;
+        /* v0.41：打开面板时先结算「待确认的邀请」—— 好友完成 4 关的，
+         * 在这里转入人数并补发阶梯奖；结果留给 renderInvite 顶部提示。 */
+        case 'entry_invite':
+          state.inviteScroll = 0;          // v0.42：每次打开都从第 1 档看起
+          state.inviteFlash = inviteVerify();
+          if (state.inviteFlash.added) {
+            toast('新增 ' + state.inviteFlash.added + ' 位好友完成 ' + C.INVITE.needCleared + ' 关');
+          } else if (state.inviteFlash.tiers.length) {
+            toast('邀请奖励到账 ' + state.inviteFlash.tiers.length + ' 档');
+          }
+          state.overlay = 'invite';
+          break;
         /* v0.16：主页「任务」入口下线（用户要求，不再有每日任务） */
         case 'entry_rank': openRank(null); break;
         /* v0.8：结算页分享成品 / 查看榜单 / 切页签 */
@@ -2377,9 +2659,13 @@
         case 'skin_warm': applySkin('warm'); break;
         case 'skin_mint': applySkin('mint'); break;
         case 'skin_night': applySkin('night'); break;
-        case 'skin_sunset': applySkin('sunset'); break;
-        case 'skin_ocean': applySkin('ocean'); break;
-        case 'invite_share': adStart('invite'); break;
+        /* v0.38：落日 / 海岸下线，换成一键夜间护眼深色配色 */
+        case 'skin_dusk': applySkin('dusk'); break;
+        /* v0.39：皮肤购买确认页 */
+        case 'buy_confirm': buySkinItem(); break;
+        case 'buy_cancel': state.buyItem = null; state.overlay = 'skin'; break;
+        /* v0.41：分享是「发邀请」，不是看视频 —— 直接发，不再走广告流程 */
+        case 'invite_share': doInviteShare(); break;
         case 'close_sheet':
         case 'close_energy':
         case 'close_hint':
@@ -2388,10 +2674,18 @@
           break;
         case 'lvl': break;
         default:
+          /* v0.42：邀请阶梯的「领取」按钮（正常流程打开面板就自动发了，
+           * 这里只兜底：宿主把人数判定推上来时，玩家可以手动点一下） */
+          if (id.indexOf('invite_claim') === 0) {
+            var rCl = inviteVerify();
+            if (rCl.tiers.length) toast('邀请奖励到账 ' + rCl.tiers.length + ' 档');
+            break;
+          }
           /* v0.27：皮肤面板页签 + 三类风格项（前缀统一分发） */
           if (id.indexOf('skin_tab_') === 0) { state.skinTab = +id.slice(9) || 0; break; }
-          if (id.indexOf('bgfx_') === 0) { applyBgFx(id.slice(5)); break; }
-          if (id.indexOf('pstyle_') === 0) { applyPieceStyle(id.slice(7)); break; }
+          /* v0.39：付费项先查解锁状态 —— 已锁的进确认页，没锁的直接应用 */
+          if (id.indexOf('bgfx_') === 0) { pickSkinItem('bgfx', id.slice(5)); break; }
+          if (id.indexOf('pstyle_') === 0) { pickSkinItem('pstyle', id.slice(7)); break; }
           if (id.indexOf('sfx_') === 0) { applySfxStyle(id.slice(4)); break; }
           /* v0.15：在线奖励 6 档统一走前缀，别在 switch 里铺 6 个 case */
           if (id.indexOf('online_o') === 0) { onlineClaim(id.slice(7)); break; }
@@ -2473,6 +2767,14 @@
       var h = hitTest(x, y);
       if (h && h.id) { state.press = h.id; }
       else if (state.overlay === 'settings') { /* 点遮罩不关闭，避免误触 */ }
+      /* v0.42：按在邀请列表视口里 → 起一个拖动会话。按在行内按钮上也起，
+       * 但移动超过阈值就会 turn 成滑动（见 onMove），不会既滑又点。 */
+      if (state.overlay === 'invite') {
+        var L0 = state.inviteList;
+        if (L0 && x >= L0.x && x <= L0.x + L0.w && y >= L0.y && y <= L0.y + L0.h) {
+          state.scrollDrag = { y0: y, s0: state.inviteScroll || 0, moved: false };
+        }
+      }
     }
     function handlePageDown(x, y) {
       var h = hitTest(x, y);
@@ -2975,24 +3277,27 @@
          * 那里不能变 —— 它们是"导航"，不是"操作玩具"）。 */
         if (b.tone) {
           var tn = b.tone;
+          /* v0.38：夜间护眼 —— 奶油糖果底色在深色页面里是全屏最亮的一块，
+           * 护眼模式下换成同色系的深色糖（图标仍保留亮色 accent，语义不变）。 */
+          var dkT = !!state.darkSkin;
           var cx0 = b.x - b.w / 2, cy0 = b.y - b.h / 2 + dy;
           ctx.save();
-          if (!dis) shadow(0, 7, 'rgba(122,98,66,0.16)');
+          if (!dis) shadow(0, 7, dkT ? 'rgba(0,0,0,0.34)' : 'rgba(122,98,66,0.16)');
           var tg = ctx.createLinearGradient(0, cy0, 0, cy0 + b.h);
-          tg.addColorStop(0, dis ? '#F8FAFD' : tn.bg1);
-          tg.addColorStop(1, dis ? '#EEF2F7' : tn.bg2);
+          tg.addColorStop(0, dis ? (dkT ? '#2A313D' : '#F8FAFD') : tn.bg1);
+          tg.addColorStop(1, dis ? (dkT ? '#232A35' : '#EEF2F7') : tn.bg2);
           rr(cx0, cy0, b.w, b.h, 30);
           ctx.fillStyle = tg; ctx.fill();
           noShadow();
           ctx.save(); rr(cx0, cy0, b.w, b.h, 30); ctx.clip();
           /* 底部厚边：糖果的"厚度"，也是按下的视觉锚 */
-          ctx.fillStyle = dis ? '#E4EAF1' : tn.edge;
+          ctx.fillStyle = dis ? (dkT ? '#1C222C' : '#E4EAF1') : tn.edge;
           ctx.fillRect(cx0, cy0 + b.h - 6, b.w, 9);
           /* 左上柔光 */
           if (ctx.ellipse) {
             ctx.beginPath();
             ctx.ellipse(b.x - b.w * 0.06, cy0 + 15, b.w * 0.30, 9, 0, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fill();
+            ctx.fillStyle = dkT ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.6)'; ctx.fill();
           }
           ctx.restore();
           drawIcon(b.icon, b.x, b.y + dy - 3,
@@ -3334,8 +3639,10 @@
         var py = DH() * s[1] + Math.cos(t * (0.33 + i * 0.08) + s[3]) * 104;
         var r = C.DESIGN.w * s[2] * (1 + 0.07 * Math.sin(t * 0.55 + i));
         var gr = ctx.createRadialGradient(px, py, r * 0.10, px, py, r);
-        gr.addColorStop(0, 'rgba(255,244,214,0.34)');
-        gr.addColorStop(0.55, 'rgba(255,232,190,0.12)');
+        /* v0.38：夜间护眼是深底，原亮度会把屏幕照出一块暖白，护眼失去意义 —— 整体减半 */
+        var ga = state.darkSkin ? 0.5 : 1;
+        gr.addColorStop(0, 'rgba(255,244,214,' + (0.34 * ga).toFixed(3) + ')');
+        gr.addColorStop(0.55, 'rgba(255,232,190,' + (0.12 * ga).toFixed(3) + ')');
         gr.addColorStop(1, 'rgba(255,232,190,0)');
         ctx.fillStyle = gr;
         ctx.fillRect(0, 0, C.DESIGN.w, DH());
@@ -3353,7 +3660,8 @@
       ctx.rotate(-0.16);
       var lg = ctx.createLinearGradient(-260, 0, 260, 0);
       lg.addColorStop(0, 'rgba(255,255,255,0)');
-      lg.addColorStop(0.5, 'rgba(255,255,255,0.12)');
+      /* v0.38：夜间护眼深底上白光带会显眼，压到 0.05 只留一丝流动感 */
+      lg.addColorStop(0.5, 'rgba(255,255,255,' + (state.darkSkin ? '0.05' : '0.12') + ')');
       lg.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.fillStyle = lg;
       ctx.fillRect(-260, -C.DESIGN.h, 520, C.DESIGN.h * 3);
@@ -3652,7 +3960,10 @@
        * reduceMotion 全停，与鲜花动效同一开关；drawBg(false)（关卡页）不加光效。 */
       var fx = withArt && !state.reduceMotion;
       var t = state.time / 1000;
-      var img = withArt && env.images && env.images.home_bg_desk;
+      /* v0.38：夜间护眼（深色皮肤）**不再铺米色桌面底图** —— 一张浅色照片靠色罩压暗
+       * 只会得到灰蒙蒙的脏色，护眼也做不到。深色皮肤直接走渐变分支，用皮肤自己的
+       * bgTop/bg/bgDeep 三层铺夜景，纹理交给背景特效粒子层。 */
+      var img = withArt && !state.darkSkin && env.images && env.images.home_bg_desk;
       var bgh = DH();        // v0.31：底图/渐变铺到真实可用高度，细长屏不留边
       if (img) {
         var sc = Math.max(C.DESIGN.w / (img.width || 1), bgh / (img.height || 1)) * (fx ? 1.06 : 1);
@@ -3669,10 +3980,11 @@
         g.addColorStop(1, COL.bgDeep);
         ctx.fillStyle = g;
         ctx.fillRect(0, 0, C.DESIGN.w, bgh);
-        // 左上柔光
+        // 左上柔光（v0.38：夜间护眼是深底，0.85 白会糊出一大块亮斑，压到 0.10）
         var rg = ctx.createRadialGradient(180, 180, 20, 180, 180, 620);
-        rg.addColorStop(0, 'rgba(255,255,255,0.85)');
-        rg.addColorStop(0.55, 'rgba(255,255,255,0.22)');
+        var la = state.darkSkin ? 0.10 : 0.85;
+        rg.addColorStop(0, 'rgba(255,255,255,' + la + ')');
+        rg.addColorStop(0.55, 'rgba(255,255,255,' + (la * 0.26).toFixed(3) + ')');
         rg.addColorStop(1, 'rgba(255,255,255,0)');
         ctx.fillStyle = rg;
         ctx.fillRect(0, 0, C.DESIGN.w, bgh);
@@ -3691,9 +4003,12 @@
       var HL = C.LAYOUT.HOME;
       var bottom = Math.max(140, (view.safeBottom || 0) + 40);
       var starY = DH() - bottom;
-      var set7Y = starY - 86;
-      var set4Y = set7Y - 126;
-      var startY = set4Y - 138;
+      /* v0.38：用户要求「把开始游戏的按钮放到关卡下面去」——
+       * 竖向顺序由 继续 → 四巧板 → 七巧板 改成 四巧板 → 七巧板 → 开始 → 星数。
+       * 间距：七巧板→开始 126（按钮半高 54 + 净空）、四巧板→七巧板 118（卡片高 100 + 净空）。 */
+      var startY = starY - 86;
+      var set7Y = startY - (HL.startGap || 126);
+      var set4Y = set7Y - (HL.setGap || 118);
       return { starY: starY, set7Y: set7Y, set4Y: set4Y, startY: startY,
         shift: Math.max(0, startY - HL.startY) };
     }
@@ -3820,7 +4135,8 @@
         ctx.save();
         shadow(10, 4, 'rgba(44,58,75,0.22)');
         rr(px, rowY - ph / 2, pw, ph, ph / 2);
-        ctx.fillStyle = HU.pillFill;
+        /* v0.38：夜间护眼（深底）下用半透明白底，深底深胶囊会糊在一起 */
+        ctx.fillStyle = (state.darkSkin && HU.pillFillDark) ? HU.pillFillDark : HU.pillFill;
         ctx.fill();
         noShadow();
         ctx.lineWidth = HU.border;
@@ -3879,8 +4195,8 @@
       var lx = H.entryX, rx = C.DESIGN.w - H.entryX, e0 = H.entryY0, eg = H.entryGap;
       /* v0.28：用户要求去掉「添加桌面」入口，左列整体上移一格填补空位。 */
       homeEntry('entry_skin', 'skin', '皮肤', lx, e0);
-      homeEntry('entry_invite', 'invite', '邀请有礼', lx, e0 + eg,
-        state.save.inviteDay !== todayKey());
+      /* v0.41：红点表示「有好友已完成 4 关、还没去看」—— 不再是「今天没邀请过」 */
+      homeEntry('entry_invite', 'invite', '邀请有礼', lx, e0 + eg, inviteHasNews());
       /* v0.16：左列第 4 格「任务」已下线（用户要求）。 */
 
       /* 在线奖励：图标 + 上方气泡。
@@ -3961,45 +4277,62 @@
         }
         ctx.restore();
       }
-      function setEntryLabel(label, x, y, sel) {
+      function setEntryLabel(label, x, y, sel, size) {
+        var dark = state.darkSkin || state.darkFx;
         ctx.save();
-        ctx.font = '700 42px ' + (V.titleFontFamily || '"STCaiyun","华文彩云",serif');
+        ctx.font = '700 ' + (size || 38) + 'px ' + (V.titleFontFamily || '"STCaiyun","华文彩云",serif');
         ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
         ctx.lineWidth = 3; ctx.lineJoin = 'round';
-        ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.strokeText(label, x, y);
-        ctx.fillStyle = sel ? '#7A4A00' : '#3E4C60'; ctx.fillText(label, x, y);
+        ctx.strokeStyle = dark ? 'rgba(18,24,34,0.55)' : 'rgba(255,255,255,0.9)';
+        ctx.strokeText(label, x, y);
+        /* 夜间护眼是深卡片：选中用暖金、未选中用浅墨，否则深底深字看不见 */
+        ctx.fillStyle = dark ? (sel ? '#F3C87E' : '#DCE6F5') : (sel ? '#7A4A00' : '#3E4C60');
+        ctx.fillText(label, x, y);
         ctx.restore();
       }
       function setEntry(id, key, kind, yy) {
         var sel = state.setKey === key;
-        var w = 440, h = 112, x = C.DESIGN.w / 2;
+        var dark = state.darkSkin || state.darkFx;
+        /* v0.38：用户要求「关卡的按钮缩小一点点」，440×112 → 408×100（尺寸在 config 里） */
+        var w = H.setW || 408, h = H.setH || 100, x = C.DESIGN.w / 2;
         addHit(x, yy, w, h, id);
         ctx.save();
         /* 底部投影 + 选中态外发光 */
-        ctx.shadowColor = sel ? hexA(COL.gold || '#FFB93D', 0.5) : 'rgba(40,50,80,0.20)';
+        ctx.shadowColor = sel ? hexA(COL.gold || '#FFB93D', dark ? 0.34 : 0.5) : (dark ? 'rgba(0,0,0,0.34)' : 'rgba(40,50,80,0.20)');
         ctx.shadowBlur = sel ? 26 : 14; ctx.shadowOffsetY = 5;
         var g = ctx.createLinearGradient(x - w / 2, yy - h / 2, x + w / 2, yy + h / 2);
-        if (sel) { g.addColorStop(0, '#FFFDF6'); g.addColorStop(1, '#FFE9C4'); }
+        if (dark) {
+          if (sel) { g.addColorStop(0, '#4A4334'); g.addColorStop(1, '#3A3427'); }
+          else { g.addColorStop(0, '#323B4A'); g.addColorStop(1, '#28303D'); }
+        } else if (sel) { g.addColorStop(0, '#FFFDF6'); g.addColorStop(1, '#FFE9C4'); }
         else { g.addColorStop(0, '#FFFFFF'); g.addColorStop(1, '#EDF1FA'); }
-        rr(x - w / 2, yy - h / 2, w, h, 26); ctx.fillStyle = g; ctx.fill();
+        rr(x - w / 2, yy - h / 2, w, h, 24); ctx.fillStyle = g; ctx.fill();
         ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
-        /* 顶部高光条：玻璃质感 */
-        ctx.save(); rr(x - w / 2 + 3, yy - h / 2 + 3, w - 6, h - 6, 23); ctx.clip();
+        /* 顶部高光条：玻璃质感（深色皮肤上压到很淡，避免整块发白） */
+        ctx.save(); rr(x - w / 2 + 3, yy - h / 2 + 3, w - 6, h - 6, 21); ctx.clip();
         var hl = ctx.createLinearGradient(0, yy - h / 2, 0, yy + h / 2);
-        hl.addColorStop(0, 'rgba(255,255,255,0.85)'); hl.addColorStop(0.45, 'rgba(255,255,255,0.05)');
-        hl.addColorStop(1, 'rgba(0,0,0,0.04)');
+        if (dark) {
+          hl.addColorStop(0, 'rgba(255,255,255,0.10)'); hl.addColorStop(0.45, 'rgba(255,255,255,0.02)');
+          hl.addColorStop(1, 'rgba(0,0,0,0.10)');
+        } else {
+          hl.addColorStop(0, 'rgba(255,255,255,0.85)'); hl.addColorStop(0.45, 'rgba(255,255,255,0.05)');
+          hl.addColorStop(1, 'rgba(0,0,0,0.04)');
+        }
         ctx.fillStyle = hl; ctx.fillRect(x - w / 2, yy - h / 2, w, h);
         ctx.restore();
-        /* 描边：选中金色，未选中浅蓝灰 */
-        rr(x - w / 2, yy - h / 2, w, h, 26);
+        /* 描边：选中金色，未选中浅蓝灰（深色皮肤改半透明浅线） */
+        rr(x - w / 2, yy - h / 2, w, h, 24);
         ctx.lineWidth = sel ? 4 : 2;
-        ctx.strokeStyle = sel ? (COL.goldEdge || '#E5962D') : 'rgba(150,168,205,0.55)'; ctx.stroke();
+        ctx.strokeStyle = sel ? (COL.goldEdge || '#E5962D')
+          : (dark ? 'rgba(160,178,205,0.42)' : 'rgba(150,168,205,0.55)');
+        ctx.stroke();
         ctx.restore();
-        setBadge(kind, x - 146, yy, 64);
-        setEntryLabel(kind === 't4' ? '四巧板' : '七巧板', x - 80, yy + 1, sel);
+        /* 徽章 + 华文彩云汉字：卡片缩小后整体左收、字号降一档，右侧给勾选灯留位 */
+        setBadge(kind, x - 134, yy, 58);
+        setEntryLabel(kind === 't4' ? '四巧板' : '七巧板', x - 76, yy + 1, sel, 38);
         if (sel) {
           /* 右侧「进行中」小灯，纯图形不写字 */
-          var px = x + w / 2 - 56;
+          var px = x + w / 2 - 52;
           ctx.save();
           ctx.beginPath(); ctx.arc(px, yy, 13, 0, Math.PI * 2);
           ctx.fillStyle = hexA(COL.gold || '#FFB93D', 0.22); ctx.fill();
@@ -4152,6 +4485,17 @@
           for (var s = 0; s < 3; s++) {
             drawStar(cx - 40 + s * 40, cellY + 48, 17, s < stars);
           }
+          /* v0.40：已通关但还没满 3 星 → 关号右边标出「升下一星还能补多少」。
+           * 不标出来，玩家根本不知道重玩老关有进账 —— 那这次改动就白做了。
+           * 标签压在整卡热区里，点它和点卡片同效，不需要单独 addHit。 */
+          if (stars > 0 && stars < 3) {
+            var SRt = C.ECON.starReward;
+            var sp = state.save.starPaid || {};
+            var paidN = (typeof sp[String(idx + 1)] === 'number')
+              ? sp[String(idx + 1)] : (SRt[stars - 1] || 0);
+            var rest = Math.max(0, (SRt[stars] || 0) - paidN);
+            if (rest > 0) drawStarGainTag(cx + 46, cellY + 82, rest);
+          }
         }
         // 小字关号保留在星星行下方：报关号/对答案仍方便，且不与图案、星星重叠
         text(String(idx + 1), cx, cellY + 82, 18, COL.textSub, 'center', '600');
@@ -4166,6 +4510,33 @@
      * 放在**左侧**：真机右上角是微信原生胶囊按钮（系统层盖在画布之上），
      * 画在右边会被压掉一半，而网页预览里完全看不出来。
      * 几何全取自 config.LAYOUT.HUD_MIN，验收脚本读同一组数，避免两边抄魔数。 */
+    /* v0.40：关卡卡片的「升星还能补多少」小标签（金色胶囊 + ↑N）
+     * 尺寸按文字宽度自适应，最长是「↑21」这种 3 字符，胶囊最宽 ~44 < 卡片右边距。 */
+    function drawStarGainTag(x, y, n) {
+      var t = '↑' + n, h = 20;
+      ctx.font = font(15, '700');
+      var w = Math.max(32, ctx.measureText(t).width + 14);
+      ctx.save();
+      rr(x - w / 2, y - h / 2, w, h, h / 2);
+      ctx.fillStyle = 'rgba(233,177,106,0.18)';
+      ctx.fill();
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = 'rgba(233,177,106,0.55)';
+      ctx.stroke();
+      ctx.restore();
+      /* 深色皮肤下 goldDeep 压不住深灰卡片，改用亮金（浅色仍用深金，白底才看得清） */
+      text(t, x, y + 1, 15, state.darkSkin ? COL.gold : COL.goldDeep, 'center', '700');
+    }
+
+    /* v0.40：结算页「升到 ★★」用的星符串。
+     * 不用 String.prototype.repeat —— 小游戏基础库版本参差，手拼最稳。 */
+    function starTag(r) {
+      var n = Math.max(1, Math.min(3, (r && (r.bestStars || r.stars)) || 1));
+      var t = '';
+      for (var i = 0; i < n; i++) t += '★';
+      return t;
+    }
+
     /* 位数兜底：巧币真攒到一万以上时，`10000` 这种 5 位数即使用 18px 也塞不进
      * 127 宽的胶囊（会顶到倒计时胶囊上）。折算成「1.2万 / 10亿」后最宽 4 个字符，
      * 宽度问题从根上消失，也不比一串数字更难读。 */
@@ -4212,7 +4583,8 @@
         ctx.save();
         shadow(8, 3, 'rgba(44,58,75,0.20)');
         rr(x, rowY - ph / 2, wEach, ph, ph / 2);
-        ctx.fillStyle = M.pillFill;
+        /* v0.38：与主页 HUD 一致 —— 夜间护眼深底改用半透明白胶囊 */
+        ctx.fillStyle = (state.darkSkin && M.pillFillDark) ? M.pillFillDark : M.pillFill;
         ctx.fill();
         noShadow();
         ctx.lineWidth = M.border;
@@ -4421,10 +4793,11 @@
       var groupW = iconW + tw;
       var gx = C.DESIGN.w / 2 - groupW / 2;
       var gy = B.y + T.textY;
-      /* 背部一层极淡白底，避免虚影透上来压低文字对比度 */
+      /* 背部一层极淡底，避免虚影透上来压低文字对比度。
+       * v0.38：夜间护眼的纸面是深色，白底会把浅墨字吞掉 → 改深底。 */
       ctx.save();
       rr(gx - 16, gy - 26, groupW + 32, 52, 26);
-      ctx.fillStyle = 'rgba(255,255,255,0.82)';
+      ctx.fillStyle = state.darkSkin ? 'rgba(12,18,28,0.72)' : 'rgba(255,255,255,0.82)';
       ctx.fill();
       ctx.restore();
       var bob = Math.sin(state.time / 260) * 3;
@@ -4466,6 +4839,8 @@
       var bb = { id: 'back_levels', x: 70, y: 1130, w: 76, h: 76, variant: 'tool', icon: 'back',
         tone: { bg1: '#FFF3E6', bg2: '#FFE2C7', edge: '#FFC79E', ink: '#E07B3A' },
         iconScale: 0.92 };
+      /* v0.38：夜间护眼下返回键也换深色糖，避免一颗奶白按钮在深色页里发亮 */
+      if (state.darkSkin) bb.tone = { bg1: '#3A3229', bg2: '#2F2921', edge: '#241F19', ink: '#F0A76A' };
       addHit(bb.x, bb.y, bb.w, bb.h, 'back_levels');
       drawButton(bb);
       /* v0.17：关号从顶栏让位到卡纸内左上角（见下方「关卡标题」）。
@@ -4526,13 +4901,28 @@
       ctx.restore();
       // 纸纹（极淡）
       var paper = env.images && env.images.board_paper;
-      if (paper) {
+      if (paper && state.darkSkin) {
+        /* v0.38：夜间护眼不铺浅色纸质图（一张白纸在深色页面里最刺眼），
+         * 改用皮肤自己的深色纸面 + 一丝浅色纹路，卡纸上的字改走浅墨（inkOnCard）。 */
+        ctx.save(); rr(B.x, B.y, B.size, BH, 28); ctx.clip();
+        ctx.fillStyle = COL.board; ctx.fillRect(B.x, B.y, B.size, BH);
+        ctx.strokeStyle = 'rgba(255,255,255,0.035)'; ctx.lineWidth = 1;
+        var dRows = Math.round(BH / 27);
+        for (var di = 0; di < dRows; di++) {
+          var dyy = B.y + 20 + di * 27;
+          ctx.beginPath(); ctx.moveTo(B.x, dyy); ctx.lineTo(B.x + B.size, dyy + 6); ctx.stroke();
+        }
+        ctx.restore();
+      } else if (paper) {
         ctx.save(); rr(B.x, B.y, B.size, BH, 28); ctx.clip();
         ctx.drawImage(paper, B.x, B.y, B.size, BH);
         ctx.restore();
       } else {
         ctx.save(); rr(B.x, B.y, B.size, BH, 28); ctx.clip();
-        ctx.strokeStyle = 'rgba(44,58,75,0.022)'; ctx.lineWidth = 1;
+        /* v0.38：深色皮肤无纸质图时也铺深色纸面，纹路改成极淡白色 */
+        var dkPaper = !!state.darkSkin;
+        if (dkPaper) { ctx.fillStyle = COL.board; ctx.fillRect(B.x, B.y, B.size, BH); }
+        ctx.strokeStyle = dkPaper ? 'rgba(255,255,255,0.035)' : 'rgba(44,58,75,0.022)'; ctx.lineWidth = 1;
         var rows = Math.round(BH / 27);
         for (var i = 0; i < rows; i++) {
           var yy = B.y + 20 + i * 27;
@@ -4695,6 +5085,14 @@
         hint:    { bg1: '#FFF9E4', bg2: '#FFEDBC', edge: '#FFDA8C', ink: '#F2A73B' },
         restart: { bg1: '#FFF1EE', bg2: '#FFE0DA', edge: '#FFC7BD', ink: '#EF6F5D' }
       };
+      /* v0.38 夜间护眼：同色系的深色糖，图标 accent 提亮保持可辨（奶白底在深色页里最刺眼） */
+      var TOOL_TONE_DARK = {
+        rot_ccw: { bg1: '#2B3949', bg2: '#233040', edge: '#1B2532', ink: '#6FC0F0' },
+        rot_cw:  { bg1: '#26382F', bg2: '#1F2E27', edge: '#172420', ink: '#5FD3A6' },
+        flip:    { bg1: '#302B40', bg2: '#272238', edge: '#1E1A2C', ink: '#A98BF0' },
+        hint:    { bg1: '#3A3222', bg2: '#2F291C', edge: '#241F14', ink: '#FFC96B' },
+        restart: { bg1: '#3B2B28', bg2: '#302320', edge: '#251A18', ink: '#FF8A78' }
+      };
       var sel = pieceOf(state.selId);
       var tools = [
         { id: 'rot_ccw', icon: 'rotL', disabled: !sel },
@@ -4715,7 +5113,7 @@
           id: tools[i2].id, x: TOOL_X[i2], y: TOOL_Y,
           w: LAY.TOOLBAR.w, h: LAY.TOOLBAR.h,
           variant: 'tool', icon: tools[i2].icon, disabled: tools[i2].disabled,
-          tone: TOOL_TONE[tools[i2].id],
+          tone: (state.darkSkin ? TOOL_TONE_DARK : TOOL_TONE)[tools[i2].id],
           badge: tools[i2].badge        // v0.10：剩余档位角标（之前漏传，角标根本没画出来）
         };
         addHit(tb.x, tb.y, tb.w, tb.h, tb.id);
@@ -4872,7 +5270,15 @@
 
     /* v0.28：深色背景特效下，卡纸仍保持浅色纸纹（保证板件辨识度），
      * 所以「画在浅色卡纸上的文字」必须固定用深色墨，不能跟随暗色板的浅字色。 */
-    function inkOnCard(sub) { return sub ? '#5A687C' : '#2C3A4B'; }
+    /* 卡纸上的墨色（教学提示 / 跳过 / 关号抬头都走这里）。
+     * v0.28 固定深墨是为了修「深色特效下浅卡纸出现白字白底」—— 那时纸面仍是
+     *   board_paper 浅色图，所以深色特效也算「浅卡纸」。
+     * v0.38 夜间护眼不再铺浅色纸质图、改用深色纸面，深墨会反过来糊住，
+     *   因此只有**深色皮肤**才切浅墨；深色特效（stars/nebula）纸面依旧浅，保持深墨。 */
+    function inkOnCard(sub) {
+      if (state.darkSkin) return sub ? (COL.textSub || '#B9C6E6') : (COL.text || '#E4EBF8');
+      return sub ? '#5A687C' : '#2C3A4B';
+    }
 
     /* 颜色明暗调整：pct>0 提亮、pct<0 压暗（板件霓虹样式用） */
     function shadeHex(hex, pct) {
@@ -5444,33 +5850,42 @@
       text(String(state.result ? state.result.steps : 0),
         C.DESIGN.w / 2 + 120, W.statValueY + dy, 30, COL.text, 'center', '600');
 
-      /* ---- v0.23：奖励条（首通才发巧币，可当场看视频 ×5） ----
+      /* ---- v0.23：奖励条（首通 / 升星补差都发巧币，可当场看视频 ×5） ----
        * 放在数据行与主按钮之间，是一条"横向说明条"而不是第四个主按钮：
        * 左侧写这一局到底给了什么，右侧才是 ×5 入口，避免整条误触播广告。 */
       var rw = W.rewardW, rh = W.rewardH, ry = W.rewardY + dy;
       var res = state.result || { first: false, gain: 0, adUsed: false };
       var mul = C.ECON.coinWinAdMul || 5;
       var adLeft = adLvLeft();       // v0.35：本关还剩几次看视频（提示/复活/×5 共用）
+      /* v0.40：条底色的判据从 first 改成「这一局到底有没有进账」——
+       * 升星补差同样是真的拿到钱，用灰条会让人以为白打了一局。 */
+      var hasGain = (res.gain || 0) > 0;
       ctx.save();
       rr(C.DESIGN.w / 2 - rw / 2, ry - rh / 2, rw, rh, rh / 2);
-      ctx.fillStyle = res.first ? 'rgba(255,185,61,0.14)' : 'rgba(120,130,146,0.10)';
+      ctx.fillStyle = hasGain ? 'rgba(255,185,61,0.14)' : 'rgba(120,130,146,0.10)';
       ctx.fill();
       ctx.lineWidth = 1.5;
-      ctx.strokeStyle = res.first ? 'rgba(255,159,28,0.55)' : 'rgba(120,130,146,0.20)';
+      ctx.strokeStyle = hasGain ? 'rgba(255,159,28,0.55)' : 'rgba(120,130,146,0.20)';
       ctx.stroke();
       ctx.restore();
 
-      /* v0.24：×5 入口挪到下面一排之后，这条就只剩"这一局给了什么"一句话，
-       * 整条居中；文案也顺势写清楚（首通 / 已翻倍 / 重复无奖励三种）。 */
+      /* v0.24：这条只剩"这一局给了什么"一句话，整条居中；
+       * v0.40 文案分四种：首通 / 升星（各含未翻倍 / 已翻倍）、已通关无提升。
+       * v0.43：去掉「补差 +N」的说法与「本关视频 x/3」——
+       *   · 玩家只关心这一局进账多少，不需要看到"补差"这种内部记账口径；
+       *   · 视频额度由下面 ×5 按钮自己表达（用完显示「本关已看完」），
+       *     奖励条再写一遍既挤又重复。 */
       var gainTxt, gainCol;
-      if (!res.first) {
-        gainTxt = '已通过 · 重复挑战无奖励';
+      if (!hasGain) {
+        gainTxt = '已通过 · 星级未提升，无奖励';
         gainCol = COL.textSub;
       } else if (res.adUsed) {
-        gainTxt = '首通奖励 +' + (res.gain * mul) + ' 巧币 · 已翻 ' + mul + ' 倍';
+        gainTxt = (res.first ? '首通奖励 +' : ('升到 ' + starTag(res) + ' · +'))
+          + (res.gain * mul) + ' 巧币 · 已翻 ' + mul + ' 倍';
         gainCol = COL.goldDeep;
       } else {
-        gainTxt = '首通奖励 +' + res.gain + ' 巧币 · 本关视频 ' + adLeft + '/' + adLvLimit();
+        gainTxt = (res.first ? '首通奖励 +' : ('升到 ' + starTag(res) + ' · +'))
+          + res.gain + ' 巧币';
         gainCol = COL.text;
       }
       text(gainTxt, C.DESIGN.w / 2, ry + 1, 23, gainCol, 'center', '600');
@@ -5481,7 +5896,8 @@
        * 有 ×5 可领时两枚并排（排宽 552 居中），否则主按钮单独 360 居中。 */
       /* v0.35：本关看视频额度用完时，×5 按钮**留在原位但置灰**——
        * 直接消失会让「下一关」突然占满整排，玩家以为是界面错乱。 */
-      var showMul = res.first && res.gain > 0 && !res.adUsed;
+      /* v0.40：有进账（首通或升星补差）就给 ×5 入口，判定同上 */
+      var showMul = hasGain && !res.adUsed;
       var canAd = showMul && adLeft > 0;
       /* v0.34：两枚主按钮同宽同高（W.primaryW === W.adMulW、共用 W.primaryH），
        * 单独一枚时也不再放大到 360，避免「有广告时小、没广告时大」来回跳。 */
@@ -6043,11 +6459,14 @@
         ctx.restore();
 
         text('在线 ' + t.label, 86, y - 18, 27, COL.text, 'left', '600');
+        /* v0.39：奖励行按用户要求去掉「体力 / 巧币 / 查找道具」这些汉字，
+         * 换成游戏内对应的图标 + 数字 —— 图标在 HUD 和工具栏里已经出现过，
+         * 玩家一眼认得出；顺带省下宽度，三档奖励也不会挤到「领取」按钮上。 */
         var rw = [];
-        if (t.energy) rw.push('体力 +' + t.energy);
-        if (t.coin) rw.push('巧币 +' + t.coin);
-        if (t.hint) rw.push(C.HINT.itemName + ' +' + t.hint);
-        text(rw.join('   '), 86, y + 22, 21, t.got ? COL.textSub : COL.goldDeep, 'left');
+        if (t.energy) rw.push({ icon: 'energy', n: t.energy });
+        if (t.coin) rw.push({ icon: 'coin', n: t.coin });
+        if (t.hint) rw.push({ icon: 'hint', n: t.hint });
+        drawRewardRow(rw, 86, y + 22, !!t.got);
 
         var label = t.got ? '已领取' : (t.ready ? '领取' : ('差 ' + onlineClock(t.left)));
         var b = {
@@ -6060,27 +6479,277 @@
         drawButton(b);
       }
 
-      text(C.HINT.itemName + ' ×' + (state.save.hintItems || 0) + ' · 关卡「提示」面板可直接使用',
-        C.DESIGN.w / 2, top + 1030, 21, COL.textSub, 'center');
+      var ht = '×' + (state.save.hintItems || 0) + ' · 关卡「提示」面板可直接使用';
+      ctx.font = font(21);
+      var hw = ctx.measureText ? ctx.measureText(ht).width : 300;
+      var hx0 = C.DESIGN.w / 2 - (hw + 30) / 2;
+      drawIcon('hint', hx0 + 13, top + 1030, COL.textSub, 0.62);
+      text(ht, hx0 + 30, top + 1030, 21, COL.textSub, 'left');
       sheetClose(top + 1112, 'close_sheet');
       adLayer();
     }
 
-    /* 邀请有礼 */
+    /* v0.39：一行「图标 + 数字」的奖励标签（在线奖励逐档用）。
+     * 图标自带彩色徽章底（体力蓝珠 / 金币 / 灯泡），所以 color 参数只在
+     * 少数线条图标上起作用，这里传金色让线条与数字同色。 */
+    function drawRewardRow(items, x, y, dim) {
+      var cx = x;
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        drawIcon(it.icon, cx + 13, y, COL.goldDeep, 0.78);
+        var txt = '+' + it.n;
+        ctx.font = font(22, '600');
+        var tw = ctx.measureText ? ctx.measureText(txt).width : 26;
+        text(txt, cx + 30, y + 1, 22, dim ? COL.textSub : COL.goldDeep, 'left', '600');
+        cx += 30 + tw + 26;
+      }
+    }
+
+    /* ==================== v0.42 邀请有礼 · 图标化 + 进度条 + 可滑动 ====================
+     * 用户反馈（附对标图）：
+     *   ① 奖励写成「30 巧币 + 1 查找道具」这种文字，扫一眼根本不知道给什么 → 全换图标 + ×数量；
+     *   ② 每行中间要一条进度条，直接看到「已邀请 2 / 需要 3」的进度；
+     *   ③ 8 档一屏放不下时要能上下滑动，而不是把卡片撑到看不见底。
+     *
+     * 每档一行（行高 118 = 金色行标 32 + 内容 86，行距 12）：
+     *   ┌ 累计邀请 N 人进入游戏 ─────────────────┐
+     *   │ [图标×N][图标×N]    ▓▓▓▓░░ 2/3   [邀请] │
+     *   └────────────────────────────────────────┘
+     * 8 档共 1028px，视口约 868px → 一定超出，所以滑动是主交互，不是兜底。 */
+    var INV_ROW_H = 118, INV_HEAD_H = 32, INV_PITCH = 130;
+
+    /* 一档奖励 → 图标序列（顺序固定：巧币 → 体力 → 查找道具 → 板件 → 背景） */
+    function tierRewards(t) {
+      var out = [];
+      if (t.coin) out.push({ kind: 'coin', n: t.coin });
+      if (t.energy) out.push({ kind: 'energy', n: t.energy });
+      if (t.hint) out.push({ kind: 'hint', n: t.hint });
+      if (t.pstyle) out.push({ kind: 'pstyle', key: t.pstyle, n: 1 });
+      if (t.bgfx) out.push({ kind: 'bgfx', key: t.bgfx, n: 1 });
+      return out;
+    }
+    /* 板件图标的预览色：与皮肤面板同一套固定色板，霓虹 / 水晶才一眼可辨 */
+    var PS_ICON_COL = {
+      classic: '#4FA8E0', candy: '#F5A623', wood: '#C08850', neon: '#8A6BF0',
+      pastel: '#F5A0B8', crystal: '#3E9BD6', metal: '#98A6B4', jade: '#3FAF7C', glow: '#57D48C'
+    };
+    /* 单个奖励图标：巧币 / 体力 / 查找道具直接用游戏里那套徽章图标；
+     * 板件 / 背景没有现成图标，这里画「能认出是什么」的小样 ——
+     * 板件 = 该质感的小三角；背景 = 该特效的底色 + 招牌粒子。
+     * （把皮肤面板 120px 的预览缩到 42px 会糊成一团，所以这里单独画。） */
+    function drawRewardIcon(kind, key, x, y, box) {
+      if (kind === 'coin' || kind === 'energy' || kind === 'hint') {
+        drawIcon(kind, x, y, COL.text, box / 44);
+        return;
+      }
+      var r = box / 2;
+      ctx.save();
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = state.darkSkin ? 'rgba(255,255,255,0.10)' : 'rgba(44,58,75,0.05)';
+      ctx.fill();
+      ctx.lineWidth = 1.6; ctx.strokeStyle = hexA(COL.gold, 0.55); ctx.stroke();
+      ctx.clip();
+      if (kind === 'pstyle') {
+        /* 三角占满圆底（0.66 倍时质感基本看不出来） */
+        drawPreviewPiece(x, y + r * 0.06, r * 0.80, PS_ICON_COL[key] || '#4FA8E0', key);
+      } else {
+        drawBgSwatch(key, x, y, r);
+      }
+      ctx.restore();
+    }
+
+    /* 背景特效小样：底色 + 该特效的招牌粒子（泡泡 / 花瓣各画各的，其余用主题色点） */
+    function drawBgSwatch(key, x, y, r) {
+      var fx = C.BG_FX[key] || {}, mode = fx.mode || 'glow', i;
+      var bgCol = fx.dark ? '#1B2547'
+        : (state.darkSkin ? 'rgba(255,255,255,0.12)'      // 深色皮肤：小样也别留一块亮底
+          : (mode === 'aurora' ? '#E8E2F7' : mode === 'snow' ? '#DCEBF5'
+            : mode === 'bubbles' ? '#E4F2FB' : '#FFF6E2'));
+      ctx.fillStyle = bgCol;
+      ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      if (mode === 'bubbles') {
+        var bc = ['#78C4F0', '#F7A8C0', '#F7C873'];
+        for (i = 0; i < 4; i++) {
+          var bx = x - 7 + (i % 2) * 12, by = y - 7 + Math.floor(i / 2) * 13;
+          var br = i % 3 === 0 ? 5 : 3.8;
+          ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2);
+          ctx.fillStyle = hexA(bc[i % 3], 0.30); ctx.fill();
+          ctx.lineWidth = 1.3; ctx.strokeStyle = bc[i % 3]; ctx.stroke();
+        }
+      } else if (mode === 'petals') {
+        var pc = ['#F7A0BE', '#EF7F9E', '#FFC0CE'];
+        for (i = 0; i < 4; i++) {
+          var px2 = x - 6 + (i % 2) * 12, py2 = y - 7 + Math.floor(i / 2) * 13;
+          ctx.save(); ctx.translate(px2, py2); ctx.rotate(-0.6 + i * 0.45);
+          ctx.beginPath(); ctx.ellipse(0, 0, 5, 2.5, 0, 0, Math.PI * 2);
+          ctx.fillStyle = pc[i % 3]; ctx.fill();
+          ctx.restore();
+        }
+      } else {
+        var dots = mode === 'snow' ? '#FFFFFF'
+          : mode === 'rain' ? '#8FC4E8'
+          : mode === 'stars' ? '#FFF4C8'
+          : mode === 'firefly' ? '#F7E27A'
+          : mode === 'nebula' ? '#C9A8F5'
+          : (fx.dark ? '#FFE6A8' : '#F5B93D');
+        for (i = 0; i < 6; i++) {
+          var dx = x - 10 + (i % 3) * 10, dy = y - 8 + Math.floor(i / 3) * 13;
+          ctx.beginPath(); ctx.arc(dx, dy, i % 2 ? 2.2 : 1.5, 0, Math.PI * 2);
+          ctx.fillStyle = dots; ctx.fill();
+        }
+      }
+    }
+
+    /* 列表内热区：只登记真正露在视口里的那一段，
+     * 否则滑到边上时会出现「点空白也触发」的幽灵按钮。 */
+    function addListHit(x, y, w, h, id, L) {
+      var y0 = Math.max(y - h / 2, L.y), y1 = Math.min(y + h / 2, L.y + L.h);
+      if (y1 - y0 < 24) return;
+      hits.push({ x: x - w / 2, y: y0, w: w, h: y1 - y0, id: id, kind: 'btn' });
+    }
+
+    /* 画一档阶梯。返回右侧按钮 id：'邀请' / '领取' / null（已领取，不可点） */
+    function drawInviteRow(t, rx, ry, w, cnt, got) {
+      var done = got.indexOf(t.n) >= 0;
+      var can = cnt >= t.n;
+      /* --- 行底 + 金色行标 --- */
+      ctx.save();
+      rr(rx, ry, w, INV_ROW_H, 16);
+      ctx.fillStyle = done ? hexA(COL.gold, state.darkSkin ? 0.13 : 0.10) : COL.card;
+      ctx.fill();
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = done ? hexA(COL.gold, 0.5) : COL.line;
+      ctx.stroke();
+      ctx.restore();
+      /* 深色皮肤下的行标不能再用「实心亮金 + 深字」—— 8 条金带叠在黑卡上太刺眼，
+       * 改成半透明金 + 亮金文字，护眼模式下也还是一个"金色标签"。 */
+      var dk = !!state.darkSkin;
+      ctx.save();
+      rr(rx + 1, ry + 1, w - 2, INV_HEAD_H, 14);
+      var hg = ctx.createLinearGradient(0, ry, 0, ry + INV_HEAD_H);
+      if (dk) {
+        hg.addColorStop(0, hexA(COL.gold, 0.34)); hg.addColorStop(1, hexA(COL.gold, 0.20));
+      } else {
+        hg.addColorStop(0, shadeHex(COL.gold, 0.20)); hg.addColorStop(1, COL.gold);
+      }
+      ctx.fillStyle = hg; ctx.fill();
+      ctx.fillRect(rx + 1, ry + INV_HEAD_H - 10, w - 2, 10);   // 下沿抹平，接上白底
+      ctx.restore();
+      text('累计邀请 ' + t.n + ' 人进入游戏', rx + w / 2, ry + INV_HEAD_H / 2 + 1,
+        20, dk ? COL.gold : COL.btnText, 'center', '700');
+
+      var cy = ry + INV_HEAD_H + (INV_ROW_H - INV_HEAD_H) / 2;   // 内容区中线
+
+      /* --- 奖励图标（最多两个，图标下写 ×数量）--- */
+      var rw = tierRewards(t);
+      for (var i = 0; i < rw.length; i++) {
+        var ix = rx + 56 + i * 78;
+        drawRewardIcon(rw[i].kind, rw[i].key, ix, cy - 7, 42);
+        text('×' + rw[i].n, ix, cy + 27, 17, done ? COL.goldDeep : COL.textSub, 'center', '700');
+      }
+
+      /* --- 进度条（行中间）：填充比例 = 已邀请 / 需要，条形上写「已/需」--- */
+      var barX = rx + 190, barW = 190, barH = 30;
+      var pr = t.n > 0 ? Math.min(1, cnt / t.n) : 0;
+      ctx.save();
+      rr(barX, cy - barH / 2, barW, barH, barH / 2);
+      ctx.fillStyle = COL.track; ctx.fill();
+      if (pr > 0) {
+        rr(barX, cy - barH / 2, Math.max(barH, barW * pr), barH, barH / 2);
+        var pg = ctx.createLinearGradient(0, cy - barH / 2, 0, cy + barH / 2);
+        pg.addColorStop(0, shadeHex(COL.gold, 0.16)); pg.addColorStop(1, COL.gold);
+        ctx.fillStyle = pg; ctx.fill();
+      }
+      ctx.restore();
+      text(Math.min(cnt, t.n) + '/' + t.n, barX + barW / 2, cy + 1, 18,
+        pr >= 0.55 ? COL.btnText : COL.textSub, 'center', '700');
+
+      /* --- 右侧按钮：已领取（灰）/ 领取（金，兜底）/ 邀请（蓝，带分享图标）--- */
+      var bw = 148, bh = 60, bx = rx + w - 16 - bw / 2;
+      if (done) {
+        ctx.save();
+        rr(bx - bw / 2, cy - bh / 2, bw, bh, bh / 2);
+        ctx.fillStyle = state.darkSkin ? 'rgba(255,255,255,0.07)' : 'rgba(120,130,146,0.11)';
+        ctx.fill();
+        ctx.restore();
+        text('已领取', bx, cy + 1, 22, COL.textSub, 'center', '600');
+        return null;
+      }
+      if (can) {
+        ctx.save(); shadow(8, 3, COL.shadow);
+        rr(bx - bw / 2, cy - bh / 2, bw, bh, bh / 2);
+        var cg = ctx.createLinearGradient(0, cy - bh / 2, 0, cy + bh / 2);
+        cg.addColorStop(0, COL.gold); cg.addColorStop(1, COL.goldDeep);
+        ctx.fillStyle = cg; ctx.fill(); noShadow(); ctx.restore();
+        text('领取', bx, cy + 1, 24, COL.btnText, 'center', '700');
+        return 'invite_claim_' + t.n;
+      }
+      ctx.save(); shadow(8, 3, 'rgba(30,120,160,0.26)');
+      rr(bx - bw / 2, cy - bh / 2, bw, bh, bh / 2);
+      var ig = ctx.createLinearGradient(0, cy - bh / 2, 0, cy + bh / 2);
+      ig.addColorStop(0, '#5AD0F0'); ig.addColorStop(1, '#27A9D8');
+      ctx.fillStyle = ig; ctx.fill(); noShadow(); ctx.restore();
+      drawIcon('share', bx - 38, cy, '#FFFFFF', 0.72);
+      text('邀请', bx + 16, cy + 1, 23, '#FFFFFF', 'center', '700');
+      return 'invite_share';
+    }
+
+    /* 邀请有礼主面板 */
     function renderInvite() {
-      var cy = sheetBg(620, 600);
-      sheetTitle('邀请有礼', cy, 600);
-      var top = cy - 600 / 2, s = state.save;
-      drawIcon('invite', C.DESIGN.w / 2, top + 180, COL.goldDeep, 3);
-      text('邀请好友一起拼图', C.DESIGN.w / 2, top + 300, 32, COL.text, 'center', '600');
-      text('每位好友 +' + C.ECON.inviteCoin + ' 巧币 +' + C.ECON.inviteHint + ' ' + C.HINT.itemName + '（每日 1 次）',
-        C.DESIGN.w / 2, top + 348, 22, COL.textSub, 'center');
-      text('已邀请 ' + (s.inviteCount || 0) + ' 人', C.DESIGN.w / 2, top + 400, 24, COL.textSub, 'center');
-      var b = { id: 'invite_share', x: C.DESIGN.w / 2, y: top + 490, w: 400, h: 100,
-        label: '分享给好友', variant: 'primary', size: 30, icon: 'share' };
-      addHit(b.x, b.y, b.w, b.h, 'invite_share');
-      drawButton(b);
-      sheetClose(top + 640, 'close_sheet');
+      var V = C.INVITE, T = V.tiers, s = state.save;
+      /* 卡片高度跟屏幕走：DH()-140，上限 1180、下限 860。
+       * 列表视口 = 卡片高 - 顶部 162 - 底部 150 —— 8 档 1028px 必然溢出，所以要能滑。 */
+      var CH = Math.max(860, Math.min(1180, DH() - 140));
+      var cy = sheetBg(660, CH);
+      sheetTitle('邀请有礼', cy, CH);
+      var top = cy - CH / 2, cx = C.DESIGN.w / 2;
+      var cnt = s.inviteCount || 0;
+      var got = s.inviteGot || [];
+      var pendN = (s.invitePend || []).length;
+
+      /* 顶部：规则说明（奖励才用图标，规则仍要文字讲清楚）+ 总进度 */
+      text('邀请的好友需完成任意 ' + V.needCleared + ' 关才计入',
+        cx, top + 96, 20, COL.textSub, 'center');
+      var sum = '已邀请 ' + cnt + ' 人 · 已完成 ' + got.length + '/' + T.length + ' 档';
+      if (pendN) sum += ' · ' + pendN + ' 位在闯关中';
+      text(sum, cx, top + 130, 22, COL.goldDeep, 'center', '700');
+
+      /* ---- 滚动视口 ---- */
+      var L = { x: cx - 290, y: top + 162, w: 580, h: CH - 162 - 128 };
+      state.inviteList = L;
+      var contentH = T.length * INV_PITCH - (INV_PITCH - INV_ROW_H);
+      state.inviteScrollMax = Math.max(0, contentH - L.h);
+      if (state.inviteScroll > state.inviteScrollMax) state.inviteScroll = state.inviteScrollMax;
+      if (!(state.inviteScroll > 0)) state.inviteScroll = 0;
+      var sc = state.inviteScroll;
+
+      ctx.save();
+      rr(L.x, L.y, L.w, L.h, 16);
+      ctx.clip();
+      var rowX = L.x + 10, rowW = L.w - 20;
+      for (var i = 0; i < T.length; i++) {
+        var ry = L.y + i * INV_PITCH - sc;
+        /* 完全在视口外的行不画也不登记热区（省绘制，也避免幽灵按钮） */
+        if (ry + INV_ROW_H < L.y - 2 || ry > L.y + L.h + 2) continue;
+        var rid = drawInviteRow(T[i], rowX, ry, rowW, cnt, got);
+        if (rid) addListHit(rowX + rowW - 16 - 74, ry + INV_HEAD_H + (INV_ROW_H - INV_HEAD_H) / 2,
+          148, 60, rid, L);
+      }
+      ctx.restore();
+
+      /* 滚动条：装不下才出现，拇指位置反映当前进度（也给「这里能滑」一个暗示） */
+      if (state.inviteScrollMax > 0) {
+        var trH = L.h - 16, thH = Math.max(64, trH * (L.h / contentH));
+        var thY = L.y + 8 + (trH - thH) * (sc / state.inviteScrollMax);
+        ctx.save();
+        rr(L.x + L.w - 7, L.y + 8, 5, trH, 3);
+        ctx.fillStyle = hexA(COL.textSub, 0.14); ctx.fill();
+        rr(L.x + L.w - 7, thY, 5, thH, 3);
+        ctx.fillStyle = hexA(COL.gold, 0.75); ctx.fill();
+        ctx.restore();
+      }
+
+      sheetClose(top + CH - 56, 'close_sheet');
       adLayer();
     }
 
@@ -6123,7 +6792,10 @@
         ctx.fillStyle = active ? COL.gold : COL.disabledBg;
         if (active) shadow(8, 3, hexA(COL.goldDeep || '#FF9F1C', 0.35));
         ctx.fill(); noShadow(); ctx.restore();
-        text(TABS[ti].label, tx + tabW / 2, tabY + 9, 27,
+        /* v0.38：用户反馈「分类文字靠下、上下不均匀」。胶囊纵向范围是
+         * tabY±34、中线正好在 tabY，而 text() 用 textBaseline='middle'，
+         * 原来 +9 的偏移把 4 个页签整体压低了 9px —— 改为 +1 只留一点光学补偿。 */
+        text(TABS[ti].label, tx + tabW / 2, tabY + 1, 27,
           active ? COL.btnText : COL.textSub, 'center', active ? '700' : '500');
         addHit(tx + tabW / 2, tabY, tabW, 68, 'skin_tab_' + ti);
       }
@@ -6160,8 +6832,10 @@
         drawSkinGrid(fxKeys, gridTop, curFx, function (k, x, y, sel) {
           var mode = C.BG_FX[k].mode;
           rr(x - 54, y - 44, 108, 78, 12);
+          /* v0.40：泡泡改用淡蓝底 —— 白色气泡描边画在纯白卡片上等于没画 */
           ctx.fillStyle = C.BG_FX[k].dark ? '#141C36'
-            : (mode === 'aurora' ? '#E8E2F7' : mode === 'snow' ? '#DCEBF5' : COL.card);
+            : (mode === 'aurora' ? '#E8E2F7' : mode === 'snow' ? '#DCEBF5'
+              : mode === 'bubbles' ? '#E4F2FB' : COL.card);
           ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = COL.line; ctx.stroke();
           ctx.save(); rr(x - 54, y - 44, 108, 78, 12); ctx.clip();
           drawFxPreview(mode, x, y);
@@ -6187,6 +6861,9 @@
           text(C.PIECE_STYLES[k].name, x, y + 46, 22, COL.text, 'center', '600');
           text(C.PIECE_STYLES[k].desc, x, y + 68, 17, COL.textSub, 'center');
         }, 'pstyle_');
+        /* v0.39：第 2 行起带价签 —— 说清「要花钱」和「只花一次」 */
+        text('带价签的板件需花巧币解锁 · 买一次四巧 / 七巧都能用',
+          C.DESIGN.w / 2, top + CH - 92, 21, COL.textSub, 'center');
 
       } else {
         var curSf = state.save.sfxStyle || 'wood';
@@ -6218,8 +6895,70 @@
       sheetClose(top + CH - 34, 'close_sheet');
     }
 
-    /* 皮肤面板通用网格（每行 3 列，自动多行） */
+    /* v0.39：皮肤购买确认页
+     * 从皮肤面板点「带价签」的项进来。为什么要有这一步：
+     * 巧币只有 100~150 的量级，一次误触就花掉两三天的在线奖励，体验很差。
+     * 这里把「长什么样 / 多少钱 / 现在有多少」摆在一起，玩家点头才扣币。 */
+    function renderBuy() {
+      var it = state.buyItem;
+      if (!it) { state.overlay = 'skin'; return; }
+      /* 版式：卡片 600×600，从「预览 → 名称 → 描述 → 一句话说明 → 价格 → 余额 → 两个按钮」
+       * 一路往下排，间距 14~28px。底部不再放 X（「再想想」就是退出），
+       * 省下的 90px 让内容能撑开、不挤成一坨。 */
+      var CH = 600, cy = sheetBg(600, CH);
+      sheetTitle('解锁皮肤', cy, CH);
+      var top = cy - CH / 2, s = state.save;
+      var cx = C.DESIGN.w / 2;
+      var px = cx, py = top + 170;
+
+      /* 预览：和面板里同一套绘制，只是放大摆中间 */
+      if (it.kind === 'bgfx') {
+        var mode = (C.BG_FX[it.key] || {}).mode || 'glow';
+        rr(px - 90, py - 60, 180, 120, 16);
+        ctx.fillStyle = C.BG_FX[it.key] && C.BG_FX[it.key].dark ? '#141C36'
+          : (mode === 'aurora' ? '#E8E2F7' : mode === 'snow' ? '#DCEBF5' : COL.card);
+        ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = COL.line; ctx.stroke();
+        ctx.save(); rr(px - 90, py - 60, 180, 120, 16); ctx.clip();
+        drawFxPreview(mode, px, py);
+        ctx.restore();
+      } else {
+        rr(px - 90, py - 60, 180, 120, 16);
+        ctx.fillStyle = COL.card; ctx.fill();
+        ctx.lineWidth = 1.5; ctx.strokeStyle = COL.line; ctx.stroke();
+        var demo = ['#4FA8E0', '#63C88B', '#FF8A5B'];
+        for (var pi = 0; pi < 3; pi++) drawPreviewPiece(px - 44 + pi * 44, py + 4, 34, demo[pi], it.key);
+      }
+
+      text(it.name, cx, top + 276, 36, COL.text, 'center', '700');
+      text(it.desc || '', cx, top + 312, 22, COL.textSub, 'center');
+      text('买一次 · 四巧 / 七巧都能用', cx, top + 350, 19, COL.textSub, 'center');
+
+      /* 价格 / 余额 */
+      var priceTxt = it.price + ' 巧币';
+      ctx.font = font(34, '700');
+      var pw = (ctx.measureText ? ctx.measureText(priceTxt).width : 120);
+      var gx0 = cx - (pw + 34) / 2;
+      drawIcon('coin', gx0 + 14, top + 400, COL.gold, 0.85);
+      text(priceTxt, gx0 + 34, top + 400, 34, COL.goldDeep, 'left', '700');
+      var poor = (s.coin || 0) < it.price;
+      text(poor ? ('巧币不足 · 当前 ' + (s.coin || 0)) : ('当前巧币 ' + (s.coin || 0)),
+        cx, top + 442, 22, poor ? '#E4654F' : COL.textSub, 'center');
+
+      /* v0.39：按钮宽 224、左右各留 62 —— 卡片内距 75，绝不能骑到圆角外面 */
+      var bw = 224;
+      drawButton({ id: 'buy_cancel', x: cx - 126, y: top + 518, w: bw, h: 92,
+        label: '再想想', variant: 'secondary', size: 30 });
+      addHit(cx - 126, top + 518, bw, 92, 'buy_cancel');
+      drawButton({ id: 'buy_confirm', x: cx + 126, y: top + 518, w: bw, h: 92,
+        label: poor ? '巧币不足' : '立即解锁', variant: 'primary', size: 30, disabled: poor });
+      addHit(cx + 126, top + 518, bw, 92, 'buy_confirm');
+    }
+
+    /* 皮肤面板通用网格（每行 3 列，自动多行）
+     * v0.39：带 price 且未解锁的项在卡片右上角挂一枚巧币价签；
+     * 解锁后价签消失，选中时该位置换回对勾（两者不会同时出现）。 */
     function drawSkinGrid(keys, gridTop, curKey, drawCell, idPrefix) {
+      var kind = idPrefix === 'bgfx_' ? 'bgfx' : (idPrefix === 'pstyle_' ? 'pstyle' : null);
       var cols = 3, cw = 178, ch = 168, gx = 14, gy = 14;
       var startX = C.DESIGN.w / 2 - (cols * cw + (cols - 1) * gx) / 2 + cw / 2;
       for (var i = 0; i < keys.length; i++) {
@@ -6229,8 +6968,26 @@
         var y = gridTop + row * (ch + gy) + ch / 2;
         skinOptionBox(x, y, cw - 8, ch - 8, curKey === k);
         drawCell(k, x, y, curKey === k);
+        if (kind) {
+          var pr = itemPrice(kind, k);
+          if (pr > 0 && !ownsItem(kind, k)) drawPriceTag(x, y, pr);
+        }
         addHit(x, y, cw, ch, idPrefix + k);
       }
+    }
+
+    /* 巧币价签：金底胶囊 + 小金币 + 数字，压在卡片右上角（不挡预览与名称） */
+    function drawPriceTag(x, y, price) {
+      var w = 76, h = 32;
+      /* 右缩进 10、上缩进 4：避开卡片 18px 圆角，底边正好落在预览块上沿 */
+      var px = x + 85 - 10 - w, py = y - 80 + 4;
+      ctx.save();
+      rr(px, py, w, h, h / 2);
+      ctx.fillStyle = COL.gold; ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = hexA(COL.goldEdge || '#E08A00', 0.75); ctx.stroke();
+      ctx.restore();
+      drawIcon('coin', px + 19, py + h / 2, COL.btnText, 0.5);
+      text(String(price), px + 34, py + h / 2 + 1, 21, COL.btnText, 'left', '700');
     }
 
     function skinOptionBox(x, y, w, h, sel) {
@@ -6276,9 +7033,17 @@
           ctx.beginPath(); ctx.arc(sx, sy, s % 4 === 0 ? 2.6 : 1.4, 0, Math.PI * 2); ctx.fill();
         }
       } else if (mode === 'bubbles') {
+        /* v0.40：原来清一色白色描边，在浅色卡片 / 淡蓝预览块上几乎看不见 ——
+         * 改成三色描边 + 淡填充 + 左上高光点，缩略图里能一眼认出是气泡。 */
+        var bTone = ['rgba(96,175,240,', 'rgba(255,150,180,', 'rgba(250,196,105,'];
         for (var b = 0; b < 6; b++) {
-          ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1.2;
-          ctx.beginPath(); ctx.arc(x - 42 + fxRnd(b * 5) * 84, y - 38 + fxRnd(b * 5 + 2) * 74, 5 + fxRnd(b * 5 + 3) * 9, 0, Math.PI * 2); ctx.stroke();
+          var bx = x - 42 + fxRnd(b * 5) * 84, by = y - 38 + fxRnd(b * 5 + 2) * 74;
+          var br = 5 + fxRnd(b * 5 + 3) * 9, bt = bTone[b % 3];
+          ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2);
+          ctx.fillStyle = bt + '0.18)'; ctx.fill();
+          ctx.strokeStyle = bt + '0.85)'; ctx.lineWidth = 1.3; ctx.stroke();
+          ctx.beginPath(); ctx.arc(bx - br * 0.34, by - br * 0.34, br * 0.2, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fill();
         }
       } else if (mode === 'petals') {
         for (var p = 0; p < 5; p++) {
@@ -6415,6 +7180,7 @@
       else if (state.overlay === 'invite') renderInvite();
       /* v0.28：desktop 浮层已删除 */
       else if (state.overlay === 'skin') renderSkin();
+      else if (state.overlay === 'buy') renderBuy();
       /* v0.6：结算面板打开期间的持续小花流——画在面板之上，但只在卡片上/下留白带，
        * 不遮挡「下一关 / 重玩 / 回列表」与星级文字。不写 hits，不吞点击。 */
       if (state.win && state.overlay === 'result' && !state.reduceMotion) {
@@ -6597,6 +7363,18 @@
         adLvLeft: adLvLeft, adLvLimit: adLvLimit, adStart: adStart, adFinish: adFinish,
         /* v0.27：三类视觉风格切换，供截图/验收直接驱动 */
         applyBgFx: applyBgFx, applyPieceStyle: applyPieceStyle, applySfxStyle: applySfxStyle,
+        /* v0.41：邀请有礼（累计人数 / 8 档阶梯）—— 供 verify_v041 直接驱动 */
+        doInviteShare: doInviteShare, inviteVerify: inviteVerify, inviteGrant: inviteGrant,
+        inviteHasNews: inviteHasNews, inviteNextTier: inviteNextTier,
+        inviteConfirmed: inviteConfirmed, inviteTiers: C.INVITE.tiers,
+        /* v0.42：邀请面板的滑动手势 —— 验收脚本用它模拟「按住 → 拖动 → 松手」 */
+        setInviteScroll: setInviteScroll,
+        onDown: onDown, onMove: onMove, onUp: onUp,
+        tierRewards: tierRewards,
+        /* v0.39：皮肤解锁（巧币买断）—— 供 verify_v039 直接驱动与断言 */
+        pickSkinItem: pickSkinItem, buySkinItem: buySkinItem,
+        itemPrice: itemPrice, ownsItem: ownsItem, itemLocked: itemLocked,
+        grantItem: grantItem, loadShop: loadShop, seedShop: seedShop, shopKey: SHOP_KEY,
         /* v0.15：在线奖励（6 档 / 每日 0 点清零）与查找道具 */
         onlineSecNow: onlineSecNow, onlineTierList: onlineTierList,
         onlineClaimCount: onlineClaimCount, onlineClock: onlineClock,

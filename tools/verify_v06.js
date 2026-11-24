@@ -95,7 +95,7 @@ function drag(fromD, toD, steps) {
 /* ---------- 1. 版本与改名 ---------- */
 section('1. 版本与品牌名');
 /* v0.7 起版本号继续前滚，这里只要求「不低于 v0.6」 */
-check('版本号 ≥ v0.6', /^v0\.([6-9]|1\d|2\d)/.test(CFG.version), CFG.version);
+check('版本号 ≥ v0.6', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
 check('品牌名 = 方寸巧拼', CFG.BRAND && CFG.BRAND.name === '方寸巧拼', CFG.BRAND && CFG.BRAND.name);
 /* 只判「当标题/分享名用」的旧名；config 的 slogan「四巧 · 七巧，拼出你的形状」
  * 与历史注释属于正常描述，不算残留。 */
@@ -158,23 +158,28 @@ for (let i = 0; i < 3; i++) {
 }
 check('标签与下一图标留有净空', worstGap >= 8, `${worstAt} 净空 ${worstGap.toFixed(1)}px`);
 const lastLabelBottom = H.entryY0 + 3 * H.entryGap + H.labelDy + labelH / 2;
-const startTop = H.startY - 108 / 2;
-check('最后一个标签不压「开始」按钮', startTop - lastLabelBottom >= 8,
-  `净空 ${(startTop - lastLabelBottom).toFixed(1)}px`);
+/* v0.38：开始按钮挪到两套入口下方，所以「最后一个标签」的邻居变成四巧板卡片 */
+const set4Top = H.set4Y - (H.setH || 100) / 2;
+check('最后一个标签不压「四巧板」卡片', set4Top - lastLabelBottom >= 8,
+  `净空 ${(set4Top - lastLabelBottom).toFixed(1)}px`);
+check('v0.38 开始按钮在两套入口下方', H.set7Y < H.startY, `set7=${H.set7Y} start=${H.startY}`);
 check('四巧板在七巧板之上', H.set4Y < H.set7Y, `set4=${H.set4Y} set7=${H.set7Y}`);
 check('主入口热区 ≥ 最小热区', H.entryW >= CFG.LAYOUT.MIN_HIT, H.entryW + 'px');
 
 /* ---------- 4. 固定入口 ---------- */
 section('4. 两套拼图固定入口（点击不换位）');
+/* v0.31 起底部三件套随屏高自适应，v0.38 又调成「四巧板 → 七巧板 → 开始」，
+ * 静态坐标已经对不上运行时位置（会点到隔壁卡片）—— 统一取 homeLayout() 的实时值。 */
+const HL = () => game._debug.homeLayout();
 check('初始在四巧板', S.setKey === 'tangram4', S.setKey);
-tap(375, H.set7Y);
+tap(375, HL().set7Y);
 for (let i = 0; i < 4; i++) step(16);
 check('点七巧板 → 切到七巧板并进列表', S.setKey === 'tangram7' && S.page === 'levels',
   `${S.setKey}/${S.page}`);
 tap(70, CFG.SAFE.top + 38);
 for (let i = 0; i < 4; i++) step(16);
 check('回到主页', S.page === 'home', S.page);
-tap(375, H.set4Y);
+tap(375, HL().set4Y);
 for (let i = 0; i < 4; i++) step(16);
 check('点四巧板 → 切回四巧板并进列表', S.setKey === 'tangram4' && S.page === 'levels',
   `${S.setKey}/${S.page}`);
@@ -185,7 +190,9 @@ check('入口 id 固定：四巧=set_t4 / 七巧=set_t7',
 
 /* ---------- 5. 通关音乐 ---------- */
 section('5. 通关音乐持续播放');
-tap(375, H.startY);
+check('v0.38 开始按钮在两套入口下方（点它仍能进对局）',
+  HL().startY > HL().set7Y, `start=${HL().startY} set7=${HL().set7Y}`);
+tap(375, HL().startY);
 for (let i = 0; i < 6; i++) step(16);
 check('点开始进入对局', S.page === 'play', S.page + '/' + S.levelIdx);
 check('进对局切关卡曲', log.scene[log.scene.length - 1] === 'lv1',

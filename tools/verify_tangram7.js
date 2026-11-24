@@ -225,7 +225,7 @@ const game = CORE(env);
 game.init();
 step(16);
 const S = game.state;
-check('首屏是主界面、默认四巧板', S.page === 'home' && S.setKey === 'tangram4' && game._debug.LEVELS.length === 30);
+check('首屏是主界面、默认四巧板', S.page === 'home' && S.setKey === 'tangram4' && game._debug.LEVELS.length === 36)   // v0.45：四巧板 30 → 36 关（第二章追加 6 关）;
 
 // 托盘 v0.9：不再是 2×2 槽位网格，改成「散放」，这里验散放的三条硬约束
 {

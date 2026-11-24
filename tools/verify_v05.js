@@ -195,10 +195,11 @@ const coinW = S.save.coin, streakW = S.save.streak || 0, bgmW = S.save.bgmIdx ||
 })();
 check('通关后有结算结果', !!S.result, S.result ? ('stars=' + S.result.stars) : 'null');
 const gained = S.save.coin - coinW;
-/* v0.23：首通按星级 2/3/5，重复通关 0 */
-const wantGain = S.result.first ? C.ECON.coinFirst[S.result.stars - 1] : 0;
-check('通关奖励巧币（首通按星级 ' + C.ECON.coinFirst.join('/') + '，重复 0）',
-  gained === wantGain, '+' + gained + ' first=' + S.result.first + ' stars=' + S.result.stars);
+/* v0.40：奖励按「该关最高星级应得总额 - 已发额」算，落账必须等于 result.gain */
+const wantGain = S.result.gain || 0;
+check('通关奖励巧币（首通 / 升星补差，已领满则 0）',
+  gained === wantGain && S.result.target === C.ECON.starReward[(S.result.bestStars || S.result.stars) - 1],
+  '+' + gained + ' gain=' + S.result.gain + ' target=' + S.result.target + ' stars=' + S.result.stars);
 check('连胜 +1', S.save.streak === streakW + 1, streakW + '→' + S.save.streak);
 /* v0.11 变更：BGM 改为真人 mp3，按「关卡序号 / 每 5 关」取曲。
  * 一关之内不换曲、结算页也不换——所以这里断言"通关没有触发任何切曲"。

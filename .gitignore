@@ -28,3 +28,8 @@ tools/tanref*/*.png
 tools/tanref*/*.jpg
 tools/tanref*/*.npy
 tools/tanref*/*.npz
+
+# v0.44 / v0.45 参考图求解的中间产物（遮罩、叠加图、中间 JSON）
+# 参考图本身（ref/）入库，out/ 是每次跑脚本都能重新生成的
+tools/letters7/out/
+tools/figs4/out/

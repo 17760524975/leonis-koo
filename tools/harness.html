@@ -239,13 +239,19 @@
       if (screen === 'result') {
         S.overlay = 'result'; S.resT = 1000; S.starShown = 3;
         /* v0.23：first=<0|1> 首通/重复、rw=<n> 首通奖励、ad=<0|1> 是否已看视频翻倍。
-         * 不传时保持老截图的默认（首通 3 星 +5 巧币、未翻倍）。 */
+         * v0.40：prev=<n> 本局之前的星级、best=<n> 本关最高星级 —— 用来截「升到 ★★ · +N」。
+         * v0.43：奖励口径回正（1★2 / 2★3 / 3★5），默认值从 +21 改成 +5。 */
         var rFirst = +(q.match(/first=(\d+)/) || [])[1];
         var rGain = +(q.match(/rw=(\d+)/) || [])[1];
         var rAd = +(q.match(/ad=(\d+)/) || [])[1];
+        var rPrev = +(q.match(/prev=(\d+)/) || [])[1];
+        var rBest = +(q.match(/best=(\d+)/) || [])[1];
+        var rStars = +(q.match(/stars=(\d+)/) || [])[1];   // v0.41：本局星级（默认 3）
         S.result = {
-          stars: 3, time: 63.4, steps: 9,
+          stars: isNaN(rStars) ? 3 : rStars, time: 63.4, steps: 9,
           first: isNaN(rFirst) ? true : !!rFirst,
+          prevStars: isNaN(rPrev) ? 0 : rPrev,
+          bestStars: isNaN(rBest) ? 3 : rBest,
           gain: isNaN(rGain) ? 5 : rGain,
           adUsed: isNaN(rAd) ? false : !!rAd
         };
@@ -323,7 +329,21 @@
       S.page = 'home'; S.fade = 1; S.pageT = 9999; S.overlay = screen;
       S.save.coin = 168; S.save.energy = 12;
       if (screen === 'energy') { S.save.freeEnergyDay = ''; S.save.freeEnergyUsed = 0; }
-      if (screen === 'invite') { S.save.inviteCount = 2; }
+      if (screen === 'invite') {
+        /* v0.41：&ic=<人数> 累计邀请数、&ig=<1,2,3> 已领档位、&ip=<n> 待确认数 */
+        var ic = +(q.match(/ic=(\d+)/) || [])[1];
+        if (!isNaN(ic)) S.save.inviteCount = ic;
+        var ig = (q.match(/ig=([\d,]+)/) || [])[1];
+        S.save.inviteGot = ig ? ig.split(',').map(Number) : [];
+        var ip = +(q.match(/ip=(\d+)/) || [])[1];
+        /* v0.42：&iscroll=<px> 直接给出列表滚动位置（给 9999 就是滑到底） */
+        var isc = (q.match(/iscroll=(\d+)/) || [])[1];
+        if (isc !== undefined) S.inviteScroll = +isc;
+        S.save.invitePend = [];
+        for (var ii = 0; ii < (isNaN(ip) ? 0 : ip); ii++) {
+          S.save.invitePend.push(Date.now() - 1000);   // 未到等待期 → 只显示「在闯关中」
+        }
+      }
       if (screen === 'online') {
         /* v0.15：&online=<秒> 今日累计时长；&ogot=1,2 已领档位；&items=<n> 查找道具数量 */
         var os = +(q.match(/online=(\d+)/) || [])[1];
@@ -413,6 +433,18 @@
       S.overlay = 'skin';
       var st = +(q.match(/skintab=(\d+)/) || [])[1];
       if (!isNaN(st)) S.skinTab = st;
+    }
+    /* v0.39：?buy=pstyle:neon / &buy=bgfx:stars 直接打开「解锁皮肤」确认页。
+     * 只是把状态摆好截图，不扣巧币（真正的扣费在 buySkinItem 里）。 */
+    var buyQ = q.match(/[&?]buy=(\w+):(\w+)/);
+    if (buyQ) {
+      var buyMap = buyQ[1] === 'pstyle' ? C.PIECE_STYLES : C.BG_FX;
+      var buyIt = buyMap && buyMap[buyQ[2]];
+      if (buyIt) {
+        S.buyItem = { kind: buyQ[1], key: buyQ[2], price: buyIt.price || 0,
+          name: buyIt.name, desc: buyIt.desc };
+        S.overlay = 'buy';
+      }
     }
     S.toast = null;
     /* v0.5：?toast=1 关闭提示气泡，避免遮挡截图 */

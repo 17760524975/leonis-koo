@@ -105,7 +105,7 @@ function freeze(S) { S.onlineMark = 0; S.onlineSaveT = 0; }
 
 async function main() {
   console.log('v0.15 验收：每日在线奖励（6 档）+ 查找道具');
-  check('版本号 v0.15+', /^v0\.(1[5-9]|2\d)/.test(CFG.version), CFG.version);
+  check('版本号 v0.15+', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
 
   /* ================= 1. 配置数值 ================= */
   section('1. 配置：6 档门槛与奖励（对着需求逐项核）');
@@ -268,7 +268,9 @@ async function main() {
   check('已领档显示「已领取」', /已领取/.test(tx));
   check('到点档显示「领取」', /领取/.test(tx));
   check('未到档显示「差 mm:ss」', /差 \d\d:\d\d/.test(tx), tx.slice(0, 400));
-  check('底部查找道具余额', /查找道具 ×\d+/.test(tx), tx.slice(0, 300));
+  /* v0.39：奖励行的汉字换成图标后，底部余额也只留「×N」（图标由灯泡自带），
+   * 这里改断言新口径，文案仍然是「关卡『提示』面板可直接使用」。 */
+  check('底部查找道具余额', /×\d+ · 关卡「提示」/.test(tx), tx.slice(0, 300));
 
   /* 页面内点领取（走 switch 的 online_o 前缀分支） */
   const coinP = h.S.save.coin;

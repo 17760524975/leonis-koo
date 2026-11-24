@@ -1,4 +1,5 @@
-/* v0.8 专项验收：结算面板改版（图案/分享/连胜）/ 四巧板 30 关 / 排行榜
+/* v0.8 专项验收：结算面板改版（图案/分享/连胜）/ 四巧板关卡数 / 排行榜
+ * v0.45：四巧板由 30 关扩到 36 关（第二章追加 6 关参考图关卡），断言同步
  * 用法：node tools/verify_v08.js
  */
 const fs = require('fs');
@@ -96,13 +97,23 @@ function tap(dx, dy) {
 }
 function clearRec() { rec.texts.length = 0; rec.fills.length = 0; rec.strokes.length = 0; rec.arcs.length = 0; }
 
-/* ---------- 1. 四巧板 30 关 ---------- */
-section('1. 四巧板 120 → 30 关');
+/* ---------- 1. 四巧板关卡数 ---------- */
+section('1. 四巧板 120 → 30 → 36 关');
 const LIB = game._debug.LEVELS;
-check('关卡数 = 30', LIB.length === 30, 'len=' + LIB.length);
-check('章节 = 3 章 × 10 关', CFG && LIB.every((l, i) => l.chapter === Math.floor(i / 10) + 1),
+check('关卡数 = 36', LIB.length === 36, 'len=' + LIB.length);
+/* v0.45：第二章由 10 关扩到 16 关（追加 6 关参考图关卡），不再是每章 10 关。
+ * 改为断言「章节号非递减、且只有 3 章、每章 10~16 关」。 */
+check('章节 = 3 章（10/16/10 关）',
+  CFG && LIB.every((l, i) => i === 0 || l.chapter >= LIB[i - 1].chapter) &&
+  (function () {
+    const c = {};
+    LIB.forEach(l => { c[l.chapter] = (c[l.chapter] || 0) + 1; });
+    const ks = Object.keys(c).map(Number).sort((a, b) => a - b);
+    return ks.length === 3 && ks[0] === 1 && ks[2] === 3 &&
+      Object.values(c).every(v => v >= 10 && v <= 16);
+  })(),
   'chap=' + LIB.map(l => l.chapter).join(','));
-check('id 连续 1..30', LIB.every((l, i) => l.id === i + 1));
+check('id 连续 1..36', LIB.every((l, i) => l.id === i + 1), 'last=' + LIB[LIB.length - 1].id);
 const par = LIB.map(l => l.parTime);
 check('前两关是简单关（用时基准 ≤ 85s）', par[0] <= 85 && par[1] <= 85, par.slice(0, 2).join('/') + 's');
 check('其余 28 关更复杂（基准 ≥ 85s）', par.slice(2).every(v => v >= 85),
@@ -117,7 +128,7 @@ check('七巧板关卡仍存在（v0.34：19 关 / unitScale=96）',
 
 /* ---------- 2. 老存档收敛 ---------- */
 section('2. 老存档（120 关）升级');
-check('unlockedMax 收敛到 30', S.save.unlockedMax === 30, 'unlocked=' + S.save.unlockedMax);
+check('unlockedMax 收敛到 36', S.save.unlockedMax === 36, 'unlocked=' + S.save.unlockedMax);
 check('越界星星被清理', !S.save.starOf['88'] && !S.save.starOf['120'] && !!S.save.starOf['1'],
   JSON.stringify(S.save.starOf));
 
@@ -200,9 +211,9 @@ before = S.save.coin;
 game._debug.setupLevel(1);
 S.elapsed = 30; S.steps = 5;
 game._debug.win();
-/* v0.23：只发首通奖励（按星级 2/3/5），不再有里程碑之外的旧口径 coinClear3Star */
-check('第 6 连胜不再发里程碑奖（只给首通奖励）',
-  S.save.streak === 6 && S.save.coin - before === CFG.ECON.coinFirst[S.result.stars - 1],
+/* v0.40：奖励跟「有无进账」走（首通 / 升星补差），这里落账应等于 result.gain */
+check('第 6 连胜不再发里程碑奖（只给星级奖励）',
+  S.save.streak === 6 && S.save.coin - before === (S.result.gain || 0),
   `streak=${S.save.streak} coin +${S.save.coin - before} gain=${S.streakGain}`);
 /* v0.18：重玩已通关的关不再刷连胜（旧版正是靠这个刷榜） */
 const sReplay = S.save.streak;

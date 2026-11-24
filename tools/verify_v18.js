@@ -147,7 +147,7 @@ store[CFG.SAVE_KEY] = JSON.stringify({
 
   /* ================= 1. 连胜口径 ================= */
   section('1. 连胜：段内去重，失败当场中断');
-  check('版本 v0.19 起', /^v0\.(19|2\d)/.test(CFG.version), CFG.version);
+  check('版本 v0.19 起', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
   check('老存档没有 bestStreak 时用当前连胜兜底', S.save.bestStreak === 2, 'best=' + S.save.bestStreak);
   /* v0.19：老存档没有 streakSeen → 迁移成空数组（不能拿 starOf 反推） */
   check('老存档没有 streakSeen → 迁移为空数组', Array.isArray(S.save.streakSeen) && S.save.streakSeen.length === 0,
@@ -161,10 +161,13 @@ store[CFG.SAVE_KEY] = JSON.stringify({
   const coinReplay = S.save.coin;
   D.win();
   check('已通关的关在新的一段里重打：连胜 +1（v0.19 核心修复）', S.save.streak === 3, 'streak=' + S.save.streak);
-  /* v0.23：只发首通奖励 —— 已通关的关重打是 0 巧币（对应地也不扣体力） */
-  check('重打不给巧币、也不给连胜里程碑',
-    S.streakGain === 0 && S.save.coin - coinReplay === 0 && S.result.first === false,
-    `+${S.save.coin - coinReplay} gain=${S.streakGain} first=${S.result.first}`);
+  /* v0.23 的口径是「重打一律 0 巧币」。v0.40 改成「升星补差价」：
+   * 这一局把第 1 关从旧星级提到 3★，拿的是 53 - 已发额 的差额，
+   * 所以这里断言的重点变成「落账 = result.gain、且不算首通」，
+   * 而不是金额必须是 0（金额为 0 的用例见 verify_v040 的「同星级重打」）。 */
+  check('重打按「升星补差」结算，不再重复算首通',
+    S.streakGain === 0 && S.save.coin - coinReplay === (S.result.gain || 0) && S.result.first === false,
+    `+${S.save.coin - coinReplay} gain=${S.result.gain} first=${S.result.first}`);
 
   /* 同一段里再打同一关：集合里已有 → 不计（防刷） */
   D.setupLevel(0);

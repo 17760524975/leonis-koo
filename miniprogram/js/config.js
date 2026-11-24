@@ -9,7 +9,7 @@
   'use strict';
 
   return {
-    version: 'v0.31',
+    version: 'v0.45',
 
     /* ---------- 品牌（v0.6 改名「方寸巧拼」） ----------
      * 游戏名只在这里定义一次：主页标题、分享文案、工程名都从这里取，
@@ -117,11 +117,17 @@
       MIN_HIT: 88,                       // 最小可点热区
 
       /* v0.6 主页版式：verify_v06 直接读这组数做「标签不压下一图标」断言，
-       * 避免验收脚本里再抄一份魔数导致两边漂移。 */
+       * 避免验收脚本里再抄一份魔数导致两边漂移。
+       * v0.38：用户要求把「开始游戏」挪到两套入口**下方**，并把入口卡片缩小一档。
+       *   新顺序（上→下）：四巧板 → 七巧板 → 开始 → 星数。
+       *   这里的坐标是「设计基准值」（星数行 1360 时的位置），运行时由 homeLayout()
+       *   按实际屏高重算，脚本读函数而不是读死数字。 */
       HOME: {
         entryX: 104, entryW: 88, entryY0: 430, entryGap: 142,
         labelDy: 68, labelSize: 20,
-        startY: 1010, set4Y: 1148, set7Y: 1274
+        startY: 1274, set4Y: 1030, set7Y: 1148,
+        setW: 408, setH: 100,             // v0.38：入口卡片 440×112 → 408×100（缩小一档）
+        startGap: 126, setGap: 118        // 七巧板→开始 / 四巧板→七巧板 的中心距
       },
       /* v0.7 HUD：巧币 / 体力做成带描边的胶囊（参考用户给的截图）。
        * 图标压在胶囊左端外侧，数字统一 fontSize/700 白字，两行间距 rowGap。
@@ -135,6 +141,7 @@
         fontSize: 30, fontWeight: '700',  // 两行同字号同字重（v0.6 是 32 与 26）
         textColor: '#FFFFFF',
         pillFill: 'rgba(30,40,52,0.72)',  // 深底（换肤后仍压在浅色底上）：白字对比度约 7:1
+        pillFillDark: 'rgba(10,14,22,0.58)',   // v0.38：夜间护眼深底上比背景更暗一档，白字对比才够（半透明白底会把白字吞掉）
         pillStroke: 'rgba(255,255,255,0.62)',
         border: 2.5,
         plusR: 24, plusInset: 6, plusHit: 76, plusFill: '#46C46B', plusPad: 34,
@@ -171,6 +178,7 @@
         maxW: 127,                        // 单枚胶囊的宽度上限（32 + 127 = 159 < 倒计时左沿 255，留 96 净空）
         textColor: '#FFFFFF',
         pillFill: 'rgba(30,40,52,0.72)',  // 与主页 HUD 同款深底，白字对比度约 7:1
+        pillFillDark: 'rgba(10,14,22,0.58)',   // v0.38：夜间护眼深底上的反色底（比背景更暗，白字才压得住）
         pillStroke: 'rgba(255,255,255,0.62)',
         coinScale: 0.78, energyScale: 0.70,
         /* v0.37：返回按钮已下移，胶囊不再需要挤在 108..255 之间；left=32 之后
@@ -510,8 +518,24 @@
      *   · 初始 120 → 50；提示 40 → 30；巧币复活 100 → 80。 */
     ECON: {
       coinInit: 50,           // 新玩家初始巧币（v0.23：120 → 50）
-      coinFirst: [2, 3, 5],   // 首通奖励，下标 = 星级-1（1★/2★/3★）
-      coinWinAdMul: 5,        // 结算页看视频翻倍（×5，只作用当次通关奖励）
+      /* ---------- v0.40 星级奖励：总额制 + 补差价（v0.43 口径回正） ----------
+       * 用户定的口径（一句话版）：
+       *     通关 1★ 拿 2 巧币，2★ 拿 3 巧币，3★ 拿 5 巧币。
+       *     不看视频时，**每关累计最多 5 巧币**。
+       *     重玩没满星的关，只补「这一星级总额 − 这关已经拿过的」，差额封在 5 以内。
+       *
+       * 所以 starReward 存的是「该星级应得的**累计总额**」：
+       *     1★ 2 ｜ 2★ 3 ｜ 3★ 5
+       * 派生差价：1★→2★ 1、2★→3★ 2、1★→3★ 3（= 1+2，自洽）。
+       *
+       * v0.40/v0.41 曾把 1★ 写成 21（在 2 前面多带了一个 2），导致：
+       *     首通 1★ 就拿 21、每关封顶 24，远超用户设定的 5 —— v0.43 改回 2/3/5。
+       * 每关总产出恒定封顶 5，所以补差价不会变成刷币漏洞：同一关无论重打多少次，
+       * 累计只可能拿到 5（不含结算页 ×5 加成）。
+       * 旧存档由 loadSave 把 starOf 折算成 starPaid（按旧口径 2/3/5 记账），
+       * 数值与新总额一致，老玩家的账正好对得上，不会被重复发币。 */
+      starReward: [2, 3, 5],      // 下标 = 星级-1，存的是累计总额（别改成"单次增量"）
+      coinWinAdMul: 5,        // 结算页看视频翻倍（×5，作用当次发放的奖励，含升星补差）
       coinRevive: 80,         // 巧币复活价格（v0.23：100 → 80）
       energyMax: 16,          // 体力上限
       energyInit: 16,         // 初始体力
@@ -523,9 +547,8 @@
        * v0.35：用户要求「看视频获取体力改为 5 倍」—— 10 → 5，一次 = 2×5 = 10 点。
        * freeEnergyShare 仍是基准量，别直接改成 10 —— 否则以后调倍率会失真。 */
       freeEnergyAdMul: 5,     // 「5 倍获得」= 2×5 = 10
-      /* v0.16：每日任务下线（主页不再有「任务」入口），奖励挪到邀请有礼 */
-      inviteCoin: 20,         // 邀请有礼：每日首次分享
-      inviteHint: 1,          // 邀请有礼：顺带 1 个查找道具
+      /* v0.41：邀请有礼改成「累计人数 + 8 档阶梯」，详见下方 INVITE 配置块。
+       * 旧的 inviteCoin / inviteHint（每日一次 +20 巧币 +1 道具）已下线。 */
       /* v0.23：删掉 reviveMaxPerLevel —— 复活不再设每关上限（用户要求可多次看视频复活）。
        * state.reviveUsed 保留，仅作统计，不再参与判定。 */
       adSimMs: 1200,          // 模拟广告时长
@@ -535,6 +558,40 @@
        * 体力面板的看视频不占这个额度（那是全局钱包的事，跟哪一关无关）。 */
       adPerLevel: 3,
       coinHint: 30            // 提示价格（v0.23：40 → 30，与首通收入对齐）
+    },
+
+    /* ---------- v0.41 邀请有礼：累计邀请 + 8 档阶梯 ----------
+     * 旧口径（v0.16~v0.40）：每天首次分享 +20 巧币 +1 查找道具，一天只能领一次。
+     * 用户要求：
+     *   ① 去掉「每日一次」，改成可以累计的邀请好友计数；
+     *   ② 被邀请的好友必须**完成任意 4 关**才算 1 位（不是点一下分享就 +1）；
+     *   ③ 按累计人数给 8 档阶梯奖励（见 tiers）。
+     *
+     * 「好友完成 4 关」怎么判：
+     *   正式做法是后端在好友通关时回调邀请者。本项目没有后端，也读不到微信
+     *   关系链里的关卡数（开放数据域只负责绘制，主域拿不到数据）。所以做成两级：
+     *   · `env.invite.confirmed(ts)` 存在 → 由宿主判断（将来接后端只换这一个函数）；
+     *   · 否则本地模拟：邀请发出后 verifySec 秒即视为好友完成了那 4 关。
+     * 存档结构、判定入口、UI 全按真实口径写，接后端时交互不用改。 */
+    INVITE: {
+      needCleared: 4,        // 好友完成多少关才算 1 位有效邀请
+      verifySec: 60,         // 无后端时的本地模拟时长（秒）
+      maxPend: 12,           // 待确认队列上限（防止连点把队列刷爆）
+      shareCdMs: 1200,       // 分享按钮冷却（防一次点击发多条）
+      /* 8 档阶梯：n = 需要的累计邀请人数；奖励字段自由组合
+       *   coin   巧币      energy 体力（可溢出上限）
+       *   hint   查找道具  pstyle 板件（走全局解锁表）
+       *   bgfx   背景特效（走全局解锁表） */
+      tiers: [
+        { n: 1, coin: 30, hint: 1,                  label: '30 巧币 + 1 查找道具' },
+        { n: 2, energy: 20, pstyle: 'neon',         label: '20 体力 + 霓虹板件' },
+        { n: 3, pstyle: 'crystal', bgfx: 'bubbles', label: '水晶板件 + 泡泡漂浮背景' },
+        { n: 4, hint: 1, energy: 10,                label: '1 查找道具 + 10 体力' },
+        { n: 5, pstyle: 'pastel', energy: 10,       label: '马卡龙板件 + 10 体力' },
+        { n: 6, hint: 1, coin: 50,                  label: '1 查找道具 + 50 巧币' },
+        { n: 7, hint: 1, bgfx: 'petals',            label: '1 查找道具 + 花瓣飘落背景' },
+        { n: 8, pstyle: 'glow', hint: 1,            label: '荧光板件 + 1 查找道具' }
+      ]
     },
 
     /* ---------- v0.15 每日在线奖励 ----------
@@ -661,19 +718,30 @@
         card: '#FFFFFF', line: '#DEE4F7', lineDeep: '#C2CBEA',
         tint: 'rgba(112,98,205,0.24)'   // 夜空：叠淡紫罩
       },
-      sunset: {
-        name: '落日',
-        bg: '#FCE6D4', bgDeep: '#F6CDB2', text: '#4A2C25', textSub: '#936A57',
-        gold: '#FF8A5B', goldDeep: '#F2703C', goldEdge: '#D4521F',
-        card: '#FFFFFF', line: '#F3DFD2', lineDeep: '#E4BFA8',
-        tint: 'rgba(242,112,60,0.14)'
-      },
-      ocean: {
-        name: '海岸',
-        bg: '#E4F2F6', bgDeep: '#C7E4EC', text: '#1D3D48', textSub: '#5E8896',
-        gold: '#3FB8B0', goldDeep: '#2A9E96', goldEdge: '#1C827A',
-        card: '#FFFFFF', line: '#D7E9EE', lineDeep: '#B4D6DE',
-        tint: 'rgba(63,184,176,0.14)'
+      /* v0.38：用户要求下线「落日 / 海岸」，换成**一套深色调配色**专供夜晚护眼。
+       * dark:true 表示这是一套深色皮肤 —— refreshPalette 会先铺 DARK_PAL 打底
+       * （保证 cardEdge / board / targetFill / mask 等冷门字段也一整套深色，
+       *  不会残留上一套浅色值），再用这里的字段覆盖成更暖、对比更低的夜间色：
+       * 背景偏暖石墨灰（少蓝光）、主色换成柔和琥珀金，避免纯白大面积刺眼。 */
+      dusk: {
+        name: '夜间护眼',
+        dark: true,
+        bg: '#1E2530', bgDeep: '#171D26', bgTop: '#28313F',
+        text: '#E8EDF4', textSub: '#A9B4C4', textOn: '#FFFFFF',
+        gold: '#E9B16A', goldDeep: '#D99A4E', goldEdge: '#BE7F35',
+        btnText: '#2A1D00',
+        card: 'rgba(42,50,63,0.96)', cardEdge: 'rgba(140,152,170,0.30)',
+        board: 'rgba(34,42,55,0.94)',
+        line: 'rgba(150,164,184,0.26)', lineDeep: 'rgba(150,164,184,0.45)',
+        slotBg: 'rgba(255,255,255,0.05)',
+        disabledBg: 'rgba(255,255,255,0.07)', disabledIcon: 'rgba(190,200,215,0.35)',
+        targetFill: 'rgba(190,205,230,0.16)', targetEdge: '#BFCDE4',
+        targetSilhouette: 'rgba(190,205,230,0.28)',
+        splitLine: 'rgba(200,212,232,0.60)', track: 'rgba(150,164,184,0.22)',
+        starOff: 'rgba(150,164,184,0.30)',
+        mask: 'rgba(8,12,20,0.68)', snapRing: 'rgba(255,255,255,0.95)',
+        shadow: 'rgba(0,0,0,0.30)', shadowPiece: 'rgba(0,0,0,0.38)',
+        tint: 'rgba(20,26,36,0.18)'
       }
     },
 
@@ -684,19 +752,25 @@
 
     /* ---------- 主页动态背景特效（Canvas 程序化，零图片） ----------
      * classic 沿用原暖木光斑；其余为新增粒子特效，mode 决定绘制分支。
-     * 低帧率自动减半粒子（state.lowFps），reduceMotion 全停。 */
+     * 低帧率自动减半粒子（state.lowFps），reduceMotion 全停。
+     *
+     * v0.39 付费皮肤：带 price 的项需要花巧币解锁（一次买断、全游戏通用）。
+     *   · 背景 3 套 × 150 巧币：星夜流萤 / 花瓣飘落 / 初雪纷飞（用户指定）
+     *   · 不带 price 的一律免费（默认 0）
+     * 解锁记录不进单份存档，统一存全局键 tangram_shop_v1（见 core.js），
+     * 四巧板 / 七巧板共用一份，不会一边买了另一边还要再买。 */
     BG_FX: {
       classic:   { name: '暖木微光', desc: '原版柔光',     mode: 'glow' },
       aurora:    { name: '流光溢彩', desc: '极光缓缓流动', mode: 'aurora' },
       /* v0.28：星夜流萤 / 星云流转改为深色夜空底，粒子才看得清（dark:true 由 drawFxLayer 铺深底） */
-      stars:     { name: '星夜流萤', desc: '深蓝夜空 + 流萤', mode: 'stars',   dark: true },
-      bubbles:   { name: '泡泡漂浮', desc: '彩色气泡上浮', mode: 'bubbles' },
-      petals:    { name: '花瓣飘落', desc: '花瓣随风飘落', mode: 'petals' },
+      stars:     { name: '星夜流萤', desc: '深蓝夜空 + 流萤', mode: 'stars',   dark: true, price: 150 },
+      bubbles:   { name: '泡泡漂浮', desc: '彩色气泡上浮', mode: 'bubbles', price: 100 },
+      petals:    { name: '花瓣飘落', desc: '花瓣随风飘落', mode: 'petals',  price: 150 },
       geometric: { name: '几何轻舞', desc: '碎片漂浮旋转', mode: 'geometric' },
       /* v0.28 新增 4 套：粒子更密、对比更强，主页 / 关卡 / 对局三处共用 */
-      snow:      { name: '初雪纷飞', desc: '白雪缓缓飘落', mode: 'snow' },
+      snow:      { name: '初雪纷飞', desc: '白雪缓缓飘落', mode: 'snow',    price: 150 },
       rain:      { name: '烟雨绵绵', desc: '雨丝斜落带涟漪', mode: 'rain' },
-      firefly:   { name: '萤火之森', desc: '夜色 + 点点萤火', mode: 'firefly', dark: true },
+      firefly:   { name: '萤火之森', desc: '夜色 + 点点萤火', mode: 'firefly', dark: true, price: 100 },
       nebula:    { name: '星云流转', desc: '深紫星云缓缓旋转', mode: 'nebula',  dark: true }
     },
     BG_FX_PARTS: {
@@ -711,18 +785,20 @@
       nebula:    { clouds: 6 }
     },
 
-    /* ---------- 七巧板 / 四巧板 板件样式（只改绘制，不动几何/判定/热区） ---------- */
+    /* ---------- 七巧板 / 四巧板 板件样式（只改绘制，不动几何/判定/热区） ----------
+     * v0.39 付费板件：第 2 行起 6 套 × 100 巧币（用户指定），一次买断全游戏通用。
+     * 第一行（经典 / 糖果 / 原木）保持免费 —— 玩家不花巧币也有三套可选。 */
     PIECE_STYLES: {
       classic: { name: '经典', desc: '纯色白边' },
       candy:   { name: '糖果', desc: '糖果渐变' },
       wood:    { name: '原木', desc: '木质纹理' },
-      neon:    { name: '霓虹', desc: '暗底发光' },
-      pastel:  { name: '马卡龙', desc: '柔和粉彩' },
+      neon:    { name: '霓虹', desc: '暗底发光',     price: 100 },
+      pastel:  { name: '马卡龙', desc: '柔和粉彩',   price: 100 },
       /* v0.28 新增 4 套质感 */
-      crystal: { name: '水晶', desc: '通透高光棱面' },
-      metal:   { name: '金属', desc: '拉丝银灰光泽' },
-      jade:    { name: '玉石', desc: '温润云纹玉质' },
-      glow:    { name: '荧光', desc: '亮色柔光描边' }
+      crystal: { name: '水晶', desc: '通透高光棱面', price: 100 },
+      metal:   { name: '金属', desc: '拉丝银灰光泽', price: 100 },
+      jade:    { name: '玉石', desc: '温润云纹玉质', price: 100 },
+      glow:    { name: '荧光', desc: '亮色柔光描边', price: 100 }
     },
 
     /* ---------- 交互音效风格（影响 game.js 合成音的音色） ----------

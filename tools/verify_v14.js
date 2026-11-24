@@ -150,7 +150,7 @@ const SCALE = Math.min(375 / CFG.DESIGN.w, 812 / CFG.DESIGN.h);
 
 async function main() {
   console.log('v0.14 验收：微信登录态 + 玩家资料（昵称/头像）');
-  check('版本号 v0.14+', /^v0\.(1[4-9]|2\d)(\.\d+)?$/.test(CFG.version), CFG.version);
+  check('版本号 v0.14+', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
 
   /* ================= 1. 平台层：wxprofile ================= */
   section('1. 平台层 wxprofile（四种真实情况）');

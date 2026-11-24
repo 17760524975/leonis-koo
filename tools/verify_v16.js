@@ -143,9 +143,11 @@ function placeAllSolved(game) {
     `maxTier=${CFG.HINT.maxTier} coin=${CFG.HINT.coinCost} item=${CFG.HINT.itemName}`);
   check('已删除 freePerLevel（每关不再白送）', CFG.HINT.freePerLevel === undefined,
     'freePerLevel=' + CFG.HINT.freePerLevel);
-  check('邀请有礼：+20 巧币 +1 查找道具',
-    CFG.ECON.inviteCoin === 20 && CFG.ECON.inviteHint === 1,
-    `coin=${CFG.ECON.inviteCoin} hint=${CFG.ECON.inviteHint}`);
+  /* v0.41：邀请改成「累计人数 + 8 档阶梯」，旧的 inviteCoin / inviteHint 已下线 */
+  check('邀请有礼：改为 8 档阶梯（旧的每日 +20 巧币已下线）',
+    CFG.ECON.inviteCoin === undefined && CFG.INVITE.tiers.length === 8 &&
+    CFG.INVITE.tiers[0].coin === 30 && CFG.INVITE.needCleared === 4,
+    `tiers=${CFG.INVITE.tiers && CFG.INVITE.tiers.length} need=${CFG.INVITE.needCleared}`);
   check('任务奖励配置字段已移除',
     CFG.ECON.taskCoin === undefined && CFG.ECON.taskCoin3 === undefined &&
     CFG.ECON.taskEnergy === undefined && CFG.ECON.taskPlays === undefined);
@@ -299,30 +301,31 @@ function placeAllSolved(game) {
   const S3 = g3.state;
   const D3 = g3._debug;
   D3.go('home');
-  const coinI = S3.save.coin;
+  /* v0.41：分享只「发出邀请」，不当场发奖；也不再有每日一次的限制 */
+  const coinI = S3.save.coin, hintI = S3.save.hintItems;
+  S3.inviteCd = 0;
   D3.fireBtn('invite_share');
-  check('邀请有礼：+20 巧币 +1 查找道具',
-    S3.save.coin === coinI + CFG.ECON.inviteCoin && S3.save.hintItems === 1,
-    `coin=${coinI}→${S3.save.coin} items=${S3.save.hintItems}`);
-  check('邀请 toast 写清两样奖励',
-    S3.toast && /巧币/.test(S3.toast.text) && /查找道具/.test(S3.toast.text),
-    S3.toast && S3.toast.text);
-  const coinI2 = S3.save.coin;
+  check('分享只发邀请券，不当场发巧币 / 道具',
+    S3.save.coin === coinI && S3.save.hintItems === hintI && (S3.save.invitePend || []).length === 1,
+    `coin=${coinI}→${S3.save.coin} items=${S3.save.hintItems} pend=${(S3.save.invitePend || []).length}`);
+  check('邀请 toast 写清「完成 4 关才计入」',
+    S3.toast && /完成 4 关/.test(S3.toast.text), S3.toast && S3.toast.text);
+  S3.inviteCd = 0;
   D3.fireBtn('invite_share');
-  check('同一天重复邀请不再发奖',
-    S3.save.coin === coinI2 && S3.save.hintItems === 1,
-    `coin=${S3.save.coin} items=${S3.save.hintItems}`);
+  check('不限每日一次：可以继续发出邀请',
+    (S3.save.invitePend || []).length === 2, 'pend=' + (S3.save.invitePend || []).length);
 
-  /* 在线奖励 40 分钟档给 1 个、60 分钟档再给 1 个 */
+  /* 在线奖励 40 分钟档给 1 个、60 分钟档再给 1 个（基线取当前道具数） */
   var td = new Date();
   S3.save.onlineDay = td.getFullYear() + '-' + (td.getMonth() + 1) + '-' + td.getDate();
   S3.save.onlineSec = 2400;
   S3.save.onlineGot = {};
+  const baseItems = S3.save.hintItems;
   D3.onlineClaim('o5');
-  check('在线 40 分钟档：+1 查找道具', S3.save.hintItems === 2, 'items=' + S3.save.hintItems);
+  check('在线 40 分钟档：+1 查找道具', S3.save.hintItems === baseItems + 1, 'items=' + S3.save.hintItems);
   S3.save.onlineSec = 3600;
   D3.onlineClaim('o6');
-  check('在线 60 分钟档：再 +1 查找道具', S3.save.hintItems === 3, 'items=' + S3.save.hintItems);
+  check('在线 60 分钟档：再 +1 查找道具', S3.save.hintItems === baseItems + 2, 'items=' + S3.save.hintItems);
 
   /* ================= 8. 文案一致 / 包体 ================= */
   section('8. 文案、源码约束与包体');

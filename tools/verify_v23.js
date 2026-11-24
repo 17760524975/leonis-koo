@@ -12,7 +12,8 @@
  *
  * 拆成可断言的口径：
  *   ① 广告复活：巧币不变（旧版 +90），且不再有每关 2 次上限
- *   ② 首通奖励：1★=2 / 2★=3 / 3★=5；重复通关 0，且不扣体力
+ *   ② 首通奖励：v0.23 时 1★=2 / 2★=3 / 3★=5；v0.40 起改为
+ *      累计总额 21/32/53 + 「升星补差价」（本脚本的金额断言已同步到 v0.40）
  *   ③ 结算页 ×5：只作用于当次（adUsed 一次即锁），再点不再给
  *   ④ 初始 50 巧币；连带把提示 40→30、巧币复活 100→80
  */
@@ -98,8 +99,12 @@ function resultTexts(S, D) {
   section('1. 版本与数值配置');
   check('版本 v0.23 起（v0.24 继续沿用本版规则）', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
   check('初始巧币 50（旧版 120）', E.coinInit === 50, String(E.coinInit));
-  check('首通奖励 = [2,3,5]（按星级）',
-    JSON.stringify(E.coinFirst) === '[2,3,5]', JSON.stringify(E.coinFirst));
+  /* v0.40：奖励从「单次 2/3/5」改为「累计总额」；v0.41 又把逐级差价改成 1 / 2。
+   * 具体数字由 verify_v041 断言，这里只保证「总额制」这套结构还在。 */
+  check('星级奖励改成累计总额表（3 档、递增）',
+    Array.isArray(E.starReward) && E.starReward.length === 3 &&
+    E.starReward[0] < E.starReward[1] && E.starReward[1] < E.starReward[2],
+    JSON.stringify(E.starReward));
   check('结算页 ×5 倍率 = 5', E.coinWinAdMul === 5, String(E.coinWinAdMul));
   check('巧币复活 80（旧版 100）', E.coinRevive === 80, String(E.coinRevive));
   check('提示 30（旧版 40）', H.coinCost === 30, String(H.coinCost));
@@ -111,7 +116,7 @@ function resultTexts(S, D) {
     String(E.energyBuy));
 
   /* ================= 2. 首通奖励按星级 ================= */
-  section('2. 首通奖励：1★2 / 2★3 / 3★5');
+  section('2. 首通奖励：1★21 / 2★32 / 3★53（v0.40 总额制）');
   D.go('play');
   const L0 = D.LEVELS[0];
   const cases = [
@@ -126,7 +131,7 @@ function resultTexts(S, D) {
     const c0 = S.save.coin;
     S.elapsed = c.elapsed; S.steps = c.steps; S.hintUsed = false;
     D.win();
-    const want = E.coinFirst[c.stars - 1];
+    const want = E.starReward[c.stars - 1];
     check(`${c.stars}★ 首通 → +${want} 巧币`,
       S.result.stars === c.stars && S.result.first === true && S.save.coin - c0 === want,
       `stars=${S.result.stars} first=${S.result.first} +${S.save.coin - c0}`);
@@ -134,13 +139,16 @@ function resultTexts(S, D) {
 
   /* ================= 3. 重复通关 ================= */
   section('3. 重复通关：0 奖励、first=false');
+  /* v0.40：星级与「已发金额」要一起置满 —— 只改 starOf 会被判成「升星补差」，
+   * 那正是新逻辑该做的事，但这里要测的是「重复通关 0 奖励」 */
   S.save.starOf['1'] = 3;
+  S.save.starPaid['1'] = E.starReward[2];
   S.save.streak = 0; S.save.streakSeen = [];
   D.setupLevel(0);
   const cRep = S.save.coin;
   S.elapsed = 0; S.steps = 0;
   D.win();
-  check('已通过的关再通关 → +0 巧币', S.save.coin - cRep === 0 && S.result.gain === 0,
+  check('已 3★ 的关再通关 → +0 巧币（总额已领满）', S.save.coin - cRep === 0 && S.result.gain === 0,
     `+${S.save.coin - cRep} gain=${S.result.gain}`);
   check('结果里标记为非首通', S.result.first === false, String(S.result.first));
 
@@ -199,8 +207,9 @@ function resultTexts(S, D) {
   S.elapsed = 0; S.steps = 0;
   D.win();
   tx = resultTexts(S, D);
-  check('文案写「已通过 · 重复挑战无奖励」',
-    tx.indexOf('已通过 · 重复挑战无奖励') >= 0, tx.filter(s => /已通过/.test(s)).join('|'));
+  /* v0.40：文案改成「已通过 · 星级未提升，无奖励」（升星补差也有进账，不能一律说无奖励） */
+  check('文案写「已通过 · 星级未提升，无奖励」',
+    tx.some(s => s.indexOf('已通过 · 星级未提升') >= 0), tx.filter(s => /已通过/.test(s)).join('|'));
   check('重复通关没有「看视频 ×5」按钮', tx.indexOf('看视频 ×5') < 0,
     tx.filter(s => /看视频/.test(s)).join('|'));
 

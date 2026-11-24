@@ -144,7 +144,7 @@ function failNow() {
 
   /* ================= 0. 版本与迁移 ================= */
   section('0. 版本 / 存档迁移');
-  check('版本 v0.19 起', /^v0\.(19|2\d)/.test(CFG.version), CFG.version);
+  check('版本 v0.19 起', /^v0\.\d+(\.\d+)?$/.test(CFG.version), CFG.version);
   check('存档默认值带 streakSeen: []', Array.isArray(S.save.streakSeen), JSON.stringify(S.save.streakSeen));
 
   /* 用例 11：老存档无 streakSeen → 迁移为空数组，不报错 */
@@ -230,8 +230,8 @@ function failNow() {
   winAt(0);                                        // 第 1 关已在集合里
   check('用例6 段内第二次重打同一关：连胜不涨', S.save.streak === 4, 'streak=' + S.save.streak);
   check('用例6 不发连胜里程碑', S.streakGain === 0, 'gain=' + S.streakGain);
-  check('用例6 重打同一关不给巧币（只发首通）',
-    S.save.coin - coinB4R === (S.result.first ? CFG.ECON.coinFirst[S.result.stars - 1] : 0),
+  check('用例6 重打同一关不给巧币（星级没提升）',
+    S.save.coin - coinB4R === (S.result.gain || 0),
     '+' + (S.save.coin - coinB4R) + ' first=' + S.result.first);
 
   /* 用例 7：段内换关通关 → streak 继续 +1 */

@@ -89,10 +89,16 @@ const L = D.homeLayout();
 const starBottomPct = 1 - (L.starY + 12) / dh;
 check('星数行离底边 < 8%（旧版底部留白约 16%）',
   starBottomPct < 0.08 && starBottomPct > 0.01, (starBottomPct * 100).toFixed(1) + '%');
-check('三件套仍保持 继续 → 四巧板 → 七巧板 的顺序与间距',
-  L.startY < L.set4Y && L.set4Y < L.set7Y && L.set7Y < L.starY &&
-  Math.abs((L.set4Y - L.startY) - 138) < 0.01 && Math.abs((L.set7Y - L.set4Y) - 126) < 0.01,
-  `${L.startY.toFixed(0)}/${L.set4Y.toFixed(0)}/${L.set7Y.toFixed(0)}/${L.starY.toFixed(0)}`);
+/* v0.38：用户要求「开始游戏按钮放到关卡下面」，顺序改为
+ * 四巧板 → 七巧板 → 开始 → 星数；入口卡片同时缩小到 408×100。 */
+check('v0.38 竖向顺序：四巧板 → 七巧板 → 开始 → 星数',
+  L.set4Y < L.set7Y && L.set7Y < L.startY && L.startY < L.starY &&
+  Math.abs((L.set7Y - L.set4Y) - (CFG.LAYOUT.HOME.setGap || 118)) < 0.01 &&
+  Math.abs((L.startY - L.set7Y) - (CFG.LAYOUT.HOME.startGap || 126)) < 0.01,
+  `${L.set4Y.toFixed(0)}/${L.set7Y.toFixed(0)}/${L.startY.toFixed(0)}/${L.starY.toFixed(0)}`);
+check('v0.38 入口卡片缩小到 408×100',
+  CFG.LAYOUT.HOME.setW === 408 && CFG.LAYOUT.HOME.setH === 100,
+  `${CFG.LAYOUT.HOME.setW}×${CFG.LAYOUT.HOME.setH}`);
 const hitsHome = D.hitList();
 const need = ['start', 'set_t4', 'set_t7', 'entry_skin', 'settings', 'hud_energy'];
 check('主页热区齐全（布局下移后没把按钮挪出屏幕）',
@@ -129,9 +135,15 @@ check('切到七巧板后四项保持一致（旧版会退回默认）',
 check('七巧板用的是自己的存档（进度/体力仍分开）',
   D.saveKey === 'tangram7_save_v1', D.saveKey);
 
-D.applySkin('sunset'); D.useSet('tangram4'); step(16);
+D.applyBgFx('geometric');      // 先关掉深色特效，单独验证深色皮肤自己的调色板
+D.applySkin('dusk'); D.useSet('tangram4'); step(16);
 check('在七巧板里换肤，切回四巧板同样生效',
-  S.save.skin === 'sunset', S.save.skin);
+  S.save.skin === 'dusk', S.save.skin);
+check('夜间护眼是深色皮肤（深底 + 浅字，深色字段整套齐）',
+  game._debug.COLORS.bg === CFG.SKINS.dusk.bg &&
+  game._debug.COLORS.board === CFG.SKINS.dusk.board &&
+  game._debug.COLORS.targetEdge === CFG.SKINS.dusk.targetEdge,
+  `${game._debug.COLORS.bg} / ${game._debug.COLORS.board}`);
 check('深色背景自动叠暗色调色板（星夜）',
   (function () {
     D.applyBgFx('stars');

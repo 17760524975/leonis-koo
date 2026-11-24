@@ -120,9 +120,9 @@ function tapD(x, y) {
   const S = game.state;
 
   /* ---------- 1. T 字关 ---------- */
-  section('1. 四巧板 30 关里保留 T 字型（原 120 关）');
+  section('1. 四巧板 36 关里保留 T 字型（原 120 关；v0.45 起为第 36 关）');
   const L4 = game._debug.LEVELS;
-  check('四巧板共 30 关', L4.length === 30, 'count=' + L4.length);
+  check('四巧板共 36 关', L4.length === 36, 'count=' + L4.length);
   const tIdx = L4.findIndex(l => /T/.test(l.name || ''));
   check('存在 T 字关', tIdx >= 0, 'idx=' + tIdx);
   /* 与原 120 关里的 T 字型逐点比对（那关是唯一"像实物"的关，玩家点名要留） */
@@ -131,7 +131,8 @@ function tapD(x, y) {
   const oldT = bak.TANGRAM_DATA.sets.tangram4.levels[119];
   if (tIdx >= 0) {
     const lv = L4[tIdx];
-    check('T 字关在最后一关（大师章）', tIdx === 29 && lv.chapter === 3, `idx=${tIdx} chapter=${lv.chapter}`);
+    check('T 字关在最后一关（大师章）', tIdx === L4.length - 1 && lv.chapter === 3,
+      `idx=${tIdx}/${L4.length - 1} chapter=${lv.chapter}`);
     check('T 字轮廓与原 120 关完全一致', JSON.stringify(lv.outline) === JSON.stringify(oldT.outline));
     check('T 字四块解算一致', JSON.stringify(lv.solution) === JSON.stringify(oldT.solution));
     check('T 字仍带关名（列表里能认出来）', lv.name === 'T 字型', 'name=' + lv.name);

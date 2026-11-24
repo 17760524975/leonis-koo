@@ -13,8 +13,8 @@ const urlBase = 'file:///' + path.join(ROOT, 'tools', 'harness.html').replace(/\
 const SHOTS = [
   { name: 'v27_home_aurora', q: 'screen=home&w=750&bgfx=aurora&skin=night' },
   { name: 'v27_home_stars', q: 'screen=home&w=750&bgfx=stars&skin=night' },
-  { name: 'v27_home_bubbles', q: 'screen=home&w=750&bgfx=bubbles&skin=ocean' },
-  { name: 'v27_home_petals', q: 'screen=home&w=750&bgfx=petals&skin=sunset' },
+  { name: 'v27_home_bubbles', q: 'screen=home&w=750&bgfx=bubbles&skin=dusk' },
+  { name: 'v27_home_petals', q: 'screen=home&w=750&bgfx=petals&skin=dusk' },
   { name: 'v27_home_geometric', q: 'screen=home&w=750&bgfx=geometric&skin=mint' },
   { name: 'v27_skin_theme', q: 'screen=home&w=750&skinpanel=1&skintab=0' },
   { name: 'v27_skin_bg', q: 'screen=home&w=750&skinpanel=1&skintab=1' },

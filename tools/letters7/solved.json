@@ -1,0 +1,730 @@
+[
+ {
+  "ch": "A",
+  "a": 22.03291050621744,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": true,
+  "okExact": false,
+  "minIou": 0.5062012083576931,
+  "a0": 22.09920813060957
+ },
+ {
+  "ch": "B",
+  "a": 21.76205872614078,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": false,
+  "okExact": false,
+  "minIou": 0.5602126641414721,
+  "a0": 22.66881117306331
+ },
+ {
+  "ch": "C",
+  "a": 22.816552300797436,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": true,
+  "okExact": false,
+  "minIou": 0.5213009391462871,
+  "a0": 21.734189655931505
+ },
+ {
+  "ch": "D",
+  "a": 22.112212643695685,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": true,
+  "okExact": false,
+  "minIou": 0.8998144100801813,
+  "a0": 22.06807649071391
+ },
+ {
+  "ch": "E",
+  "a": 22.135085992265857,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": true,
+  "okExact": false,
+  "minIou": 0.8959116642763919,
+  "a0": 22.183890551479017
+ },
+ {
+  "ch": "F",
+  "a": 23.318206186047508,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": false,
+  "okExact": false,
+  "minIou": 0.5220343403729862,
+  "a0": 22.21204628124118
+ },
+ {
+  "ch": "G",
+  "a": 21.90641786577633,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": true,
+  "okExact": false,
+  "minIou": 0.5226347275861981,
+  "a0": 21.788758569500924
+ },
+ {
+  "ch": "H",
+  "a": 21.23694893340378,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": false,
+  "okExact": false,
+  "minIou": 0.6620915915538942,
+  "a0": 22.12182180562894
+ },
+ {
+  "ch": "I",
+  "a": 21.86223729401881,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": true,
+  "okExact": false,
+  "minIou": 0.4987140442837829,
+  "a0": 21.906049392804718
+ },
+ {
+  "ch": "J",
+  "a": 22.48408467516543,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": false,
+  "okExact": false,
+  "minIou": 0.5024758565887008,
+  "a0": 21.991475621249247
+ },
+ {
+  "ch": "K",
+  "a": 22.022305326304892,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": false,
+  "okExact": false,
+  "minIou": 0.5325969881923789,
+  "a0": 21.84319115880278
+ },
+ {
+  "ch": "L",
+  "a": 21.093505788986207,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": false,
+  "okExact": false,
+  "minIou": 0.5056251055563243,
+  "a0": 21.581241854907237
+ },
+ {
+  "ch": "M",
+  "a": 23.400769642792163,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": false,
+  "okExact": false,
+  "minIou": 0.5124855002787374,
+  "a0": 22.29069312515876
+ },
+ {
+  "ch": "N",
+  "a": 22.30085914936895,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": true,
+  "okExact": false,
+  "minIou": 0.5133712396718073,
+  "a0": 22.318714120665643
+ },
+ {
+  "ch": "O",
+  "a": 22.07517259275659,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": false,
+  "okExact": false,
+  "minIou": 0.5091239852140276,
+  "a0": 22.38861317723811
+ },
+ {
+  "ch": "P",
+  "a": 22.286408660212352,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": true,
+  "okExact": false,
+  "minIou": 0.9126134471335665,
+  "a0": 22.096379793984354
+ },
+ {
+  "ch": "Q",
+  "a": 21.01336717425363,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": false,
+  "okExact": false,
+  "minIou": 0.507457972467211,
+  "a0": 21.888924139847532
+ },
+ {
+  "ch": "R",
+  "a": 22.102721880800274,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": true,
+  "okExact": false,
+  "minIou": 0.9287138117030765,
+  "a0": 22.380236817335067
+ },
+ {
+  "ch": "S",
+  "a": 21.355954673111665,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": true,
+  "okExact": false,
+  "minIou": 0.5208586800116844,
+  "a0": 22.24578611782465
+ },
+ {
+  "ch": "T",
+  "a": 23.04676849018148,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": false,
+  "okExact": false,
+  "minIou": 0.5132168728100127,
+  "a0": 21.974416943345734
+ },
+ {
+  "ch": "U",
+  "a": 21.301943573298658,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": true,
+  "okExact": false,
+  "minIou": 0.535652406585556,
+  "a0": 22.189524555519437
+ },
+ {
+  "ch": "V",
+  "a": 22.803311066597665,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": false,
+  "okExact": false,
+  "minIou": 0.6857531096513849,
+  "a0": 21.808828487564387
+ },
+ {
+  "ch": "W",
+  "a": 22.25644727702496,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": true,
+  "okExact": false,
+  "minIou": 0.8997619563517026,
+  "a0": 22.110517859154726
+ },
+ {
+  "ch": "X",
+  "a": 21.307350844250912,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": false,
+  "okExact": false,
+  "minIou": 0.5252663952614924,
+  "a0": 22.195157129428033
+ },
+ {
+  "ch": "Y",
+  "a": 21.993688952060687,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": false,
+  "okExact": false,
+  "minIou": 0.4941049481157164,
+  "a0": 22.28788908802267
+ },
+ {
+  "ch": "Z",
+  "a": 22.36469694071456,
+  "cls": [
+   2,
+   2,
+   1,
+   1,
+   1,
+   0.5,
+   0.5
+  ],
+  "solved": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "rings": [],
+  "okCls": true,
+  "okIds": true,
+  "okExact": false,
+  "minIou": 0.7636884789641402,
+  "a0": 22.20923231451281
+ }
+]

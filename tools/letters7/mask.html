@@ -1,0 +1,26 @@
+<!doctype html><meta charset="utf-8"><body style="background:#fff">
+<pre id="out">PENDING</pre>
+<script>
+var im = new Image();
+im.onload = function () {
+  var W = im.naturalWidth, H = im.naturalHeight;
+  var c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  var g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0,0,W,H);
+  g.drawImage(im, 0, 0);
+  var d = g.getImageData(0,0,W,H).data;
+  var lines = [W + 'x' + H];
+  for (var y = 0; y < H; y++) {
+    var s = '';
+    for (var x = 0; x < W; x++) {
+      var i = (y*W+x)*4, r=d[i],gg=d[i+1],b=d[i+2];
+      s += (r>238 && gg>238 && b>238) ? '0' : '1';
+    }
+    lines.push(s);
+  }
+  document.getElementById('out').textContent = lines.join('\n');
+};
+im.onerror = function () { document.getElementById('out').textContent = 'ERR'; };
+im.src = 'ref.webp';
+</script>
