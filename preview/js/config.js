@@ -9,7 +9,7 @@
   'use strict';
 
   return {
-    version: 'v0.56',
+    version: 'v0.58',
 
     /* ---------- 品牌（v0.6 改名「方寸巧拼」） ----------
      * 游戏名只在这里定义一次：主页标题、分享文案、工程名都从这里取，
@@ -577,7 +577,7 @@
         decay: 2600,          // 衰减时间常数（ms）
         cycleEnd: 9000,       // 单轮排程时长，之后按 tail 循环
         life: 1600,           // 单朵小花存活（ms）
-        minSize: 26, maxSize: 46,
+        minSize: 22, maxSize: 36,
         petals: 5,
         maxAlive: 16,         // 同屏上限（低帧率减半）
         bandTop: 329,         // 上留白带下界：v0.23 结算卡上边缘 335 再留 6
@@ -587,6 +587,36 @@
         bandBottom: 1237,     // 下留白带上界：1175 + 36(上浮) + 26(半径)
         bandBottomMax: 1360   // 下留白带下界：避开底部工具栏（1370~1470）
       }
+    },
+
+    /* ---------- v0.58 通关动画（彩带 / 玫瑰花瓣 / 蝴蝶） ----------
+     * 彩带改成「空气阻力 + 终端速度」模型：纸片初速被空气迅速吃掉，
+     * 之后匀速飘落（terminal 300px/s ≈ 只有 v0.55 弹道模型的 1/6 落速），
+     * 所以同样的 8.6s 里它在屏幕上多待 5 倍时间，节奏自然慢下来。
+     * 四波由少到多（14 → 30 → 48 → 64），前 1.3 秒是「一小把」，
+     * 之后越喷越多 —— 这是用户要的「由少量变大量的进化过程」。 */
+    WIN_FX: {
+      life: 8600,
+      fadeStart: 6.0,       // 秒：开始整体淡出
+      fadeDur: 1.8,
+      drag: 1.35,           // 空气阻力系数 k（1/s）
+      terminal: 300,        // 终端落速（px/s）
+      waves: [
+        { at: 0,    n: 14, sp: 290 },
+        { at: 380,  n: 30, sp: 340 },
+        { at: 820,  n: 48, sp: 390 },
+        { at: 1340, n: 64, sp: 440 }
+      ],
+      /* 玫瑰花瓣：主色 / 淡色 / 内卷暗面都从这 6 档里取，避免出现"塑料粉" */
+      petalTotal: 3000,
+      petalColors: ['#C81D3A', '#E2405A', '#F26B80', '#FA9FB0', '#D22B45', '#F7CFD6'],
+      /* 蝴蝶翅色：帝王斑蝶 / 大蓝闪蝶 / 白粉蝶 / 黄粉蝶 */
+      butterfly: [
+        { w1: '#F49A16', w2: '#FFC24A', e: '#5A2A06', s: '#FFF3D6' },
+        { w1: '#3E6FD8', w2: '#7CA6F2', e: '#12244D', s: '#DCE9FF' },
+        { w1: '#F3E3F7', w2: '#FFF8FF', e: '#7A5C8E', s: '#CBA9DF' },
+        { w1: '#EFC24E', w2: '#FADF8E', e: '#6C4B0A', s: '#FFF6D8' }
+      ]
     },
 
     /* ---------- v0.5 经济系统（巧币 / 体力） ----------
@@ -913,15 +943,16 @@
      * pitch=频率倍率、decay=时值倍率、wave=振荡器类型、bell=是否加泛音层。
      * wood 为当前默认音色；其余由两端 game.js 的 setSfxStyle 应用。 */
     SFX_STYLES: {
-      wood:   { name: '木质', desc: '笃·笃·笃', wave: 'sine',     pitch: 1.00, decay: 1.00, bell: false },
-      bell:   { name: '铃铛', desc: '清脆铃音', wave: 'triangle', pitch: 1.62, decay: 1.30, bell: true  },
-      water:  { name: '水滴', desc: '叮咚水声', wave: 'sine',     pitch: 1.34, decay: 0.72, bell: true  },
-      retro:  { name: '复古', desc: '电子街机', wave: 'square',   pitch: 0.94, decay: 0.58, bell: false },
+      /* v0.58：desc 改成「具体是哪种乐器」，与新的乐器化合成引擎对应 */
+      wood:   { name: '木质', desc: '梆子·笃', wave: 'sine',     pitch: 1.00, decay: 1.00, bell: false },
+      bell:   { name: '铃铛', desc: '铜钟余音', wave: 'triangle', pitch: 1.62, decay: 1.30, bell: true  },
+      water:  { name: '水滴', desc: '水滴清响', wave: 'sine',     pitch: 1.34, decay: 0.72, bell: true  },
+      retro:  { name: '复古', desc: '8bit 街机', wave: 'square',   pitch: 0.94, decay: 0.58, bell: false },
       /* v0.28 新增 4 套音色 */
-      chime:  { name: '风铃', desc: '空灵悠长', wave: 'sine',     pitch: 1.90, decay: 1.85, bell: true  },
-      marimba:{ name: '木琴', desc: '圆润弹跳', wave: 'triangle', pitch: 1.15, decay: 0.62, bell: false },
-      bubble: { name: '泡泡', desc: '轻快啵啵', wave: 'sine',     pitch: 1.55, decay: 0.42, bell: true  },
-      synth:  { name: '合成器', desc: '未来电子', wave: 'sawtooth', pitch: 0.86, decay: 0.92, bell: false }
+      chime:  { name: '风铃', desc: '铝管风铃', wave: 'sine',     pitch: 1.90, decay: 1.85, bell: true  },
+      marimba:{ name: '木琴', desc: '马林巴琴', wave: 'triangle', pitch: 1.15, decay: 0.62, bell: false },
+      bubble: { name: '泡泡', desc: '气泡啵啵', wave: 'sine',     pitch: 1.55, decay: 0.42, bell: true  },
+      synth:  { name: '合成器', desc: '滤波锯齿', wave: 'sawtooth', pitch: 0.86, decay: 0.92, bell: false }
     },
 
     /* ---------- v0.28：深色背景特效自动切换的暗色调色板 ----------

@@ -289,7 +289,20 @@ function profile(file) {
   section('5. 音效：低频为主、无方波、衰减极短');
   const gPrev = fs.readFileSync(path.join(ROOT, 'preview/js/game.js'), 'utf8');
   const gMp = fs.readFileSync(path.join(ROOT, 'miniprogram/game.js'), 'utf8');
-  check('两端都不再用 square 波', gPrev.indexOf("'square'") < 0 && gMp.indexOf("'square'") < 0);
+  /* v0.58：8 种音效风格各自对应一件真实乐器，其中「复古」本来就是 8-bit 街机音，
+   * 方波是它的音色本体，必须保留。这里改成锁「默认木质不用方波 + 只有复古用方波」，
+   * 意图（默认音效不能是刺耳的电子方波）不变。 */
+  const matWave = (src, key) => {
+    const at = src.indexOf(key + ': {');
+    if (at < 0) return null;
+    const m = src.slice(at, at + 260).match(/wave: '([a-z]+)'/);
+    return m ? m[1] : null;
+  };
+  const squareUsers = ['wood', 'bell', 'water', 'chime', 'marimba', 'bubble', 'synth']
+    .filter(k => matWave(gPrev, k) === 'square' || matWave(gMp, k) === 'square');
+  check('默认木质等 7 种音色不用 square 波（只有「复古」是 8-bit 方波）',
+    squareUsers.length === 0 && matWave(gPrev, 'retro') === 'square' && matWave(gMp, 'retro') === 'square',
+    'square 用户：' + (squareUsers.join(',') || '仅 retro'));
   check('两端都没有旧的 1500 / 2600Hz 噪声',
     !/noise\(\s*0\.0\d+,\s*0\.\d+,\s*(1500|2600)/.test(gPrev) &&
     !/noiseBurst\(\s*0\.0\d+,\s*0\.\d+,\s*(1500|2600)/.test(gMp));
@@ -298,7 +311,9 @@ function profile(file) {
    * 断言按新实现改口径，但意图不变：吸附音仍然必须"低频为体 + 音高下坠"；
    * 下方还有对 sfx_snap.wav 的实测频谱断言（0~300Hz 占比、衰减、高频占比）。 */
   const snapF = s => { const m = s.match(/snap:\s*\{\s*f:\s*(\d+)/); return m ? +m[1] : null; };
-  const woodSub = /wood:\s*\{[^}]*\[\.50,\s*\.40,\s*\.062\][^}]*glide:\s*-\.05/;
+  /* v0.58：木质表按梆子的真实模态重写（半频 0.50 那一枚的振幅/衰减随之微调），
+   * 断言跟着改成新数值，意图不变：吸附音必须有「半频分音 + 音高下坠」。 */
+  const woodSub = /wood:\s*\{[^}]*\[\.50,\s*\.32,\s*\.066\][^}]*glide:\s*-\.045/;
   check('吸附音仍是「低频为体 + 音高下坠」（198Hz + 半频分音）',
     snapF(gPrev) === 198 && snapF(gMp) === 198 &&
     woodSub.test(gPrev) && woodSub.test(gMp),

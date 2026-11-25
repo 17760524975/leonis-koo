@@ -141,52 +141,155 @@ function noiseBurst(dur, gain, filterFreq, delay) {
   } catch (e) {}
 }
 
-/* ---------- v0.31 音效引擎：模态合成（modal synthesis） ----------
- * 旧版每个操作音是「两个正弦 + 6ms 指数渐入」，听起来"假"的两个根因：
- *   ① 只有 2 个分音 —— 真实物体被敲击是一组非谐分音同时衰减（木、玻璃、金属各不相同）；
- *   ② 没有瞬态 —— 软起音听不到"碰上了"的那一下，耳朵会直接判定为电子音。
- * 新引擎：一组非谐分音（各自独立衰减）+ 1.5~3ms 带通噪声瞬态 + 音高微滑。
- * 材质表 SFX_MAT 同时服务 8 种音效风格；默认「木质」优先播 v0.31 重制的 wav
- * （生成脚本 tools/sfx_build.py），合成只在缺素材 / 换风格时兜底。 */
+/* ---------- v0.58 音效引擎：乐器化模态合成 ----------
+ * v0.31 已经用「非谐分音 + 噪声瞬态」摆脱了电子音，但 8 种风格跑的是同一套算法，
+ * 只改音高/衰减倍数 —— 听感上就是「同一件乐器调了个音」，谈不上像木琴或钟。
+ * 这一版按每件真实乐器的物理特征重写：
+ *   ① 分音比照乐器本身的振动模态（马林巴琴条 1:4:10、青铜钟 hum/prime/tierce、
+ *      铝管风铃的极端非谐 1:2.76:5.4…）；
+ *   ② 主要分音成对出现、相差几音分 → 慢速拍频（"嗡——"的晃动，钟/风铃的灵魂）；
+ *   ③ 每次敲击挂一个琴体低通 + 共振 Q，把散落的分音收成一个整体
+ *      （没有这一步，分音各自干响，听起来就是几个正弦叠加）；
+ *   ④ 1.2ms 起音 + 槌头噪声瞬态 + 低频冲击（木质/马林巴落地的那声"咚"）。
+ * 8 种风格 = 8 件乐器，分音表、包络、滤波器全部独立。 */
+
 var SFX_BASE = {
   tap:  { f: 660, d: 0.10, g: 0.11 },
   pick: { f: 392, d: 0.14, g: 0.15 },
   snap: { f: 198, d: 0.26, g: 0.22 }
 };
-/* p: [分音比, 振幅, 衰减时间]；click/hz/tau: 瞬态强度/中心频率/时长；glide: 音高滑移（负=下坠） */
+
+/* p: [分音比, 振幅, 衰减秒]；beat: 拍频失谐（音分）；ring: 余音延长倍数
+ * lpMul/lpQ: 琴体低通截止（×f0）与 Q；fenv: 截止扫频（减法合成的滤波器包络）
+ * click/hz/tau: 瞬态强度 / 中心频率 / 时长；thump: 低频冲击强度 */
 var SFX_MAT = {
-  wood:    { p: [[1, 1, .048], [2.02, .52, .030], [3.05, .26, .018], [.50, .40, .062]], click: .50, hz: 2400, tau: .0022, glide: -.05 },
-  bell:    { p: [[1, 1, .90], [2.00, .48, .55], [2.76, .42, .44], [5.40, .18, .22], [8.16, .08, .12]], click: .12, hz: 7000, tau: .0015, glide: 0 },
-  water:   { p: [[1, 1, .16], [1.50, .34, .10], [2.70, .18, .06]], click: .30, hz: 3000, tau: .0018, glide: .22 },
-  retro:   { p: [[1, 1, .14], [2.00, .40, .09], [3.00, .20, .05]], click: .10, hz: 5000, tau: .0012, glide: 0 },
-  chime:   { p: [[1, 1, 1.30], [2.01, .30, .90], [3.93, .18, .60], [6.80, .08, .35]], click: .06, hz: 8000, tau: .0015, glide: 0 },
-  marimba: { p: [[1, 1, .34], [3.93, .34, .12], [9.20, .14, .05]], click: .26, hz: 1800, tau: .0020, glide: -.02 },
-  bubble:  { p: [[1, 1, .10], [2.20, .30, .05]], click: .26, hz: 2500, tau: .0016, glide: .38 },
-  synth:   { p: [[1, 1, .20], [2.00, .45, .12], [4.00, .20, .07]], click: .06, hz: 4200, tau: .0014, glide: 0 }
+  /* 木质梆子：非谐、极短、强起音，带一点低频"闷"的体感 */
+  wood: {
+    wave: 'triangle', ring: 1.0,
+    p: [[1, 1, .052], [2.42, .44, .030], [4.11, .20, .018], [6.80, .09, .011], [.50, .32, .066]],
+    click: .62, hz: 2600, tau: .0022, glide: -.045,
+    lpMul: 12, lpQ: 1.2, thump: .22
+  },
+  /* 青铜钟：hum .5 / prime 1 / tierce 1.19 / quint 1.51 / nominal 2.0
+   * + 上方 deciem 2.5 / undeciem 3.0 / duodeciem 4.07；失谐 7 音分 → 拍频余音 */
+  bell: {
+    wave: 'sine', ring: 2.4, beat: 7, norm: .50,
+    p: [[.50, .52, 1.55], [1, .95, 1.10], [1.19, .60, .92], [1.51, .40, .76],
+        [2.00, .52, .60], [2.51, .24, .44], [3.01, .18, .32], [4.07, .10, .22]],
+    click: .10, hz: 7200, tau: .0014, glide: 0,
+    lpMul: 16, lpQ: .9
+  },
+  /* 水滴：真实水滴是音高向上滑的"嘀"（不是往下掉），极短，带一点水花噪声 */
+  water: {
+    wave: 'sine', ring: 1.0,
+    p: [[1, 1, .120], [1.62, .30, .070], [2.90, .12, .038]],
+    click: .34, hz: 3200, tau: .0016, glide: .34,
+    lpMul: 20, lpQ: 1.6
+  },
+  /* 8-bit 街机：方波 + 快速下滑 + 极短，像芯片音源的单声道 blip */
+  retro: {
+    wave: 'square', ring: .85,
+    p: [[1, 1, .100], [2.00, .32, .062], [3.00, .14, .034]],
+    click: .18, hz: 5200, tau: .0011, glide: -.16,
+    lpMul: 9, lpQ: .7
+  },
+  /* 铝管风铃：分音极端非谐（1 : 2.76 : 5.4 : 8.9），余音极长，靠 4 音分拍频晃动 */
+  chime: {
+    wave: 'sine', ring: 3.2, beat: 4,
+    p: [[1, 1, 1.85], [2.76, .40, 1.25], [5.40, .20, .85], [8.93, .10, .50], [13.3, .04, .30]],
+    click: .05, hz: 8200, tau: .0013, glide: 0,
+    lpMul: 22, lpQ: .8
+  },
+  /* 马林巴：琴条按 1 : 4 : 10 调音（4 倍频是"木"的音色来源），槌头噪声偏软 */
+  marimba: {
+    wave: 'sine', ring: 1.4,
+    p: [[1, 1, .380], [4.00, .40, .140], [9.90, .12, .046], [16.2, .05, .020]],
+    click: .30, hz: 1500, tau: .0026, glide: -.018,
+    lpMul: 11, lpQ: 1.0, thump: .12
+  },
+  /* 泡泡：更低更短，上行滑音更夸张（肥皂泡破裂的"啵"） */
+  bubble: {
+    wave: 'sine', ring: .7,
+    p: [[1, 1, .080], [2.24, .26, .042]],
+    click: .30, hz: 2400, tau: .0015, glide: .52,
+    lpMul: 18, lpQ: 2.0, thump: .10
+  },
+  /* 减法合成 lead：锯齿波 + 滤波器包络（截止从亮扫到暗） */
+  synth: {
+    wave: 'sawtooth', ring: 1.0,
+    p: [[1, 1, .200], [2.00, .38, .130], [3.00, .20, .085]],
+    click: .05, hz: 4000, tau: .0013, glide: 0,
+    lpMul: 16, lpQ: 6, fenv: { from: 26, to: 6, t: .13 }
+  }
 };
 
-/* 一次敲击：分音组 + 瞬态。delay 用于琶音排程。 */
+/* 一次敲击：琴体滤波 → 分音组（含拍频对）→ 瞬态 / 低频冲击。delay 用于琶音排程。 */
 function strike(f0, dur, gain, mat, wave, delay) {
   if (!AC) return;
   var t0 = AC.currentTime + (delay || 0);
+  /* ① 琴体：低通 + 共振，把散落的分音收成一件乐器；合成器再加滤波器包络 */
+  var dest = masterGain;
+  try {
+    if (AC.createBiquadFilter) {
+      var body = AC.createBiquadFilter();
+      body.type = 'lowpass';
+      body.frequency.setValueAtTime(Math.max(320, f0 * (mat.lpMul || 14)), t0);
+      if (mat.lpQ) body.Q.value = mat.lpQ;
+      if (mat.fenv) {
+        var fe = mat.fenv;
+        body.frequency.setValueAtTime(Math.max(240, f0 * fe.from), t0);
+        body.frequency.exponentialRampToValueAtTime(Math.max(200, f0 * fe.to), t0 + fe.t);
+      }
+      body.connect(masterGain);
+      dest = body;
+    }
+  } catch (e) { dest = masterGain; }
+
+  var oscType = mat.wave || ((wave && wave !== 'sine') ? wave : 'sine');
+  var ring = mat.ring || 1;
+  /* ② 分音组：拍频对只给前 3 个主分音（全部成对会让声音糊成一团，也浪费振子） */
   for (var i = 0; i < mat.p.length; i++) {
     var r = mat.p[i][0], a = mat.p[i][1], tau = mat.p[i][2];
+    var copies = (mat.beat && i < 3) ? 2 : 1;
+    for (var ci = 0; ci < copies; ci++) {
+      try {
+        var o = AC.createOscillator(), g = AC.createGain();
+        o.type = oscType;
+        o.frequency.setValueAtTime(f0 * r, t0);
+        if (mat.glide) {
+          o.frequency.exponentialRampToValueAtTime(Math.max(20, f0 * r * (1 + mat.glide)), t0 + 0.06);
+        }
+        if (ci === 1) {
+          if (o.detune) o.detune.setValueAtTime(mat.beat, t0);      // 几音分 → 慢速拍频
+          else o.frequency.setValueAtTime(f0 * r * (1 + mat.beat / 1200), t0);
+        }
+        /* 余音 = dur × ring，且不超过自身衰减时间的 5.5 倍（钟/风铃才长得起来） */
+        var life = Math.min(2.6, Math.max(0.05, Math.min(dur * ring, tau * 5.5)));
+        var amp = Math.max(0.0004, gain * a * (ci === 1 ? 0.55 : 1) * (mat.norm || 1));
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(amp, t0 + 0.0012);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + life);
+        o.connect(g); g.connect(dest);
+        o.start(t0); o.stop(t0 + life + 0.02);
+      } catch (e) {}
+    }
+  }
+  /* ③ 槌头/指尖碰上的那一下：极短带通噪声 */
+  if (mat.click > 0) noiseBurst(mat.tau * 3, gain * mat.click * 0.5, mat.hz, delay);
+  /* ④ 低频冲击：木质/马林巴落地的那声"咚"，只有高频分音没有重量 */
+  if (mat.thump) {
     try {
-      var o = AC.createOscillator(), g = AC.createGain();
-      o.type = (wave && wave !== 'sine') ? wave : 'sine';
-      o.frequency.setValueAtTime(f0 * r, t0);
-      if (mat.glide) {
-        o.frequency.exponentialRampToValueAtTime(Math.max(20, f0 * r * (1 + mat.glide)), t0 + 0.06);
-      }
-      var life = Math.min(dur, Math.max(0.05, tau * 4.5));
-      g.gain.setValueAtTime(0.0001, t0);
-      g.gain.exponentialRampToValueAtTime(Math.max(0.0004, gain * a), t0 + 0.0012);
-      g.gain.exponentialRampToValueAtTime(0.0001, t0 + life);
-      o.connect(g); g.connect(masterGain);
-      o.start(t0); o.stop(t0 + life + 0.02);
+      var o2 = AC.createOscillator(), g2 = AC.createGain();
+      o2.type = 'sine';
+      o2.frequency.setValueAtTime(f0 * 0.5, t0);
+      o2.frequency.exponentialRampToValueAtTime(Math.max(30, f0 * 0.3), t0 + 0.09);
+      g2.gain.setValueAtTime(0.0001, t0);
+      g2.gain.exponentialRampToValueAtTime(Math.max(0.0004, gain * mat.thump), t0 + 0.006);
+      g2.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.11);
+      o2.connect(g2); g2.connect(masterGain);
+      o2.start(t0); o2.stop(t0 + 0.13);
     } catch (e) {}
   }
-  if (mat.click > 0) noiseBurst(mat.tau * 3, gain * mat.click * 0.5, mat.hz, delay);
 }
 
 function buildSfxSynth(key) {
@@ -204,9 +307,9 @@ function buildSfxSynth(key) {
     sfx_win: function () {
       var ns = [523.25, 659.25, 783.99, 1046.50];
       for (var i = 0; i < ns.length; i++) {
-        strike(ns[i], 1.1, 0.11 - i * 0.005, SFX_MAT.bell, 'sine', i * 0.085);
+        strike(ns[i], 0.42, 0.11 - i * 0.005, SFX_MAT.bell, 'sine', i * 0.085);
       }
-      strike(261.63, 1.3, 0.06, SFX_MAT.bell, 'sine', 0.255);
+      strike(261.63, 0.6, 0.055, SFX_MAT.bell, 'sine', 0.255);
     },
     /* v0.48 时间到（超时失败）：A 小调下行 A4→F4→D4→A3，每音 0.19s 错开，
      * 尾巴补一个 A2 闷音收句。和 sfx_win 一样属于"情绪表达"，不随木质/铃音
@@ -219,7 +322,7 @@ function buildSfxSynth(key) {
       noiseBurst(0.18, 0.13, 220, 0);
       var ns = [440.00, 349.23, 293.66, 220.00];
       for (var i = 0; i < ns.length; i++) {
-        strike(ns[i], 0.46, 0.13 - i * 0.014, SFX_MAT.bell, 'sine', i * 0.19);
+        strike(ns[i], 0.28, 0.13 - i * 0.014, SFX_MAT.bell, 'sine', i * 0.19);
       }
       strike(110.00, 1.05, 0.09, SFX_MAT.wood, 'sine', 0.62);
     }

@@ -239,7 +239,8 @@
         if (wt > 0) {
           S.win.t = wt;
           if (S.winFx) S.winFx.t = wt;
-          if (S.flower) S.flower.t = Math.min(wt, 1500);
+          /* v0.57：花瓣剧本自己算时间轴，直接给到目标毫秒（不要和旧的 1500 上限绑） */
+          if (S.flower) S.flower.t = wt;
           if (wt > 900) { S.overlay = 'result'; S.resT = wt - 900; }
         }
       }

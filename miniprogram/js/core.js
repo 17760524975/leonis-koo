@@ -1816,8 +1816,9 @@
        * 否则四巧板失败后切到七巧板再复活，会把另一套数据集的连胜接回来。 */
       state.streakBeforeFail = 0;
       state.seenBeforeFail = [];
-      state.flower = null;   // v0.3.4 A4a：切数据集时清掉未播完的鲜花
+      state.flower = null;   // 切数据集时清掉未播完的花瓣
       state.winFx = null;
+      state.petalScene = null;
       state.lastTap = null;  // v0.4 A1：切数据集不残留双击配对
       go('home');
     }
@@ -1854,7 +1855,7 @@
       /* v0.14：切页就撤掉盖在画布上的原生授权按钮，别让它留在别的页面上 */
       if (state.overlay !== 'settings') hideProfileButton();
       /* v0.6：离开对局页就收掉通关鲜花/结算态，避免下次进来还在飘 */
-      if (page !== 'play') { state.win = null; state.flower = null; state.winFx = null; }
+      if (page !== 'play') { state.win = null; state.flower = null; state.winFx = null; state.petalScene = null; }
       // 进关卡页时跳到「当前进度所在章」，关卡再多也不该每次都从第 1 章翻起
       if (page === 'levels') {
         var um = Math.max(1, Math.min(state.save.unlockedMax || 1, LEVELS.length));
@@ -1971,8 +1972,9 @@
       state.msg = ''; state.msgT = 0;
       state.overlapT = 0; state.overlapPairs = [];
       state.win = null; state.result = null; state.resT = 0; state.starShown = 0;
-      state.flower = null;   // v0.3.4 A4a：重开关卡不残留上一局鲜花
+      state.flower = null;   // 重开关卡不残留上一局花瓣
       state.winFx = null;
+      state.petalScene = null;
       state.lastTap = null;  // v0.4 A1：重开关卡不残留双击配对
       state.hint = null;
       state.judge = new J.Judge();
@@ -2254,6 +2256,7 @@
       /* v0.55：通关特效（光爆 + 双扩散环 + 彩带雨）。在 render 的最上层绘制，
        * 会从结算面板之上飞过 —— 参考视频里就是这种「彩带盖住 UI」的冲击力。 */
       state.winFx = makeWinFx(lv);
+      state.petalScene = makePetalScene(lv);
       env.audio.play('sfx_win');
       /* 星级沿用策划 5.7 原规则（三星=时限+步数；二星=时限内）。
        * v0.3 A3 变更点：用提示（hint_used）从「只给 1 星」放宽为「封顶 ★★☆」。
@@ -2364,7 +2367,7 @@
        * 玩家补完体力关掉面板还能再点一次「下一关」。 */
       if (!openLevel(state.levelIdx + 1)) return;
       state.overlay = null;
-      state.win = null; state.result = null; state.flower = null; state.winFx = null;
+      state.win = null; state.result = null; state.flower = null; state.winFx = null; state.petalScene = null;
       state.adSim = null; state.adWait = null;
       /* v0.6：离开结算页 → 从欢庆曲切回本关关卡曲 */
       setLevelScene();
@@ -3279,11 +3282,11 @@
       }
       if (state.flower) {
         state.flower.t += dt;
-        if (state.flower.t > C.FLOWER.total) state.flower = null;
+        if (state.flower.t > C.WIN_FX.petalTotal) state.flower = null;
       }
       if (state.winFx) {
         state.winFx.t += dt;
-        if (state.winFx.t > 3600) state.winFx = null;
+        if (state.winFx.t > C.WIN_FX.life) state.winFx = null;
       }
       if (state.win) {
         state.win.t += dt;
@@ -3423,13 +3426,14 @@
       text(s, x, y, size, color, align, weight);
     }
 
-    /* ---------------- v0.3.4 A4a 鲜花绽放（纯视觉层，零图片 / 零热区） ----------------
-     * 算法照抄 animation/flower-demo.html（drawFlower / flowerState / drawFlowers），
-     * 常量取 config.FLOWER；缓动复用 geom.js 的 easeOutCubic / easeOutBack，淡出用 t²。
-     * 只依赖 t，不写 hits；由 renderPlay() 末尾调用，永远在结算面板之前绘制。 */
-    function fClamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
-    function fSeg(t, a, b) { return fClamp01((t - a) / (b - a)); }
-    function fEaseIn(t) { return t * t; }
+    /* ---------------- v0.58 玫瑰花瓣 + 蝴蝶（替换原「鲜花绽放」） ----------------
+     * 用户要求：彩带放慢、由少变多、更逼真；原来的程序化鲜花换成真实感的玫瑰花瓣 + 蝴蝶。
+     *
+     * 花瓣：玫瑰花瓣特有的「顶端小凹口 + 内卷暗面 + 边缘高光」三层画法，
+     *       飘落时做 3D 翻面（水平缩放 = cos(flip)）、缓慢自转、左右轻摆。
+     * 蝴蝶：前翅 + 后翅 + 身体 + 触角，翅面带翅斑与深色翅缘；翅膀开合用 scaleX 模拟，
+     *       沿正弦轨迹游荡（不是直线平移），翅频 6~10Hz。
+     * 只依赖 t，不写 hits，不参与判定。 */
     function fShade(hex, pct) {
       var n = parseInt(hex.slice(1), 16);
       var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
@@ -3439,111 +3443,181 @@
       return 'rgb(' + r + ',' + g + ',' + b + ')';
     }
 
-    /* 单朵花：花瓣朝 -Y，逐瓣 rotate 排布；无 shadowBlur，同色加深描边做层次 */
-    function drawFlower(c, cx, cy, scale, alpha, bloomP, colorList, petalN, L, spin) {
-      if (alpha <= 0 || scale <= 0) return;
+    /* 单片玫瑰花瓣：局部坐标里花瓣朝 -Y，底端收在原点 */
+    function drawRosePetal(c, x, y, size, rot, flip, alpha, hex) {
+      if (alpha <= 0.01 || size <= 1) return;
+      var fx = flip;
+      /* 侧立时保留 12% 宽度：取 0 会让花瓣整帧消失（闪一下） */
+      if (fx > -0.12 && fx < 0.12) fx = fx < 0 ? -0.12 : 0.12;
+      var L = size, W = size * 0.80;
+      /* 越接近侧立越透明 —— 真实的薄花瓣侧过来时本来就看不太见，
+       * 不这样处理它会变成一道红色划痕，反而像渲染 bug。 */
+      alpha *= 0.74 + 0.26 * Math.abs(fx);
+      var lit = 0.70 + 0.30 * Math.abs(fx);          // 越侧立受光越少
+      if (fx < 0) lit *= 0.88;                       // 背面暗一档
       c.save();
-      c.translate(cx, cy);
-      if (spin) c.rotate(spin);
-      c.scale(scale, scale);
+      c.translate(x, y);
+      c.rotate(rot);
+      c.scale(fx, 1);
       c.globalAlpha = alpha;
-      var len = L * (0.15 + 0.85 * G.easeOutCubic(bloomP));
-      var w = len * 0.42;
-      for (var i = 0; i < petalN; i++) {
-        var base = colorList[i % colorList.length];
-        c.save();
-        c.rotate((i * 2 * Math.PI / petalN) * G.easeOutCubic(bloomP));
-        c.beginPath();
-        c.moveTo(0, 0);
-        c.quadraticCurveTo(-w, -len * 0.55, 0, -len);
-        c.quadraticCurveTo(w, -len * 0.55, 0, 0);
-        c.closePath();
-        c.fillStyle = base; c.fill();
-        c.lineWidth = 1.5; c.strokeStyle = fShade(base, -12); c.stroke();
-        c.restore();
-      }
-      c.beginPath(); c.arc(0, 0, L * 0.22, 0, 7); c.fillStyle = '#FFC53D'; c.fill();
-      c.lineWidth = 1.5; c.strokeStyle = fShade('#FFC53D', -14); c.stroke();
-      c.beginPath(); c.arc(0, 0, L * 0.09, 0, 7); c.fillStyle = '#FFFFFF'; c.fill();
+      /* ① 花瓣主体：两侧鼓起、顶端中间一个小凹口（玫瑰花瓣的关键特征） */
+      c.beginPath();
+      c.moveTo(0, 0);
+      c.bezierCurveTo(-W * 0.74, -L * 0.20, -W * 0.94, -L * 0.62, -W * 0.42, -L * 0.94);
+      c.quadraticCurveTo(-W * 0.24, -L * 0.83, -W * 0.11, -L * 0.97);   // 左波峰
+      c.quadraticCurveTo(0, -L * 0.85, W * 0.11, -L * 0.97);            // 中间凹口
+      c.quadraticCurveTo(W * 0.24, -L * 0.83, W * 0.42, -L * 0.94);     // 右波峰
+      c.bezierCurveTo(W * 0.94, -L * 0.62, W * 0.74, -L * 0.20, 0, 0);
+      c.closePath();
+      c.fillStyle = fShade(hex, (lit - 1) * 100);
+      c.fill();
+      /* ② 内卷暗面：贴着左侧的一道月牙（不是从中间劈开 —— 那是"叶脉"不是卷边） */
+      c.beginPath();
+      c.moveTo(-W * 0.04, -L * 0.06);
+      c.bezierCurveTo(-W * 0.50, -L * 0.26, -W * 0.66, -L * 0.62, -W * 0.38, -L * 0.90);
+      c.bezierCurveTo(-W * 0.28, -L * 0.66, -W * 0.26, -L * 0.36, -W * 0.02, -L * 0.12);
+      c.closePath();
+      c.fillStyle = fShade(hex, (lit - 1) * 100 - 26);
+      c.fill();
+      /* ③ 边缘高光：顶端一条细弧，绒面质感 */
+      c.beginPath();
+      c.moveTo(-W * 0.30, -L * 0.92);
+      c.quadraticCurveTo(0, -L * 0.80, W * 0.30, -L * 0.92);
+      c.strokeStyle = fShade(hex, 26);
+      c.lineWidth = Math.max(0.8, size * 0.05);
+      c.stroke();
       c.restore();
     }
 
-    var flowerTargetsCache = null, flowerTargetsSrc = null;
-    function flowerTargets(F) {
-      if (flowerTargetsSrc === F.satellites && flowerTargetsCache) return flowerTargetsCache;
-      var arr = F.satellites.map(function (s) {
-        var r = s.ang * Math.PI / 180;
-        return {
-          ang: s.ang, color: s.color, size: s.size, delay: s.delay,
-          tx: F.main.x + F.satDist * Math.cos(r),
-          ty: F.main.y + F.satDist * Math.sin(r) * F.satYFactor
-        };
-      });
-      flowerTargetsSrc = F.satellites; flowerTargetsCache = arr;
-      return arr;
+    /* 蝴蝶：flap ∈ [0,1]，1 = 翅膀完全展开，0 = 几乎合拢（侧看） */
+    function drawButterfly(c, x, y, size, rot, flap, alpha, pal) {
+      if (alpha <= 0.01) return;
+      var open = 0.24 + 0.76 * flap;
+      c.save();
+      c.translate(x, y);
+      c.rotate(rot);
+      c.globalAlpha = alpha;
+      for (var s = -1; s <= 1; s += 2) {
+        c.save();
+        c.scale(s * open, 1);
+        /* 前翅 */
+        c.beginPath();
+        c.moveTo(size * 0.04, -size * 0.06);
+        c.bezierCurveTo(size * 0.52, -size * 0.86, size * 1.06, -size * 0.66, size * 0.94, -size * 0.14);
+        c.bezierCurveTo(size * 0.86, size * 0.10, size * 0.34, size * 0.12, size * 0.04, size * 0.02);
+        c.closePath();
+        c.fillStyle = pal.w1; c.fill();
+        c.strokeStyle = pal.e; c.lineWidth = Math.max(0.9, size * 0.06); c.stroke();
+        /* 后翅 */
+        c.beginPath();
+        c.moveTo(size * 0.03, size * 0.05);
+        c.bezierCurveTo(size * 0.56, size * 0.16, size * 0.74, size * 0.56, size * 0.40, size * 0.88);
+        c.bezierCurveTo(size * 0.14, size * 1.00, -size * 0.04, size * 0.62, -size * 0.02, size * 0.26);
+        c.closePath();
+        c.fillStyle = pal.w2; c.fill(); c.stroke();
+        /* 翅斑 */
+        c.beginPath();
+        c.arc(size * 0.52, -size * 0.36, size * 0.15, 0, Math.PI * 2);
+        c.fillStyle = pal.s; c.fill();
+        c.restore();
+      }
+      /* 身体 + 触角 */
+      c.beginPath();
+      if (c.ellipse) c.ellipse(0, size * 0.10, size * 0.075, size * 0.46, 0, 0, Math.PI * 2);
+      else c.arc(0, size * 0.10, size * 0.12, 0, Math.PI * 2);
+      c.fillStyle = '#3A2A1E'; c.fill();
+      c.beginPath();
+      c.moveTo(0, -size * 0.32);
+      c.quadraticCurveTo(-size * 0.30, -size * 0.70, -size * 0.46, -size * 0.88);
+      c.moveTo(0, -size * 0.32);
+      c.quadraticCurveTo(size * 0.30, -size * 0.70, size * 0.46, -size * 0.88);
+      c.strokeStyle = '#3A2A1E';
+      c.lineWidth = Math.max(0.7, size * 0.045);
+      c.stroke();
+      c.restore();
     }
 
-    /* 时间轴 → 主花 / 6 卫星花状态（与演示页 flowerState 同源） */
-    function flowerState(t, F) {
-      var bud = fSeg(t, 0, F.budEnd);
-      var bloom = fSeg(t, F.budEnd, F.bloomEnd);
-      var settle = fSeg(t, F.bloomEnd, F.settleEnd);
-      var fade = fSeg(t, F.overlayAt, F.fadeEnd);
-      var s, a;
-      if (t <= F.budEnd) {
-        s = 0.25 + 0.20 * G.easeOutCubic(bud);
-        a = 0.5 * G.easeOutCubic(bud);
-      } else if (t <= F.bloomEnd) {
-        s = 0.45 + (F.peakScale - 0.45) * G.easeOutBack(bloom);
-        a = 0.5 + 0.5 * G.easeOutCubic(bloom);
-      } else {
-        s = t <= F.settleEnd ? F.peakScale + (1 - F.peakScale) * G.easeOutCubic(settle) : 1;
-        a = 1;
+    /* 通关瞬间的花瓣 / 蝴蝶剧本（位置按图形中心算，只生成一次） */
+    function makePetalScene(lv) {
+      var bb = G.bbox([lv.outline]);
+      var cx = w2d((bb[0] + bb[2]) / 2), cy = h2d((bb[1] + bb[3]) / 2);
+      var low = !!state.lowFps;
+      var petals = [], i, n = low ? 16 : 28;
+      for (i = 0; i < n; i++) {
+        /* 按序号均匀分角 + 随机扰动：纯随机会有一半挤在同一侧、堆成一团 */
+        var ang = (i / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.7;
+        var sp = 150 + Math.random() * 240;
+        petals.push({
+          ox: (Math.random() - 0.5) * 34, oy: (Math.random() - 0.5) * 34,
+          vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp * 0.52 - (60 + Math.random() * 150),
+          size: 17 + Math.random() * 13,
+          rot0: Math.random() * Math.PI * 2, spin: (Math.random() - 0.5) * 1.8,
+          flip0: Math.random() * Math.PI * 2, flipV: 1.0 + Math.random() * 2.0,
+          sway: Math.random() * Math.PI * 2, swayA: 8 + Math.random() * 14,
+          swayF: 0.8 + Math.random() * 0.9,
+          ci: (Math.random() * C.WIN_FX.petalColors.length) | 0,
+          delay: Math.random() * 340
+        });
       }
-      var spin = t > F.settleEnd
-        ? Math.min(1, (t - F.settleEnd) / (F.overlayAt - F.settleEnd)) * 6 * Math.PI / 180 : 0;
-      if (t > F.overlayAt) {
-        a = 1 - fEaseIn(fade);
-        s = 1 + (0.90 - 1) * fEaseIn(fade);
+      var bfs = [], nb = low ? 3 : 5;
+      for (i = 0; i < nb; i++) {
+        var dir = (i % 2 === 0) ? 1 : -1;
+        bfs.push({
+          delay: 150 + i * 150,
+          x0: cx + dir * (20 + Math.random() * 70),
+          y0: cy + (Math.random() - 0.5) * 50,
+          ax: 50 + Math.random() * 80, ay: 26 + Math.random() * 40,
+          fx: 0.5 + Math.random() * 0.5, fy: 0.85 + Math.random() * 0.7,
+          ph: Math.random() * Math.PI * 2,
+          rise: 22 + Math.random() * 34,
+          size: 18 + Math.random() * 8,
+          rot0: (Math.random() - 0.5) * 0.5,
+          flapHz: 6.2 + Math.random() * 3.4,
+          pal: C.WIN_FX.butterfly[i % C.WIN_FX.butterfly.length]
+        });
       }
-      var main = { s: s, a: a, p: bloom, spin: spin };
-      var sats = flowerTargets(F).map(function (cfg) {
-        var p = fSeg(t, cfg.delay, cfg.delay + F.satDur);
-        if (p <= 0) return { cx: F.main.x, cy: F.main.y, s: 0, a: 0, p: 0, cfg: cfg };
-        var mv = G.easeOutCubic(p);
-        var sc = cfg.size * G.easeOutBack(p);
-        var al = G.easeOutCubic(fSeg(t, cfg.delay, cfg.delay + F.budEnd));
-        if (t > F.overlayAt) {
-          al = 1 - fEaseIn(fade);
-          sc = cfg.size + (cfg.size * 0.9 - cfg.size) * fEaseIn(fade);
-        }
-        return {
-          cx: F.main.x + (cfg.tx - F.main.x) * mv,
-          cy: F.main.y + (cfg.ty - F.main.y) * mv,
-          s: Math.max(0, sc), a: al, p: p, cfg: cfg
-        };
-      });
-      return { main: main, sats: sats, fade: fade };
+      return { cx: cx, cy: cy, petals: petals, butterflies: bfs };
     }
 
-    function drawFlowers(c, t, F, low) {
-      var f = flowerState(t, F);
-      drawFlower(c, F.main.x, F.main.y, f.main.s, f.main.a, f.main.p,
-        F.colors, F.main.petals, F.main.L, low ? 0 : f.main.spin);
-      for (var i = 0; i < f.sats.length; i++) {
-        if (low && i % 2 === 1) continue;   // 低帧率降级：卫星花 6→3（取 0/2/4）
-        var st = f.sats[i];
-        if (st.a <= 0) continue;
-        drawFlower(c, st.cx, st.cy, st.s, st.a, st.p,
-          [F.colors[st.cfg.color]], 5, F.main.L * st.cfg.size, 0);
+    function drawPetalScene(t, low) {
+      var sc = state.petalScene;
+      if (!sc) return;
+      var life = C.WIN_FX.petalTotal;
+      var i, tt, a;
+      for (i = 0; i < sc.petals.length; i++) {
+        var p = sc.petals[i];
+        tt = (t - p.delay) / 1000;
+        if (tt <= 0) continue;
+        /* 空气阻力模型：初速很快被吃掉，之后近匀速飘落（不是抛物线的石头） */
+        var k = 1.6, vt = 78;
+        var ek = 1 - Math.exp(-k * tt);
+        var x = sc.cx + p.ox + p.vx * ek / k + Math.sin(tt * p.swayF * 6.283 + p.sway) * p.swayA * Math.min(1, tt / 0.6);
+        var y = sc.cy + p.oy + (p.vy - vt) * ek / k + vt * tt;
+        a = Math.min(1, tt / 0.12);
+        if (t > life - 450) a *= Math.max(0, (life - t) / 450);
+        if (a <= 0.01) continue;
+        drawRosePetal(ctx, x, y, p.size, p.rot0 + p.spin * tt,
+          Math.cos(p.flip0 + p.flipV * tt), a, C.WIN_FX.petalColors[p.ci]);
+      }
+      for (i = 0; i < sc.butterflies.length; i++) {
+        var b = sc.butterflies[i];
+        tt = (t - b.delay) / 1000;
+        if (tt <= 0) continue;
+        var bx = b.x0 + Math.sin(tt * b.fx + b.ph) * b.ax + tt * 16;
+        var by = b.y0 - b.rise * Math.min(1, tt / 1.2) + Math.sin(tt * b.fy + b.ph * 1.7) * b.ay;
+        a = Math.min(1, tt / 0.3);
+        if (t > life - 450) a *= Math.max(0, (life - t) / 450);
+        if (a <= 0.01) continue;
+        drawButterfly(ctx, bx, by, b.size, b.rot0 + Math.sin(tt * 1.4 + b.ph) * 0.24,
+          0.5 + 0.5 * Math.sin(tt * 6.283 * b.flapHz), a, b.pal);
       }
     }
 
-    /* ---------------- v0.6 结算期持续小花流 ----------------
-     * 首波（主花 + 6 卫星）在 900ms 让位给结算面板后，由这一层接续：
-     * 只在面板上方(0~bandTop)与下方(bandBottom~底部)的留白带飘小花，
+    /* ---------------- v0.6 结算期持续花瓣流 ----------------
+     * 首波（ petals + butterflies ）让位给结算面板后，由这一层接续：
+     * 只在面板上方(0~bandTop)与下方(bandBottom~底部)的留白带飘落，
      * 绝不压住结算文字与按钮。密度按 gap0 → gapMax 指数衰减（由密到疏），
-     * 排程走完一遍后尾部循环 → 停在结算页多久都有花，不会戛然而止。
+     * 排程走完一遍后尾部循环 → 停在结算页多久都有花瓣。
      * 粒子由「关卡序号 + 数据集」做确定性伪随机，同一关每次落点一致。 */
     var flowerStreamCache = null, flowerStreamDst = null;
 
@@ -3559,18 +3633,26 @@
 
     function makeStreamParticle(t0, rnd, S, F, idx) {
       /* 上下带交替而不是随机：随机会出现「整屏都在上面、下面空着」的时刻，
-       * 交替能保证任一时刻上下都有花，画面更均衡。 */
+       * 交替能保证任一时刻上下都有花瓣，画面更均衡。
+       * v0.58：每 9 个里放一只蝴蝶（蝴蝶比花瓣更抓眼，太多就乱）。 */
       var top = (idx % 2 === 0);
       var x = 44 + rnd() * (C.DESIGN.w - 88);
       var y = top
         ? (S.bandTopMin + rnd() * Math.max(20, S.bandTop - S.bandTopMin - 40))
         : (S.bandBottom + rnd() * Math.max(20, S.bandBottomMax - S.bandBottom));
+      var bfly = (idx % 9) === 4;
       return {
         t0: t0, x: x, y: y,
-        size: S.minSize + rnd() * (S.maxSize - S.minSize),
+        kind: bfly ? 'bfly' : 'petal',
+        size: bfly
+          ? (S.minSize + 2 + rnd() * 6)
+          : (S.minSize + rnd() * (S.maxSize - S.minSize)),
         ci: Math.floor(rnd() * F.colors.length),
         rot: rnd() * Math.PI * 2,
         spin: (rnd() - 0.5) * 0.8,
+        flip0: rnd() * Math.PI * 2,
+        flipV: 0.8 + rnd() * 1.6,
+        sway: rnd() * Math.PI * 2,
         rise: 16 + rnd() * 20
       };
     }
@@ -3590,37 +3672,49 @@
       return arr;
     }
 
-
-    /* ================= v0.55 通关特效 =================
-     * 参考视频的做法：拼好的瞬间从图形中心炸开一片彩带（小方片、边飞边翻面、带重力），
-     * 同时中心白光一闪、两道圆环扩散。彩带画在最上层，会从结算面板之上飞过。
-     * 粒子用解析运动（位置 = 初速×t + ½gt²），不累加，掉帧也不会飘。 */
+    /* ================= v0.58 通关特效：彩带 =================
+     * 与 v0.55 的区别（用户反馈：要慢、要真、要由少变多）：
+     *   ① 时间轴拉长到 8.6s，落速从弹道模型（g=1750，0.6s 落地）改成
+     *      「空气阻力 + 终端速度 300px/s」——纸片飘 3~5s 才出屏；
+     *   ② 分四波喷射（14→30→48→64 片），前 1.3 秒只是一小把，之后越喷越多；
+     *   ③ 每片纸有独立的翻面相位与自转，正反面亮度不同（背面 -14%），
+     *      侧立时只画一条纸边高光 —— 这样才像纸，不像彩色方块。 */
     function makeWinFx(lv) {
       var bb = G.bbox([lv.outline]);
       var cx = w2d((bb[0] + bb[2]) / 2);
       var cy = h2d((bb[1] + bb[3]) / 2);
       var pal = [];
       DS.pieceOrder.forEach(function (id) { if (DS.pieces[id]) pal.push(DS.pieces[id].color); });
-      pal = pal.concat(['#FFD93D', '#FF6B6B', '#4D96FF', '#6BCB77', '#B983FF', '#FF9F1C']);
-      var parts = [];
-      var N = state.lowFps ? 120 : 240;
-      for (var i = 0; i < N; i++) {
-        var ang = (i / N) * Math.PI * 2 + (Math.random() - 0.5) * 0.55;
-        var sp = 520 + Math.random() * 1050;
-        var upBias = 460 + Math.random() * 520;
-        parts.push({
-          x: cx + (Math.random() - 0.5) * 40,
-          y: cy + (Math.random() - 0.5) * 40,
-          vx: Math.cos(ang) * sp * 0.95,
-          vy: Math.sin(ang) * sp * 0.40 - upBias,
-          w: 8 + Math.random() * 11,
-          h: 5 + Math.random() * 7,
-          rot: Math.random() * Math.PI * 2,
-          vr: (Math.random() - 0.5) * 18,
-          sway: Math.random() * Math.PI * 2,
-          color: pal[(Math.random() * pal.length) | 0],
-          delay: Math.random() * 110
-        });
+      pal = pal.concat(['#FFD93D', '#FF6B6B', '#4D96FF', '#6BCB77', '#B983FF', '#FF9F1C', '#FFFFFF']);
+      var CF = C.WIN_FX;
+      var parts = [], wv, i;
+      for (wv = 0; wv < CF.waves.length; wv++) {
+        var w = CF.waves[wv];
+        var n = state.lowFps ? Math.round(w.n * 0.55) : w.n;
+        for (i = 0; i < n; i++) {
+          var ang = Math.random() * Math.PI * 2;
+          /* 第一波几乎垂直向上（"一小把"），后面几波逐步张开成扇形 */
+          var spread = 0.35 + wv * 0.5;
+          var dir = Math.atan2(Math.sin(ang) * spread, Math.cos(ang));
+          var sp = w.sp * (0.6 + Math.random() * 0.8);
+          parts.push({
+            delay: w.at + Math.random() * (wv === 0 ? 80 : 240),
+            x: cx + (Math.random() - 0.5) * 26,
+            y: cy + (Math.random() - 0.5) * 26,
+            vx: Math.cos(dir) * sp,
+            vy: Math.sin(dir) * sp * 0.52 - (170 + Math.random() * 200),
+            w: 7 + Math.random() * 6,
+            h: 5 + Math.random() * 4,
+            rot0: Math.random() * Math.PI * 2,
+            spin: (Math.random() - 0.5) * 3.4,
+            flip0: Math.random() * Math.PI * 2,
+            flipV: 3.4 + Math.random() * 5.0,
+            sway: Math.random() * Math.PI * 2,
+            swayA: 11 + Math.random() * 20,
+            swayF: 0.7 + Math.random() * 1.1,
+            color: pal[(Math.random() * pal.length) | 0]
+          });
+        }
       }
       return { t: 0, cx: cx, cy: cy, parts: parts };
     }
@@ -3630,15 +3724,16 @@
       if (!fx || state.reduceMotion) return;
       var t = fx.t / 1000;                 // 秒
       var cx = fx.cx, cy = fx.cy;
+      var CF = C.WIN_FX;
 
-      /* ① 中心白光：0~0.5s，半径 40→300，亮度快速衰减 */
-      if (t < 0.62) {
-        var ft = t / 0.62;
-        var rad = 50 + ft * 360;
+      /* ① 中心白光：0.9s，比 v0.55 更慢更柔（硬闪会显得廉价） */
+      if (t < 0.9) {
+        var ft = t / 0.9;
+        var rad = 46 + ft * 330;
         var g1 = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
-        g1.addColorStop(0, 'rgba(255,255,255,' + (0.98 * Math.pow(1 - ft, 0.7)).toFixed(3) + ')');
-        g1.addColorStop(0.35, 'rgba(255,241,190,' + (0.70 * Math.pow(1 - ft, 0.8)).toFixed(3) + ')');
-        g1.addColorStop(1, 'rgba(255,241,190,0)');
+        g1.addColorStop(0, 'rgba(255,255,255,' + (0.88 * Math.pow(1 - ft, 0.8)).toFixed(3) + ')');
+        g1.addColorStop(0.38, 'rgba(255,238,190,' + (0.52 * Math.pow(1 - ft, 0.9)).toFixed(3) + ')');
+        g1.addColorStop(1, 'rgba(255,238,190,0)');
         ctx.save();
         ctx.fillStyle = g1;
         ctx.beginPath();
@@ -3646,45 +3741,63 @@
         ctx.fill();
         ctx.restore();
       }
-      /* ② 两道扩散圆环（错开 80ms） */
+      /* ② 两道扩散圆环（错开 110ms，1.15s 走完） */
       for (var r = 0; r < 2; r++) {
-        var rt = (t - r * 0.08) / 0.75;
+        var rt = (t - r * 0.11) / 1.15;
         if (rt <= 0 || rt >= 1) continue;
         ctx.save();
-        ctx.globalAlpha = (1 - rt) * 0.5;
-        ctx.strokeStyle = r ? '#8AF0B0' : '#FFE9A8';
-        ctx.lineWidth = 5 * (1 - rt) + 1.5;
+        ctx.globalAlpha = (1 - rt) * 0.42;
+        ctx.strokeStyle = r ? '#9BE8B8' : '#FFE9A8';
+        ctx.lineWidth = 4.5 * (1 - rt) + 1.2;
         ctx.beginPath();
-        ctx.arc(cx, cy, 30 + rt * 300, 0, Math.PI * 2);
+        ctx.arc(cx, cy, 26 + rt * 330, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
       }
-      /* ③ 彩带 */
-      var fadeAll = t > 2.3 ? Math.max(0, 1 - (t - 2.3) / 1.2) : 1;
+      /* ③ 彩带：阻力模型 + 3D 翻面 */
+      var fadeAll = t > CF.fadeStart ? Math.max(0, 1 - (t - CF.fadeStart) / CF.fadeDur) : 1;
       if (fadeAll <= 0) return;
-      var GR = 1750;
+      var k = CF.drag, vt = CF.terminal;
+      var H = DH() + 80;
       for (var i = 0; i < fx.parts.length; i++) {
         var p = fx.parts[i];
         var tt = t - p.delay / 1000;
         if (tt <= 0) continue;
-        var x = p.x + p.vx * tt + Math.sin(tt * 3.4 + p.sway) * 22;
-        var y = p.y + p.vy * tt + 0.5 * GR * tt * tt;
-        if (y > 1900) continue;
-        var rot = p.rot + p.vr * tt;
-        /* 翻转感：厚度随 cos 收缩，像一片方纸在翻面 */
-        var th = p.h * (0.25 + 0.75 * Math.abs(Math.cos(rot * 1.6)));
+        var ek = 1 - Math.exp(-k * tt);
+        var x = p.x + p.vx * ek / k + Math.sin(tt * p.swayF * 6.283 + p.sway) * p.swayA * Math.min(1, tt / 0.7);
+        var y = p.y + (p.vy - vt) * ek / k + vt * tt;
+        if (y > H) continue;
+        var rot = p.rot0 + p.spin * tt;
+        var flip = p.flip0 + p.flipV * tt;
+        var cf = Math.cos(flip);
+        var acf = Math.abs(cf);
+        var hh = p.h * Math.max(0.07, acf);
+        /* 受光：正面 = 1，背面 = 0.86，侧立时整体压暗一档 */
+        var lit = (0.70 + 0.30 * acf) * (cf < 0 ? 0.86 : 1);
         ctx.save();
-        ctx.globalAlpha = fadeAll * (tt < 0.12 ? tt / 0.12 : 1);
+        ctx.globalAlpha = fadeAll * (tt < 0.14 ? tt / 0.14 : 1) * 0.95;
         ctx.translate(x, y);
         ctx.rotate(rot);
-        ctx.fillStyle = p.color;
-        ctx.fillRect(-p.w / 2, -th / 2, p.w, th);
+        ctx.fillStyle = fShade(p.color, (lit - 1) * 100);
+        ctx.fillRect(-p.w / 2, -hh / 2, p.w, hh);
+        /* 折痕亮面：沿一侧长边压一条更亮的带 */
+        ctx.fillStyle = fShade(p.color, (lit - 1) * 100 + 16);
+        ctx.fillRect(-p.w / 2, -hh / 2, p.w, Math.max(0.6, hh * 0.38));
+        /* 侧立时补纸边高光，避免"片状物凭空消失" */
+        if (acf < 0.30) {
+          ctx.strokeStyle = 'rgba(255,255,255,' + (0.55 * (1 - acf / 0.30)).toFixed(3) + ')';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(-p.w / 2, hh / 2);
+          ctx.lineTo(p.w / 2, hh / 2);
+          ctx.stroke();
+        }
         ctx.restore();
       }
     }
 
     function drawWinStream(t, low) {
-      var S = C.FLOWER.stream, F = C.FLOWER;
+      var S = C.FLOWER.stream;
       var arr = flowerStreamParticles(state.setKey, state.levelIdx);
       /* 主排程走完后只循环最后一段，维持「稀疏但不断」的余韵 */
       var tail = S.gapMax * 4;
@@ -3698,11 +3811,22 @@
         var q = age / S.life;
         var a = Math.min(Math.min(1, q / 0.14), Math.min(1, (1 - q) / 0.30));
         if (a <= 0.01) continue;
-        var bloom = Math.min(1, age / 380);
-        var sc = (0.72 + 0.34 * G.easeOutCubic(bloom)) * (1 - 0.10 * q);
-        drawFlower(ctx, p.x, p.y - p.rise * (age / 1000), sc, a * 0.95, bloom,
-          [F.colors[p.ci]], S.petals, p.size,
-          low ? 0 : (p.rot + p.spin * (age / 1000)));
+        var y = p.y - p.rise * (age / 1000);
+        if (p.kind === 'bfly') {
+          /* 蝴蝶：贴着留白带横向游荡，翅频随个体不同 */
+          var bt = age / 1000;
+          drawButterfly(ctx, p.x + Math.sin(bt * 2.2 + p.sway) * 20, y - 6,
+            p.size, p.rot * 0.3 + Math.sin(bt * 1.6 + p.sway) * 0.2,
+            0.5 + 0.5 * Math.sin(bt * 6.283 * (6.8 + (p.spin + 0.4) * 3)),
+            a * 0.95, C.WIN_FX.butterfly[p.ci % C.WIN_FX.butterfly.length]);
+        } else {
+          var bloom = Math.min(1, age / 420);
+          var sc = (0.80 + 0.22 * G.easeOutCubic(bloom)) * (1 - 0.08 * q);
+          drawRosePetal(ctx, p.x + Math.sin(age / 900 + p.sway) * 9, y, p.size * sc,
+            p.rot + p.spin * (age / 1000),
+            Math.cos(p.flip0 + p.flipV * (age / 1000)), a * 0.96,
+            C.WIN_FX.petalColors[p.ci % C.WIN_FX.petalColors.length]);
+        }
         drawn++;
       }
     }
@@ -5697,12 +5821,11 @@
         drawButton(tb);
       }
 
-      /* v0.3.4 A4a：鲜花画在对局页最后一层、结算面板之前（不写 hits，不吞按钮）。
-       * reduceMotion 时不画（音乐照常）；低帧率时卫星花自动 6→3。 */
+      /* v0.58：玫瑰花瓣 + 蝴蝶画在对局页最后一层、结算面板之前
+       *（不写 hits，不吞按钮）。reduceMotion 时不画（音乐照常）；
+       * 低帧率时花瓣 28→16、蝴蝶 5→3。 */
       if (state.flower && !state.reduceMotion) {
-        /* v0.55：让彩带先炸 260ms，鲜花随后绽放，两段不抢焦点 */
-        var flT = Math.max(0, state.flower.t - 260);
-        if (flT > 0) drawFlowers(ctx, flT, C.FLOWER, !!state.lowFps);
+        drawPetalScene(state.flower.t, !!state.lowFps);
       }
     }
 
