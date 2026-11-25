@@ -1386,7 +1386,8 @@
         for (var c0 = 0; c0 < lv0.solution.length; c0++) {
           if (lv0.solution[c0].id === state.hint.id) hst0 = lv0.solution[c0];
         }
-        if (hst0 && !pieceSolved(pieceOf(hst0.id), hst0)) {
+        /* v0.51：这里同样改成「目标槽位有没有被填上」，而不是「那块板有没有落位」。 */
+        if (hst0 && !slotCovered(hst0)) {
           toast('这一步已经标出来了，先把它放上去');
           return false;
         }
@@ -2944,22 +2945,46 @@
         Math.abs(((p.angle - st.angle) % 360 + 540) % 360 - 180) <= 1 &&
         !!p.flipped === !!st.flipped;
     }
-    /* v0.11：优先「还没上板的块」，其次是「上板但没放对的块」。
-     * 旧版拿 solution[0] 兜底——当所有块都已上板（但没拼对）时会指到一块
-     * 已经摆在棋盘上的板，托盘不亮、落点高亮又被板压住，玩家什么提示都看不见。
-     * v0.50：「放对了」改用整块落位口径（pieceFit），和通关判定同一把尺子 ——
-     * 否则玩家按提示摆好了、提示还亮着，再点提示又指回同一块。 */
+    /* v0.51：某个标准解槽位是否已经被「某块板」几何重合地占住了。
+     * 不能按 id 判断 —— 七巧板里 T1/T2（大三角）、T4/T5（小三角）形状完全相同，
+     * 玩家拿 T2 那块去填 T1 的位置，几何上完全正确、也算拼对；
+     * 旧实现按 id 找「哪块还没上板」，就会提示玩家把另一块同样的板
+     * 放到一个已经被占满的位置（用户截图里反馈的正是这个）。 */
+    function slotCovered(st) {
+      var slotPoly = G.toWorld(LOCAL[st.id], st);
+      var a = Math.abs(G.area(slotPoly));
+      if (!(a > 0)) return false;
+      for (var i = 0; i < state.pieces.length; i++) {
+        var q = state.pieces[i];
+        if (!q || !q.onBoard) continue;
+        if (G.convexOverlapArea(piecePoly(q), slotPoly) > a * 0.98) return true;
+      }
+      return false;
+    }
+    /* 提示选块顺序（每一步都只考虑「还没被占住的槽位」）：
+     *   ① 槽位空着、对应那块还在托盘 → 圈托盘那块，虚线连到落点；
+     *   ② 槽位空着、对应那块已上板但没落位（摆歪了）→ 圈它，指向该槽；
+     *   ③ 槽位空着、对应那块已经落在别的槽上（同形状互换）→ 圈它，指向空槽。
+     * v0.50 之前用 solution[0] 兜底，v0.50 改整块落位口径后，同形状互换会让
+     * 「哪块」和「哪块该去哪」脱钩，所以这里必须按槽位而不是按 id 来判。 */
     function pickHintPiece() {
-      var lv = LEVELS[state.levelIdx], i, st, p;
+      var lv = LEVELS[state.levelIdx], i, st, p, covered = [];
+      for (i = 0; i < lv.solution.length; i++) covered[i] = slotCovered(lv.solution[i]);
       for (i = 0; i < lv.solution.length; i++) {
+        if (covered[i]) continue;
         st = lv.solution[i]; p = pieceOf(st.id);
         if (!p || !p.onBoard) return st.id;
       }
       for (i = 0; i < lv.solution.length; i++) {
+        if (covered[i]) continue;
         st = lv.solution[i]; p = pieceOf(st.id);
-        if (!pieceFit(p)) return st.id;
+        if (!p || !pieceFit(p)) return st.id;
       }
-      return null;                      // 全部放对（理论上已判定通关）
+      for (i = 0; i < lv.solution.length; i++) {
+        if (covered[i]) continue;
+        return lv.solution[i].id;
+      }
+      return null;                      // 所有槽位都被占满（理论上已判定通关）
     }
 
     function handleOverlayDown(x, y) {
@@ -3220,18 +3245,19 @@
       }
       if (state.overlay === 'rank') state.rankT += dt;
       if (state.hint) {
-        /* v0.20：没有计时器了 —— 提示一直亮着，直到被指的那块真的放对。
+        /* v0.20：没有计时器了 —— 提示一直亮着，直到被指的那个位置真的被填上。
          * 放对就收工（不自动改指下一块：一次购买只换一步指引，
          * 否则买一次就能一路看完整关解法）。
-         * v0.50：判定从「和标准解逐位对齐」改成「整块落位」。玩家凭自己理解
-         * 把这块摆进了图案（哪怕和标准解差几度/偏一点），金色提示就该消失，
-         * 而不是继续挂在那里、让人以为没放对（用户截图反馈的就是这个）。 */
-        var hpz = pieceOf(state.hint.id);
-        /* hpz.fit 是「上一次判定」的缓存，玩家把板摆正却还没松手时它是旧值；
-         * 这里对提示目标单独实时算一次（只一块板，代价可忽略），
-         * 保证「摆进去 → 提示立刻消失」不依赖判定时机。 */
-        if (!hpz) state.hint = null;
-        else if (hpz.onBoard && (hpz.fit || pieceFit(hpz))) state.hint = null;
+         * v0.50：判定从「和标准解逐位对齐」改成「整块落位」。
+         * v0.51：结束条件从「被圈的那块落位」改成「目标槽位被填上」——
+         * 同形状的板可以互换（T1↔T2、T4↔T5），被圈的那块可能早就落在别的槽上，
+         * 按旧口径买了提示会瞬间消失、什么也看不到。 */
+        var hsH = null, lvH = LEVELS[state.levelIdx];
+        for (var qh = 0; qh < lvH.solution.length; qh++) {
+          if (lvH.solution[qh].id === state.hint.id) hsH = lvH.solution[qh];
+        }
+        if (!hsH) state.hint = null;
+        else if (slotCovered(hsH)) state.hint = null;
       }
       if (state.press) state.pressT += dt;
       /* v0.4 A2：长按翻转已彻底移除——翻转改为 pointerup 后判定的「双击」，
@@ -8007,6 +8033,8 @@
       resize: resize,
       state: state,
       _debug: { judgeNow: judgeNow, setupLevel: setupLevel, useSet: useSet, win: win,
+        /* v0.52：提示选块 / 槽位占用判断（同形状板互换的验收要直接驱动这两个） */
+        pickHint: pickHintPiece, slotCovered: slotCovered, useHint: useHint,
         handleAt: handleDesign,   // v0.3.2 B1：测试用，返回手柄圆心的设计坐标
         /* v0.5：经济/体力/倒计时/皮肤的工具函数，供 verify_v05 直接驱动 */
         fireBtn: fireBtn, syncEnergy: syncEnergy, onlineClaim: onlineClaim,

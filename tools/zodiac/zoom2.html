@@ -1,0 +1,15 @@
+<!doctype html><meta charset="utf-8">
+<style>html,body{margin:0;background:#fff;overflow:hidden}
+.w{width:800px;height:400px;overflow:hidden;position:relative}
+img{position:absolute;image-rendering:pixelated;transform-origin:0 0}
+</style>
+<div class="w"><img id="i" src="ref.png"></div>
+<script>
+const q=new URLSearchParams(location.search);
+const x=+(q.get('x')||0), y=+(q.get('y')||177), w=+(q.get('w')||200), h=+(q.get('h')||178), s=+(q.get('s')||4);
+const im=document.getElementById('i');
+im.style.left=(-x*s)+'px'; im.style.top=(-y*s)+'px';
+im.style.width=(800*s)+'px'; im.style.height=(533*s)+'px';
+document.querySelector('.w').style.width=(w*s)+'px';
+document.querySelector('.w').style.height=(h*s)+'px';
+</script>

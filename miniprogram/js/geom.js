@@ -171,10 +171,24 @@
     return true;
   }
 
+  /* 把多边形规范成逆时针（有符号面积为负就反序）。
+   * v0.52：板件 flipped 之后 toWorld 会把绕向翻成顺时针，
+   * 而下面 Sutherland–Hodgman 的「内侧」判据只认逆时针 ——
+   * 不归一化的话，两块翻面的板叠在一起也裁不出交集、恒返回 0（漏检重叠）。 */
+  function ccw(poly) {
+    var a = 0;
+    for (var i = 0; i < poly.length; i++) {
+      var p = poly[i], q = poly[(i + 1) % poly.length];
+      a += p[0] * q[1] - q[0] * p[1];
+    }
+    return a < 0 ? poly.slice().reverse() : poly;
+  }
+
   /* 凸多边形交集面积（Sutherland–Hodgman；七块板都是凸的，够用且零依赖）。
    * 用来算「这块板压在别的板上有多少面积」，比栅格重叠对更直接。 */
   function convexOverlapArea(A, B) {
     if (!A || !B || A.length < 3 || B.length < 3) return 0;
+    A = ccw(A); B = ccw(B);
     var out = A.map(function (v) { return [v[0], v[1]]; });
     for (var i = 0; i < B.length; i++) {
       var p = B[i], q = B[(i + 1) % B.length];
