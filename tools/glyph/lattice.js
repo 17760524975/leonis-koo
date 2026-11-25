@@ -17,9 +17,27 @@ const path = require('path');
 const L = require('../zodiac/lib.js');
 const G = L.G;
 const UN = require('../zodiac/union.js');
+const SEG = require('./seg.js');
+const MASK = require('./mask.js');
 
 const U = L.U;
 const RAW = JSON.parse(fs.readFileSync(path.join(__dirname, 'letters_fit.json'), 'utf8'));
+
+/* 剪影直接从参考图的字母掩膜描（见 mask.js 里的说明）：
+ * 拟合出的七块板只用来定「怎么拼」，剪影用参考图本身，边就是参考图的直线。 */
+const REF = SEG.load(path.join(__dirname, 'ref.png'));
+const REF_LETTERS = SEG.segment(REF);
+const BOX = {};
+REF_LETTERS.forEach(g => { BOX[g.name] = g; });
+const MASK_CACHE = {};
+function maskOutlineOf(name, dilate) {
+  const k = name + ':' + (dilate || 1);
+  if (!MASK_CACHE[k]) {
+    const g = BOX[name];
+    MASK_CACHE[k] = MASK.letterOutline(REF.img, g, { close: 2, dilate: dilate || 1 });
+  }
+  return MASK_CACHE[k];
+}
 
 function solveLS(A, b) {
   const n = b.length;
@@ -233,6 +251,97 @@ function offsetLoop(loop, d) {
 }
 
 
+
+/* 折叠过短的边：把「台阶」这种 5~15 单位的小折线整体去掉 */
+function collapseShort(loop, minLen) {
+  let arr = loop.slice();
+  for (let pass = 0; pass < 12; pass++) {
+    const n = arr.length;
+    if (n <= 4) break;
+    let idx = -1, len = Infinity;
+    for (let i = 0; i < n; i++) {
+      const a = arr[i], b = arr[(i + 1) % n];
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (L < len) { len = L; idx = i; }
+    }
+    if (len >= minLen) break;
+    /* 去掉这条边的终点（保留起点），相当于把两点并成一点 */
+    arr.splice((idx + 1) % n, 1);
+  }
+  return arr;
+}
+
+/* 把每条边的方向吸附到 45° 的整数倍（差 > 10° 的保留原方向），再用相邻线求交重建顶点 */
+function regularizeLoop(loop, maxDeg) {
+  const n = loop.length;
+  if (n < 4) return loop;
+  const lim = (maxDeg || 10) * Math.PI / 180;
+  const lines = [];
+  for (let i = 0; i < n; i++) {
+    const a = loop[i], b = loop[(i + 1) % n];
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+    if (L < 1e-9) { lines.push(null); continue; }
+    const ang = Math.atan2(dy, dx);
+    const snap = Math.round(ang / (Math.PI / 4)) * (Math.PI / 4);
+    const off = Math.abs(((ang - snap + Math.PI) % (2 * Math.PI)) - Math.PI);
+    const use = off < lim ? snap : ang;
+    lines.push({ px: (a[0] + b[0]) / 2, py: (a[1] + b[1]) / 2, dx: Math.cos(use), dy: Math.sin(use) });
+  }
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const l1 = lines[(i - 1 + n) % n], l2 = lines[i];
+    if (!l1 || !l2) { out.push(loop[i]); continue; }
+    const den = l1.dx * l2.dy - l1.dy * l2.dx;
+    if (Math.abs(den) < 1e-6) { out.push(loop[i]); continue; }
+    const t2 = ((l2.px - l1.px) * l2.dy - (l2.py - l1.py) * l2.dx) / den;
+    const p = [l1.px + l1.dx * t2, l1.py + l1.dy * t2];
+    const d = Math.hypot(p[0] - loop[i][0], p[1] - loop[i][1]);
+    out.push(d > 8 ? loop[i] : p);
+  }
+  /* 去重（相邻点太近会做出零宽尖刺）+ 去共线 */
+  let arr = [];
+  for (const v of out) {
+    const last = arr[arr.length - 1];
+    if (!last || Math.hypot(v[0] - last[0], v[1] - last[1]) > 2.0) arr.push(v);
+  }
+  if (arr.length > 1 && Math.hypot(arr[0][0] - arr[arr.length - 1][0], arr[0][1] - arr[arr.length - 1][1]) <= 2.0) arr.pop();
+  for (let pass = 0; pass < 5; pass++) {
+    const keep = [];
+    const m = arr.length;
+    for (let i = 0; i < m; i++) {
+      const a = arr[(i - 1 + m) % m], b = arr[i], c = arr[(i + 1) % m];
+      const dx = c[0] - a[0], dy = c[1] - a[1], L = Math.hypot(dx, dy);
+      const d = L < 1e-9 ? Math.hypot(b[0] - a[0], b[1] - a[1])
+        : Math.abs((b[0] - a[0]) * dy - (b[1] - a[1]) * dx) / L;
+      if (d > 1.0) keep.push(b);
+    }
+    if (keep.length === arr.length) break;
+    arr = keep;
+  }
+  return arr;
+}
+
+
+/* 轮廓必须是简单多边形：自交的轮廓会让 pointInPoly / 栅格填充整片乱掉
+ * （S 就出现过：规则化后在拐弯处自交，覆盖率直接掉到 72%）。 */
+function isSimpleLoop(loop) {
+  const n = loop.length;
+  const seg = (i) => [loop[i], loop[(i + 1) % n]];
+  const inter = (a, b, c, d) => {
+    const cr = (p, q, r) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+    const d1 = cr(a, b, c), d2 = cr(a, b, d), d3 = cr(c, d, a), d4 = cr(c, d, b);
+    return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
+  };
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      const [a, b] = seg(i), [c, d] = seg(j);
+      if (inter(a, b, c, d)) return false;
+    }
+  }
+  return true;
+}
+
 /* ---------- 单图尝试 ---------- */
 function attempt(fig, mode) {
   const n = fig.pieces.length;
@@ -276,6 +385,7 @@ function attempt(fig, mode) {
     t = relax(ps, u, t0.map(q => q.slice()), t0, [1.0, 0.5, 0.25, 0.12, 0.06, 0.03]);
   }
 
+
   const polysPx = ps.map((p, i) => p.P.map(v => [v[0] + t[i][0], v[1] + t[i][1]]));
   let maxOv = 0;
   for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) maxOv = Math.max(maxOv, G.convexOverlapArea(polysPx[i], polysPx[j]));
@@ -292,60 +402,68 @@ function attempt(fig, mode) {
   const uA = UN.rasterArea(wpW, 0.5);
   const err = Math.max(0, (sumA - uA) / sumA);
 
-  /* 剪影：栅格化并集 → 边界串环 → DP 简化。
-   * 解析并集在「顶点相碰」处会产生零宽尖刺 → 轮廓自交 → pointInPoly/segCross 失真，
-   * 所以改用栅格轮廓。膨胀 1 格是必需的：膨胀 0 格时「顶点相碰」的接触点在 4 邻域上
-   * 不连通，环会断成几段（实测 12/12 全断）。res 0.25 + 膨胀 1 格 + DP 0.3 是实测最优：
-   * 12/12 严格包含，面积外扩 −0.03%~0.73%（≈0.2 世界单位的一圈，肉眼不可见）。 */
-  /* 字母比生肖小（4~7u 宽），栅格用 0.125u（12 世界单位）才不至于把 45° 斜边锯成台阶；
-   * 膨胀同样 1 格，刚好跨过 5 单位左右的接缝。 */
-  const GRES = +(process.env.GRES || 0.125), GDIL = +(process.env.GDIL || 1), GDP = +(process.env.GDP || 0.15);
-  let outer0 = UN.rasterOutline(wpW, GRES, GDIL, GDP);
-  if (!outer0 || outer0.length < 3) return { err: 1, maxOv: 1, t, inside: false, cx, cy, u };
+  /* 剪影 = 参考图字母掩膜描边（像素坐标）→ 世界坐标。
+   * 不用「七块板并集」描边：每块板有 0.05~0.3u 的拟合残差，「本该共线」的边会错开
+   * 几个单位，剪影就拐台阶；板间那条 1px 白缝又会被描进去（I / S / X 的内部狭缝）。
+   * 参考图本身就是矢量字母，直接描它，边就是参考图的直线。 */
+  const toW = v => [(v[0] - cx) * sc + 500, (v[1] - cy) * sc + 500];
+  /* 内孔用「板并集的解析环」—— 它和板精确一致，不会有「板啃进孔里」的问题；
+   * 太小的（板间细缝残留）丢掉。 */
   const loops = UN.unionPolys(wp, 0.6);
-  let holes = loops.length > 1 ? UN.splitLoops(loops, wp).holes.map(sh) : [];
+  let holes0 = loops.length > 1 ? UN.splitLoops(loops, wp).holes : [];
+  holes0 = holes0.filter(h => Math.abs(L.polyArea(h)) > 300);
+  const holesA = holes0.reduce((a, h) => a + Math.abs(L.polyArea(h)), 0);
 
-  /* 摆到棋盘正中：反解出来的图形只有「相对位置」是对的，绝对位置随质心走，
-   * 有的会长出棋盘（蛇/龙/猪）。这里按剪影 bbox 平移到中心，并保证四边留白 ≥ M。
-   * 只平移不缩放 —— 七块板的尺寸是全关卡共用一套托盘，缩放就对不上了。 */
   const bboxOf = arr => {
     let a = 1e9, b = 1e9, c = -1e9, d = -1e9;
     for (const v of arr) { if (v[0] < a) a = v[0]; if (v[0] > c) c = v[0]; if (v[1] < b) b = v[1]; if (v[1] > d) d = v[1]; }
     return [a, b, c, d];
   };
-  const M = 40;
-  const ob = bboxOf(outer0);
-  /* 边距自适应：参考图里的龙/蛇本来就是「一张长条」，993 宽的图形放不进 40 边距，
-   * 这时按剩余空间均分（最紧的龙左右各 3.5 单位），但绝不越出棋盘。 */
+  /* 参考图里板与板之间那条白缝会把彩色区啃掉一圈，所以掩膜要从「膨胀 1 像素」起试，
+   * 直到七块板都整块落在剪影里（最多试到 5 像素）。 */
+  /* 剪影还是从「七块板的并集」描（一定包住板），但要先做闭运算：
+   * 板之间那条 1px 白缝、以及「本该共线却错开几单位」形成的细凹口，
+   * 都会被剪影顺着描进去，重现出 I / S / X 那种内部狭缝和台阶。
+   * 闭运算（膨胀 K 格再腐蚀 K 格）只填凹口、不动外轮廓。K=2 格 = 0.25u = 24 单位，
+   * 实测能吃掉全部 6~20 单位的缝和台阶。 */
+  const GR = +(process.env.GRES || 0.125);
+  const GK = +(process.env.GCLOSE || 2);
+  const raw0 = UN.rasterOutline(wpW, GR, 1, 0.15, GK);
+  if (!raw0 || raw0.length < 3) return { err: 1, maxOv: 1, t, inside: false, cx, cy, u };
+
+  const ob = bboxOf(raw0);
   const span = Math.max(ob[2] - ob[0], ob[3] - ob[1]);
-  const mg = span <= 940 ? M : Math.max(2, (1000 - span) / 2);
+  const mg = span <= 940 ? 40 : Math.max(2, (1000 - span) / 2);
   let tx = 500 - (ob[0] + ob[2]) / 2, ty = 500 - (ob[1] + ob[3]) / 2;
   if (ob[0] + tx < mg) tx = mg - ob[0];
   if (ob[2] + tx > 1000 - mg) tx = 1000 - mg - ob[2];
   if (ob[1] + ty < mg) ty = mg - ob[1];
   if (ob[3] + ty > 1000 - mg) ty = 1000 - mg - ob[3];
-  const mv = arr => arr.map(v => [v[0] + tx, v[1] + ty]);
-  const outer = mv(outer0);
-  holes = holes.map(mv);
-  const wpS = wpW.map(mv);
+  const outer = raw0.map(v => [v[0] + tx, v[1] + ty]);
+  /* holes0 是「以图形质心为原点」的世界坐标，外轮廓已经是 +500 之后的了，
+   * 这里必须补上同样的 500，否则内孔会整体偏 500 单位（D/O 的覆盖率会掉到 73%） */
+  const holes = holes0.map(h => h.map(v => [v[0] + 500 + tx, v[1] + 500 + ty]));
+  const okInside = wpW.every(pp => G.pieceInside(pp.map(v => [v[0] + tx, v[1] + ty]), outer, holes, 3.0));
+  const wpS = wpW.map(v => [v[0] + tx, v[1] + ty]);
 
   if (process.env.DBGNAME && process.env.DBGNAME === fig.name) {
     console.log('  [DBG] 栅格剪影 ' + outer.length + ' 点:');
     console.log('   ' + outer.map(v => v.map(n => +n.toFixed(1)).join(',')).join('  '));
   }
-  const inside = wpS.every(pp => G.pieceInside(pp, outer, holes, 3.0));
+  const inside = okInside;
   /* 相对「拟合位置」的平均位移（u）—— 字母图本身就是标准七巧板，好解不该把板搬远；
    * 位移大说明这个策略在硬拽（connect 遇到「顶点相碰」的字母会拉散），要压分。 */
   let disp = 0;
   for (let i = 0; i < ps.length; i++) disp += Math.hypot(t[i][0] - t0[i][0], t[i][1] - t0[i][1]);
   disp /= ps.length * u;
-  return { err, maxOv: maxOv / (u * u), t, inside, cx, cy, u, outer, holes, nloops: loops.length, tx, ty, disp,
+  return { err, maxOv: maxOv / (u * u), t, inside, cx, cy, u, outer, holes, nloops: holes.length + 1, tx, ty, disp,
     w: ob[2] - ob[0], h: ob[3] - ob[1] };
 }
 
 const out = [];
 let bad = 0;
-RAW.forEach(fig => {
+const ONLYL = (process.env.ONLY || '').split(',').filter(Boolean);
+RAW.filter(f => !ONLYL.length || ONLYL.indexOf(f.name) >= 0).forEach(fig => {
   let best = null;
   const MODES = (process.env.MODES || 'ls,none').split(',');   // 字母默认只走「最小二乘 / 不动」，
   for (const mode of MODES) {                             //   connect 会把「顶点相碰」的字母拉散

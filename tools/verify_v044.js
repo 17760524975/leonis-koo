@@ -15,7 +15,7 @@
  *   B. 每关 7 块、id 齐 T1,T2,T3,S,T4,T5,P，angle 是 45° 整数倍；
  *   C. 每关 |outline 面积| − Σ|孔面积| = 147456（16u²·96²），误差 < 0.1%；
  *   D. outline 是简单多边形（≥4 顶点、顶点不重复、面积非零），且落在棋盘点阵内；
- *   E. 有字怀的字母才有孔（A/B/D/I/O/P/Q/R），B 两个孔；其余 0 孔；
+ *   E. 有字怀的字母才有孔（A/B/D/O/P/Q/R），B 两个孔；其余 0 孔；
  *   F. splitLines ≥ 2、hintTier=1，章节表无缝覆盖全部关卡；
  *   G. 三端一致 + 主包 < 4MB。
  */
@@ -136,16 +136,17 @@ console.log('\n==== D. 轮廓几何合法性 ====');
 
 console.log('\n==== E. 字怀（内孔）分布 ====');
 {
-  /* v0.53：字母按参考图重做后，I 的右上方有一块三角小空（参考图原样），
-   * 所以带孔名单多了 I。 */
-  const HOLEY = 'ABDIOPQR';
+  const HOLEY = 'ABDOPQR';
   let ok = true, detail = [];
   for (const lv of alp) {
     const n = (lv.holes || []).length;
     const want = lv.name === 'B' ? 2 : (HOLEY.includes(lv.name) ? 1 : 0);
     if (n !== want) { ok = false; detail.push(lv.name + ':' + n + '≠' + want); }
   }
-  check('只有 A/B/D/I/O/P/Q/R 带孔，B 两个', ok, detail.slice(0, 5).join(' '));
+  /* v0.54：I 右上方那块三角小空其实是参考图里板缝级别的缺口（≈1u²），
+   * 按用户「I/S/X 中间有缝隙要去掉」的要求，剪影做闭运算时被填平了，
+   * 所以 I 不再是带孔字母。 */
+  check('只有 A/B/D/O/P/Q/R 带孔，B 两个', ok, detail.slice(0, 5).join(' '));
   const A = alp.find(l => l.name === 'A');
   check('A 的字怀是方孔（4 顶点内环）', A.holes && A.holes.length === 1 && A.holes[0].length === 4,
     A.holes ? JSON.stringify(A.holes[0].map(v => v.map(x => Math.round(x)))) : 'none');

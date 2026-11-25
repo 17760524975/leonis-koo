@@ -168,7 +168,7 @@ module.exports = { unionPolys, splitLoops, area2 };
  * → Moore 邻域描外边界 → Douglas-Peucker 简化。
  * 误差 ≤ 1.5 世界单位（板件尺度 100~400），对判定的 3.0 容差足够安全。
  */
-function rasterOutline(polys, res, dilateCells, dpTol) {
+function rasterOutline(polys, res, dilateCells, dpTol, closeCells) {
   res = res || 0.5;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const p of polys) for (const v of p) {
@@ -216,6 +216,34 @@ function rasterOutline(polys, res, dilateCells, dpTol) {
     }
     g.set(d);
   }
+  /* 形态学闭运算（先膨胀 C 格再腐蚀 C 格）：把「板与板之间那条细缝」和
+   * 「两条该共线的边错开半个像素」形成的细长凹口填掉，外轮廓尺寸不变。
+   * 这一步只改剪影，不动板件 —— 板件尺寸是全关卡共用一套托盘的，动不得。 */
+  const C = closeCells | 0;
+  if (C > 0) {
+    const mask = [];
+    for (let dy = -C; dy <= C; dy++) for (let dx = -C; dx <= C; dx++) {
+      if (dx * dx + dy * dy <= C * C + 1) mask.push([dx, dy]);
+    }
+    const dil = new Uint8Array(w * h), ero = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (!g[y * w + x]) continue;
+      for (const [dx, dy] of mask) {
+        const a = x + dx, b = y + dy;
+        if (a >= 0 && a < w && b >= 0 && b < h) dil[b * w + a] = 1;
+      }
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let keep = 1;
+      for (const [dx, dy] of mask) {
+        const a = x + dx, b = y + dy;
+        if (a < 0 || a >= w || b < 0 || b >= h || !dil[b * w + a]) { keep = 0; break; }
+      }
+      if (keep) ero[y * w + x] = 1;
+    }
+    g.set(ero);
+  }
+
   /* 边界边串环：把「填充格 ↔ 空格」之间的格边按「内部在左」定向，再按
    * 「最大正转角」串成环。对角相接处会自然分成两个环，不会串到一起。 */
   const key = (i, j) => i * (h + 2) + j;

@@ -206,6 +206,36 @@ placeAll(37);
 check('S 标准解 → 通关', !!S.win, 'win=' + !!S.win);
 check('S 进度 7/7', S.fitN === 7, 'fitN=' + S.fitN);
 
+/* ---------- 6.5 剪影质量：不能有内部狭缝 / 自交 / 台阶 ---------- */
+console.log('\n==== 4.5 剪影质量 ====');
+{
+  /* I / S / X 三关用户点名过「中间有缝隙」，这里直接锁死：不许有内孔 */
+  ['I', 'S', 'X'].forEach(nm => {
+    const lv = letters.find(l => l.name === nm);
+    check(nm + ' 剪影无内孔（中间不再有狭缝）', (lv.holes || []).length === 0, '孔=' + (lv.holes || []).length);
+  });
+  /* 简单多边形：自交的轮廓会让栅格填充整片乱掉 */
+  const simple = loop => {
+    const n = loop.length;
+    const cr = (p, q, r) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+    const hit = (a, b, c, d) => {
+      const d1 = cr(a, b, c), d2 = cr(a, b, d), d3 = cr(c, d, a), d4 = cr(c, d, b);
+      return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
+    };
+    for (let i = 0; i < n; i++) for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      if (hit(loop[i], loop[(i + 1) % n], loop[j], loop[(j + 1) % n])) return false;
+    }
+    return true;
+  };
+  const badLoop = letters.filter(l => !simple(l.outline)).map(l => l.name);
+  check('26 关剪影都是简单多边形（无自交）', badLoop.length === 0, badLoop.join(',') || '无');
+  /* 顶点数：台阶多了点数会暴涨；干净的多边形 6~30 点 */
+  const maxPts = Math.max.apply(null, letters.map(l => l.outline.length));
+  const minPts = Math.min.apply(null, letters.map(l => l.outline.length));
+  check('剪影点数 6~40（台阶/锯齿会顶到 50+）', minPts >= 6 && maxPts <= 40, minPts + '~' + maxPts);
+}
+
 /* ---------- 7. 源码级：通关判定不得再引用覆盖率 ---------- */
 console.log('\n==== 5. 判定口径（源码） ====');
 const core = fs.readFileSync(path.join(ROOT, 'js', 'core.js'), 'utf8');
