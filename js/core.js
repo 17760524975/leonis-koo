@@ -6940,8 +6940,13 @@
         ctx.fillStyle = pg; ctx.fill();
       }
       ctx.restore();
-      text(Math.min(cnt, t.n) + '/' + t.n, barX + barW / 2, cy + 1, 18,
-        pr >= 0.55 ? COL.btnText : COL.textSub, 'center', '700');
+      /* v0.49：轨道色在深色皮肤下是**浅半透明**（rgba(180,196,236,0.22)），
+       * 旧代码固定用 COL.textSub 写数字 —— 深色下那是浅灰字压浅轨道，对比度 1.02，
+       * 截图里「0/1」几乎看不见。这里按轨道实际叠色挑字：未过半走配对字色，
+       * 过半（金渐变上）仍用深棕 btnText。 */
+      var barInk = pr >= 0.55 ? COL.btnText
+        : bestInk(COL.track, COL.card, [COL.textOnChip, COL.textSub, COL.inkOnLight || '#202A36']);
+      text(Math.min(cnt, t.n) + '/' + t.n, barX + barW / 2, cy + 1, 18, barInk, 'center', '700');
 
       /* --- 右侧按钮：已领取（灰）/ 领取（金，兜底）/ 邀请（蓝，带分享图标）--- */
       var bw = 148, bh = 60, bx = rx + w - 16 - bw / 2;

@@ -108,6 +108,7 @@ function faces() {
     surface: over(C.surface, card),
     surfaceHi: over(C.surfaceHi, card),
     chip: over(C.chipOff || C.surface, card),
+    track: over(C.track, card),
     gold: over(C.gold, card)
   };
 }
@@ -253,9 +254,23 @@ function drawSettings(skin) {
     !!namer && contrast(namer.color, F.card) >= 3,
     namer ? namer.color + ' c=' + f2(contrast(namer.color, F.card)) : '没找到');
 });
+
+/* 邀请面板的进度数字画在「轨道」上：深色皮肤的轨道是**浅半透明**，
+ * 旧代码固定用 COL.textSub（浅灰）→ 深色下 1.02:1，截图里几乎看不见。 */
+['dusk', 'warm'].forEach(skin => {
+  D.applySkin(skin);
+  S.overlay = 'invite'; S.inviteScroll = 0;
+  render();
+  const F = faces();
+  /* 只取阶梯上的「已邀请/需要」（分母是 1~8 的一位数），别把 HUD 的 16/16 揽进来 */
+  const nums = rec.texts.filter(t => /^\d{1,2}\/\d$/.test(t.s));
+  check(`${skin}：邀请进度数字在轨道上可读（≥ 3:1）`,
+    nums.length > 0 && nums.every(t => contrast(t.color, F.track) >= 3),
+    nums.slice(0, 3).map(t => t.s + '=' + t.color + '(' + f2(contrast(t.color, F.track)) + ')').join(' ') +
+    ' n=' + nums.length);
+});
 S.overlay = null;
 D.applySkin('warm');
-
 /* ================= D. 失败页进场分段 ================= */
 section('D. 失败页：动画期不出按钮，落位后才可点');
 D.setupLevel(6);

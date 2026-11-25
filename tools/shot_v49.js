@@ -29,7 +29,17 @@ const SHOTS = [
   { name: 'v49_fail_t520', w: 750, q: 'screen=fail&skin=dusk&failT=520&freezeFail=1&notoast=1' },
   { name: 'v49_fail_t980', w: 750, q: 'screen=fail&skin=dusk&failT=980&freezeFail=1&notoast=1' },
   { name: 'v49_fail_t1300', w: 750, q: 'screen=fail&skin=dusk&failT=1300&freezeFail=1&notoast=1' },
-  { name: 'v49_fail_warm_t1300', w: 750, q: 'screen=fail&skin=warm&failT=1300&freezeFail=1&notoast=1' }
+  { name: 'v49_fail_warm_t1300', w: 750, q: 'screen=fail&skin=warm&failT=1300&freezeFail=1&notoast=1' },
+  /* 「其他地方有没有类似问题」：把深色下每一个弹层都拍一遍 */
+  { name: 'v49_levels_dusk', w: 750, q: 'screen=levels&skin=dusk&notoast=1' },
+  { name: 'v49_result_dusk', w: 750, q: 'screen=result&skin=dusk&level=5&notoast=1' },
+  { name: 'v49_hint_dusk', w: 750, q: 'screen=hint&skin=dusk&level=5&items=2&notoast=1' },
+  { name: 'v49_hintpanel_dusk', w: 750, q: 'screen=hintpanel&skin=dusk&notoast=1' },
+  { name: 'v49_skin_dusk', w: 750, q: 'screen=skin&skin=dusk&notoast=1' },
+  { name: 'v49_online_dusk', w: 750, q: 'screen=online&skin=dusk&notoast=1' },
+  { name: 'v49_invite_dusk', w: 750, q: 'screen=invite&skin=dusk&notoast=1' },
+  { name: 'v49_energy_dusk', w: 750, q: 'screen=energy&skin=dusk&notoast=1' },
+  { name: 'v49_rank_dusk_err', w: 750, q: 'screen=rank&skin=dusk&rankerr=1&notoast=1' }
 ];
 
 function pngSize(file) {
