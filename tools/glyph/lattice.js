@@ -428,6 +428,9 @@ function attempt(fig, mode) {
    * 实测能吃掉全部 6~20 单位的缝和台阶。 */
   const GR = +(process.env.GRES || 0.125);
   const GK = +(process.env.GCLOSE || 2);
+  /* v0.56：C/S 那种「10~20 单位、两端敞开」的窄通道不是靠描边能填的
+   *（闭运算填不了、背景重建也填不了，通道和外部背景同一个连通分量），
+   * 所以改在几何层面合缝 —— 见 tools/glyph/close_gaps.js。 */
   const raw0 = UN.rasterOutline(wpW, GR, 1, 0.15, GK);
   if (!raw0 || raw0.length < 3) return { err: 1, maxOv: 1, t, inside: false, cx, cy, u };
 

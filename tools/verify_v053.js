@@ -280,6 +280,33 @@ console.log('\n==== 4.5 剪影质量 ====');
   };
   const badLoop = letters.filter(l => !simple(l.outline)).map(l => l.name);
   check('26 关剪影都是简单多边形（无自交）', badLoop.length === 0, badLoop.join(',') || '无');
+  /* v0.56：不许存在「10~20 单位的窄通道」。C 的 T1/T3 曾差 11.2、S 的 T1/T5 差 12.1，
+   * 这种缝两端敞开，闭运算/背景重建都填不了，剪影会顺着它描成一条线。
+   * 断言：任意两块板的间距要么贴住（<2），要么离得很远（>20）。 */
+  const gapBad = [];
+  const segD = (p, a, b) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy;
+    let t = L2 > 0 ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dy * t);
+  };
+  const polyDist = (A, B) => {
+    let m = Infinity;
+    for (let i = 0; i < A.length; i++) for (let j = 0; j < B.length; j++) {
+      m = Math.min(m, segD(A[i], B[j], B[(j + 1) % B.length]));
+      m = Math.min(m, segD(B[j], A[i], A[(i + 1) % A.length]));
+    }
+    return m;
+  };
+  letters.forEach(lv => {
+    const P = lv.solution.map(x => G.toWorld(LOCAL[x.id], x));
+    for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) {
+      const d = polyDist(P[i], P[j]);
+      if (d > 2 && d < 20) gapBad.push(lv.name + ':' + lv.solution[i].id + '-' + lv.solution[j].id + '=' + d.toFixed(0));
+    }
+  });
+  check('没有 2~20 单位的窄通道（会描成一条线）', gapBad.length === 0, gapBad.slice(0, 6).join(' ') || '无');
+
   /* 顶点数：台阶多了点数会暴涨；干净的多边形 6~30 点 */
   const maxPts = Math.max.apply(null, letters.map(l => l.outline.length));
   const minPts = Math.min.apply(null, letters.map(l => l.outline.length));
