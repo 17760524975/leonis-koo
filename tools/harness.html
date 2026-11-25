@@ -186,9 +186,18 @@
         p.angle = st.angle; p.dAngle = st.angle;
         p.flipped = st.flipped; p.dFlipped = st.flipped;
       }
-      // 覆盖率必须跑真实判定，不能手填（手填会截出「只放两块却 100%」的假象）
+      // 进度必须跑真实判定，不能手填（手填会截出「只放两块却 100%」的假象）
       var jr = game._debug.judgeNow();
-      S.covFrom = jr.coverage; S.covTo = jr.coverage; S.cov = jr.coverage; S.covT = 1;
+      /* v0.54：进度条改成「已就位块数 / 总块数」，这里同步把 fit 标记写回板件，
+       * 否则截图里会看到「板摆着但进度 0/7」。 */
+      var fitN = 0;
+      for (var jq = 0; jq < jr.list.length; jq++) {
+        jr.list[jq].fit = !!jr.fits[jq];
+        if (jr.fits[jq]) fitN++;
+      }
+      S.fitN = fitN;
+      var prog = S.pieces.length ? fitN / S.pieces.length : 0;
+      S.covFrom = prog; S.covTo = prog; S.cov = prog; S.covT = 1;
       /* v0.21：教学关想截「翻面 / 转角度」那一步，得先让别的块都摆对、只留一块不对。
        *   tutflip=N 第 N 块摆到位但翻面反了；tutrot=N 第 N 块摆到位但角度歪 40°。 */
       var tflip = +(q.match(/tutflip=(\d+)/) || [])[1];

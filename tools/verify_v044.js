@@ -15,7 +15,7 @@
  *   B. 每关 7 块、id 齐 T1,T2,T3,S,T4,T5,P，angle 是 45° 整数倍；
  *   C. 每关 |outline 面积| − Σ|孔面积| = 147456（16u²·96²），误差 < 0.1%；
  *   D. outline 是简单多边形（≥4 顶点、顶点不重复、面积非零），且落在棋盘点阵内；
- *   E. 有字怀的字母才有孔（A/B/D/O/P/Q/R），B 两个孔；其余 0 孔；
+ *   E. 有字怀的字母才有孔（A/B/D/I/O/P/Q/R），B 两个孔；其余 0 孔；
  *   F. splitLines ≥ 2、hintTier=1，章节表无缝覆盖全部关卡；
  *   G. 三端一致 + 主包 < 4MB。
  */
@@ -83,19 +83,25 @@ console.log('\n==== B. 每关 7 块板 ====');
 
 console.log('\n==== C. 面积闭合（轮廓 = 7 块板总面积）====');
 {
-  let worst = 0, worstCh = '';
+  let worst = 0, worstCh = '', worstL = 0, worstLCh = '';
   for (const lv of S7.levels) {
     if (lv.chapter >= 3) continue;              // 生肖章单独一组口径，见下
     const holeA = (lv.holes || []).reduce((s, h) => s + Math.abs(G.area(h)), 0);
     const outA = Math.abs(G.area(lv.outline)) - holeA;
     const err = Math.abs(outA - EXPECT_AREA) / EXPECT_AREA * 100;
-    if (err > worst) { worst = err; worstCh = lv.name; }
+    if (lv.chapter === 2) {
+      if (err > worstL) { worstL = err; worstLCh = lv.name; }
+    } else if (err > worst) { worst = err; worstCh = lv.name; }
   }
   /* v0.50：轮廓改为「7 块并集的精确边界」，剩下的误差就是板与板之间的亚像素缝（≤0.2%）。
    * v0.51：生肖章剪影是栅格描边，为连通「顶点相碰」的接触点外扩了 1 格（0.25 单位），
    * 面积因此比板面积大 0.5%~0.7%，该章单列 1% 口径。 */
-  check('几何 + 字母 45 关轮廓净面积 = 147456（误差 < 0.25%）', worst < 0.25,
+  check('几何 19 关轮廓净面积 = 147456（误差 < 0.25%）', worst < 0.25,
     `最大偏差 ${worst.toFixed(4)}%（${worstCh}）`);
+  /* v0.53：字母章剪影改为栅格描边（0.125u + 膨胀 1 格），轮廓比板面积大 0.2%~0.45%，
+   * 单列 0.6% 口径；几何章仍是解析轮廓，维持 0.25%。 */
+  check('字母 26 关轮廓净面积 = 147456（误差 < 0.6%）', worstL < 0.6,
+    `最大偏差 ${worstL.toFixed(4)}%（${worstLCh}）`);
   let worstZ = 0, worstZCh = '';
   for (const lv of S7.levels) {
     if (lv.chapter < 3) continue;
@@ -130,14 +136,16 @@ console.log('\n==== D. 轮廓几何合法性 ====');
 
 console.log('\n==== E. 字怀（内孔）分布 ====');
 {
-  const HOLEY = 'ABDOPQR';
+  /* v0.53：字母按参考图重做后，I 的右上方有一块三角小空（参考图原样），
+   * 所以带孔名单多了 I。 */
+  const HOLEY = 'ABDIOPQR';
   let ok = true, detail = [];
   for (const lv of alp) {
     const n = (lv.holes || []).length;
     const want = lv.name === 'B' ? 2 : (HOLEY.includes(lv.name) ? 1 : 0);
     if (n !== want) { ok = false; detail.push(lv.name + ':' + n + '≠' + want); }
   }
-  check('只有 A/B/D/O/P/Q/R 带孔，B 两个', ok, detail.slice(0, 5).join(' '));
+  check('只有 A/B/D/I/O/P/Q/R 带孔，B 两个', ok, detail.slice(0, 5).join(' '));
   const A = alp.find(l => l.name === 'A');
   check('A 的字怀是方孔（4 顶点内环）', A.holes && A.holes.length === 1 && A.holes[0].length === 4,
     A.holes ? JSON.stringify(A.holes[0].map(v => v.map(x => Math.round(x)))) : 'none');

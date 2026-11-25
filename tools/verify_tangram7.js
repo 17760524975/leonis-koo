@@ -106,7 +106,10 @@ for (const lv of S7.levels) {
      * 「肉眼看不出来」的量级，所以该章单列口径：覆盖率 ≥98.5%、面积误差 <1%。 */
     (lv.chapter >= 3
       ? (v.coverage >= 0.985 && v.overflow < 0.01 && !v.bad && v.areaErrPct < 1.0 && idsOK && idxOK)
-      : (v.coverage >= 0.99 && v.overflow < 0.01 && !v.bad && v.areaErrPct < 0.25 && idsOK && idxOK)),
+      /* v0.53：字母章剪影也是栅格描边（0.125u + 膨胀 1 格），面积误差 0.2%~0.45%，
+       * 单列 0.5% 口径；几何章仍是解析轮廓，0.25%。 */
+      : (v.coverage >= 0.99 && v.overflow < 0.01 && !v.bad &&
+         v.areaErrPct < (lv.chapter === 2 ? 0.5 : 0.25) && idsOK && idxOK)),
     v.bad ? '真重叠 ' + JSON.stringify(v.bad) : '无真重叠 / 7 块齐');
 }
 console.log(`  最低覆盖 ${(minCov * 100).toFixed(3)}%  最高溢出 ${(maxOver * 100).toFixed(3)}%  最大面积误差 ${maxErr.toFixed(4)}%（= 板间亚像素缝）`);

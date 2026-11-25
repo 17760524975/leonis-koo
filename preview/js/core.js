@@ -2193,6 +2193,7 @@
        * 进度条和判定用的是同一把尺子，不会再自相矛盾。 */
       var fitN = 0;
       for (var fq = 0; fq < r.fits.length; fq++) if (r.fits[fq]) fitN++;
+      state.fitN = fitN;
       var progTo = DS.pieceOrder.length ? fitN / DS.pieceOrder.length : 0;
       state.covFrom = state.cov;
       state.covTo = progTo;
@@ -2211,11 +2212,17 @@
         env.audio.play('sfx_fail');
         return;
       }
-      /* v0.50 通关口径：七块全上板 + 每块都完整落在剪影里。
-       * 覆盖率只做兜底（防止轮廓给得比板大很多时「全在轮廓里」被误判）。 */
+      /* v0.54 通关口径：只看「七块都整块落在剪影里、且互不压叠」，不再看像素覆盖率。
+       *
+       * 为什么去掉覆盖率兜底：七块板面积和恒等于 16u²，剪影面积也是 16u²，
+       * 所以「七块都在剪影里 + 两两不重叠」在数学上**只能**是严丝合缝的那一种拼法
+       * —— 覆盖率在这里是冗余指标，而且它是栅格统计量，45° 接缝上永远差最后一格
+       * （用户两张截图都卡在 98~99%，正是这个原因）。去掉它之后，
+       * 「拼对了」= 100%，不可能出现「摆好了却不给过」。
+       * 进度条也改成「已拼 N/7」，和判定同一把尺子。 */
       var allPlaced = boardPieces().length === DS.pieceOrder.length;
       var allFit = r.fits.length === DS.pieceOrder.length && r.fits.every(function (x) { return x; });
-      if (allPlaced && allFit && r.coverage >= (C.JUDGE.minCoverage || 0.94)) {
+      if (allPlaced && allFit) {
         win();
         return;
       }
@@ -5480,7 +5487,9 @@
         ctx.fillRect(px, P.y, Math.max(P.h, pw * pct), P.h);
         ctx.restore();
       }
-      text(Math.round(pct * 100) + '%', C.DESIGN.w - 60, P.y + P.h / 2, 26, COL.text, 'right', '600');
+      /* v0.54：右侧数字从「百分比」改成「已就位块数 / 总块数」。
+       * 百分比会让人以为还差 1% 没拼好；块数是离散的，7/7 就是拼完。 */
+      text((state.fitN || 0) + '/' + DS.pieceOrder.length, C.DESIGN.w - 60, P.y + P.h / 2, 26, COL.text, 'right', '600');
 
       /* 提示文字（v0.9）：原来画在进度条下方，托盘上移后那里没位置了，
        * 改成棋盘下沿的轻量 toast（深底白字），压住作品也不碍事，1.5s 自己消失。 */
@@ -5869,17 +5878,24 @@
       /* v0.50：「整块落位」描边 —— 这一块已经完整落在图案里且没压到别的板。
        * 拖动中脉动更强（可以松手了），已放好的是常驻细边（一眼看出还差哪块）。 */
       if (p.fit && !state.win) {
+        /* v0.54：整块落位的确认高亮，做成「整块亮起来」而不是只描一条边 ——
+         * 淡绿填充（板色仍透出来）+ 绿色柔光边 + 外发光。
+         * 拖动中脉动更强（可以松手了），已放好的是常驻，一眼看出还差哪块。 */
         var moving = !!(state.drag && state.drag.id === p.id);
-        var fa = moving ? (0.72 + 0.22 * Math.sin(state.time / 160)) : 0.50;
+        var fa = moving ? (0.78 + 0.20 * Math.sin(state.time / 160)) : 0.55;
         ctx.save();
         ctx.beginPath();
         for (var s3 = 0; s3 < pts.length; s3++) {
           if (s3 === 0) ctx.moveTo(pts[s3][0], pts[s3][1]); else ctx.lineTo(pts[s3][0], pts[s3][1]);
         }
         ctx.closePath();
+        ctx.fillStyle = 'rgba(59,178,115,' + (moving ? 0.20 : 0.12) + ')';
+        ctx.fill();
         ctx.lineJoin = 'round';
-        ctx.lineWidth = moving ? 6 : 3;
+        ctx.lineWidth = moving ? 6 : 3.5;
         ctx.strokeStyle = 'rgba(59,178,115,' + fa.toFixed(2) + ')';
+        ctx.shadowBlur = moving ? 14 : 8;
+        ctx.shadowColor = 'rgba(59,178,115,0.85)';
         ctx.stroke();
         ctx.restore();
       }

@@ -43,8 +43,10 @@ function checkSet(key, gapLimit) {
      *（A/B/D/O/P/Q/R 这类字母有内孔，直接比轮廓面积会把孔洞算成误差）
      * v0.51：生肖章（chapter 3）的剪影是栅格描边出来的，为让「顶点相碰」的接触点
      * 连成一个闭环，故意外扩了 1 格（0.25 世界单位），面积因此比板面积大 0.5%~0.7%。
-     * 那是 0.1 屏幕像素一圈，看不出来，所以单列 1% 口径；前两章仍是 0.2%。 */
-    var areaTol = lv.chapter >= 3 ? 0.01 : 0.002;
+     * 那是 0.1 屏幕像素一圈，看不出来，所以单列 1% 口径。
+     * v0.53：字母章（chapter 2）也改成栅格描边（0.125u = 12 世界单位 + 膨胀 1 格），
+     * 面积同样比板面积大 0.2%~0.45%，单列 0.6% 口径；几何章仍是 0.2%。 */
+    var areaTol = lv.chapter >= 3 ? 0.01 : (lv.chapter === 2 ? 0.006 : 0.002);
     var sumA = polys.reduce(function (a, o) { return a + G.area(o.poly); }, 0);
     var holeA = (lv.holes || []).reduce(function (a, h) { return a + Math.abs(G.area(h)); }, 0);
     var outA = Math.abs(G.area(lv.outline)) - holeA;
@@ -110,8 +112,9 @@ function checkSet(key, gapLimit) {
      * v0.51：生肖章剪影外扩 0.25 单位，沿边一圈采样点会落在「剪影内、板外」，
      * 这部分占 0.5%~1.5%（马最高，因为它的轮廓沿板边最长），所以该章放到 2%。
      * 已用「板件填色 + 剪影描边」放大图逐关目检：板与板之间没有白缝，
-     * 那 1.5% 全在剪影最外圈，是外扩本身。（图：tools/zodiac/gapcheck.png） */
-    var gapLim = lv.chapter >= 3 ? 0.02 : gapLimit;
+     * 那 1.5% 全在剪影最外圈，是外扩本身。（图：tools/zodiac/gapcheck.png）
+     * v0.53：字母章同理（0.9% 封顶），阈值 1.2%。 */
+    var gapLim = lv.chapter >= 3 ? 0.02 : (lv.chapter === 2 ? 0.012 : gapLimit);
     if (gapR > gapLim) problems.push('缝 ' + (gapR * 100).toFixed(2) + '%');
     if (overR > 0.02) problems.push('采样叠 ' + (overR * 100).toFixed(2) + '%');
 
