@@ -36,3 +36,5 @@ tools/figs4/out/
 
 # 生肖反解：本地备份（可由 compact.js 重新生成）
 tools/zodiac/*.bak.json
+tools/glyph/one.html
+tools/glyph/*.bak.json
