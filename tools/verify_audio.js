@@ -395,13 +395,20 @@ setImmediate(async function () {
 
   const _mini = fs.readFileSync(path.join(ROOT, 'miniprogram/game.js'), 'utf8');
   const _pv = fs.readFileSync(path.join(ROOT, 'preview/js/game.js'), 'utf8');
-  check('两端都有「上一代」队列与同步清场', /homeDead/.test(_mini) && /homeDead/.test(_pv) &&
+  check('两端都有「旧代」队列与同步清场', /homeDying/.test(_mini) && /homeDying/.test(_pv) &&
+    /function stopHomeGen/.test(_mini) && /function stopHomeGen/.test(_pv) &&
     /function flushHomeDead/.test(_mini) && /function flushHomeDead/.test(_pv));
-  check('两端 homeStart 开闸前先清场',
-    /flushHomeDead\(\);[\s\S]{0,200}gateTo\(1\)/.test(_mini) &&
-    /flushHomeDead\(\);[\s\S]{0,260}gain\.value = 1/.test(_pv));
-  check('不再留「裸 setTimeout + 局部 dead」的旧写法',
-    !/var dead = HOME_OSC;/.test(_mini) && !/var dead = HOME_OSC;/.test(_pv));
+  check('两端都按代创建 gate / delay（不共用旧图）',
+    /function createHomeGen/.test(_mini) && /function createHomeGen/.test(_pv) &&
+    /gen\.gate = AC\.createGain/.test(_mini) && /gen\.gate = AC\.createGain/.test(_pv) &&
+    /gen\.delay = AC\.createDelay/.test(_mini) && /gen\.delay = AC\.createDelay/.test(_pv));
+  check('两端 homeStart 先清旧代再开新闸',
+    /flushHomeDead\(\);[\s\S]{0,260}var gen = createHomeGen/.test(_mini) &&
+    /flushHomeDead\(\);[\s\S]{0,260}var gen = createHomeGen/.test(_pv) &&
+    /gen\.gate\.gain\.value = 1/.test(_pv));
+  check('不再共用上一代 homeGate / homeDead',
+    !/homeDeadTimer/.test(_mini) && !/homeDeadTimer/.test(_pv) &&
+    !/homeDead = HOME_OSC/.test(_mini) && !/homeDead = HOME_OSC/.test(_pv));
 
   console.log('\n' + (fail === 0 ? '音频验收全部通过' : `!! ${fail} 项未通过`));
   process.exit(fail === 0 ? 0 : 1);

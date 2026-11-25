@@ -269,7 +269,9 @@ function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).dig
   /* ================= 6. 弹层里也看得见 ================= */
   section('6. 复活 / 结算弹层保留余额');
   S.save.coin = 210;
-  S.overlay = 'fail'; S.failT = 0; S.timeLeft = 0; S.hearts = 0;
+  /* v0.49：失败页改成「先播进场动画、卡片落位后再出按钮」，
+   * 所以这里直接把 failT 推到落位之后，验的是静态版面（余额与报价并存）。 */
+  S.overlay = 'fail'; S.failT = 1300; S.timeLeft = 0; S.hearts = 0;
   tx = grab(() => step(16));
   check('复活弹层上仍画出巧币 210', hudTexts(tx).some(t => t.s === '210'), textsOf(hudTexts(tx)));
   check('复活弹层上仍画出体力', hudTexts(tx).some(t => t.s === '/16'), textsOf(hudTexts(tx)));

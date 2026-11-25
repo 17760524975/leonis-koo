@@ -1107,6 +1107,10 @@
            * 深色皮肤下不传的话，好友榜会在深色卡片里贴一张浅色列表。 */
           pal: {
             text: COL.text, sub: COL.textSub, rowBg: COL.surface,
+            /* v0.49：给开放数据域也带上「面—字」配对，避免主域已换深色、
+             * 好友榜那边仍用白字压浅米行底。 */
+            rowText: COL.textOnSurface || COL.text,
+            rowSub: COL.textOnChip || COL.textSub,
             me: COL.surfaceHi, meText: COL.accentText,
             gold: COL.gold, line: COL.line
           },
@@ -1397,6 +1401,11 @@
       if (state.darkFx && C.DARK_PAL) {
         for (k in C.DARK_PAL) COL[k] = C.DARK_PAL[k];
       }
+      /* v0.49：深色皮肤与「深色背景特效」都会把 COL 换成深色一套，
+       * 但很多组件原来只判 state.darkSkin，选了星夜/萤火/星云时仍在画浅色糖按钮、
+       * 浅色纸纹和浅色小样。统一成一个「深色 UI」口径，避免只修了排行榜、
+       * 其他弹层还残留浅底浅字。 */
+      state.darkUi = !!(state.darkSkin || state.darkFx);
     }
     function applySkin(key) {
       var sk = C.SKINS[key];
@@ -1553,6 +1562,8 @@
        * 复活 / 放弃时各自走 setLevelScene() / go() 恢复。 */
       if (env.audio.halt) env.audio.halt();
       env.audio.play('sfx_timeup');
+      /* v0.49：一次重震动，配合红闪/裂心；不支持震动的环境静默跳过。 */
+      if (env.vibrate) { try { env.vibrate(24); } catch (e) {} }
     }
     function doRevive(byAd) {
       var E = C.ECON, s = state.save;
@@ -3055,6 +3066,70 @@
     }
     function noShadow() { ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.shadowOffsetY = 0; }
 
+    /* ---------------- v0.49：内容面配对字色 ----------------
+     * 排行榜行、页签、设置页资料卡都有一层「内容面」：面是主题给的，
+     * 字如果还直接拿 COL.text，就会在浅面 + 白字的组合下消失。
+     * 这里按实际叠色后的 luminance 选对比度更高的一支，既能跟随主题，
+     * 也能在旧包/异常皮肤把面渲染成浅色时自动落回深墨字。 */
+    function rgbOf(c) {
+      if (!c) return null;
+      c = String(c).trim();
+      var m;
+      if (c.charAt(0) === '#') {
+        var h = c.slice(1);
+        if (h.length === 3) h = h.charAt(0) + h.charAt(0) + h.charAt(1) + h.charAt(1) + h.charAt(2) + h.charAt(2);
+        if (h.length !== 6) return null;
+        return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16), a: 1 };
+      }
+      m = c.match(/^rgba?\(([^)]+)\)$/i);
+      if (!m) return null;
+      var p = m[1].split(',');
+      if (p.length < 3) return null;
+      return { r: +p[0], g: +p[1], b: +p[2], a: p.length > 3 ? +p[3] : 1 };
+    }
+    function overRgb(fg, bg) {
+      if (!fg) return bg;
+      if (!bg) return fg;
+      var a = Math.max(0, Math.min(1, fg.a == null ? 1 : fg.a));
+      return {
+        r: fg.r * a + bg.r * (1 - a),
+        g: fg.g * a + bg.g * (1 - a),
+        b: fg.b * a + bg.b * (1 - a),
+        a: 1
+      };
+    }
+    function relLum(c) {
+      function ch(v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }
+      return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b);
+    }
+    function contrastOf(a, b) {
+      var la = relLum(a), lb = relLum(b);
+      return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+    }
+    /* bg 叠在 base 上的实际颜色；再把候选字色逐个比对比度，取最高的一支。
+     * 任何解析失败都退回第一个候选，绝不返回 undefined 让 canvas 吞掉文字。 */
+    function bestInk(bg, base, inks) {
+      var b = rgbOf(base) || { r: 255, g: 255, b: 255, a: 1 };
+      var layer = overRgb(rgbOf(bg), b);
+      var best = (inks && inks[0]) || COL.text, bestC = -1;
+      for (var i = 0; inks && i < inks.length; i++) {
+        var ink = inks[i];
+        if (!ink) continue;
+        var c = contrastOf(layer, rgbOf(ink) || b);
+        if (c > bestC) { bestC = c; best = ink; }
+      }
+      return best;
+    }
+    /* 内容面（surface / surfaceHi）与卡片的组合。sub=true 用次级字色候选。 */
+    function inkOnSurface(highlight, sub) {
+      var page = rgbOf(COL.bg || '#000000') || { r: 0, g: 0, b: 0, a: 1 };
+      var card = overRgb(rgbOf(COL.card || '#FFFFFF'), page);
+      var face = highlight ? COL.surfaceHi : COL.surface;
+      var main = sub ? (COL.textOnSurface || COL.textSub) : (COL.textOnSurface || COL.text);
+      return bestInk(face, 'rgb(' + Math.round(card.r) + ',' + Math.round(card.g) + ',' + Math.round(card.b) + ')',
+        [main, sub ? COL.textSub : COL.text, COL.inkOnLight || '#202A36']);
+    }
+
     function text(str, x, y, size, color, align, weight) {
       ctx.font = font(size, weight);
       ctx.fillStyle = color;
@@ -3300,7 +3375,7 @@
           var tn = b.tone;
           /* v0.38：夜间护眼 —— 奶油糖果底色在深色页面里是全屏最亮的一块，
            * 护眼模式下换成同色系的深色糖（图标仍保留亮色 accent，语义不变）。 */
-          var dkT = !!state.darkSkin;
+          var dkT = !!state.darkUi;
           var cx0 = b.x - b.w / 2, cy0 = b.y - b.h / 2 + dy;
           ctx.save();
           if (!dis) shadow(0, 7, dkT ? 'rgba(0,0,0,0.34)' : 'rgba(122,98,66,0.16)');
@@ -3661,7 +3736,7 @@
         var r = C.DESIGN.w * s[2] * (1 + 0.07 * Math.sin(t * 0.55 + i));
         var gr = ctx.createRadialGradient(px, py, r * 0.10, px, py, r);
         /* v0.38：夜间护眼是深底，原亮度会把屏幕照出一块暖白，护眼失去意义 —— 整体减半 */
-        var ga = state.darkSkin ? 0.5 : 1;
+        var ga = state.darkUi ? 0.5 : 1;
         gr.addColorStop(0, 'rgba(255,244,214,' + (0.34 * ga).toFixed(3) + ')');
         gr.addColorStop(0.55, 'rgba(255,232,190,' + (0.12 * ga).toFixed(3) + ')');
         gr.addColorStop(1, 'rgba(255,232,190,0)');
@@ -3682,7 +3757,7 @@
       var lg = ctx.createLinearGradient(-260, 0, 260, 0);
       lg.addColorStop(0, 'rgba(255,255,255,0)');
       /* v0.38：夜间护眼深底上白光带会显眼，压到 0.05 只留一丝流动感 */
-      lg.addColorStop(0.5, 'rgba(255,255,255,' + (state.darkSkin ? '0.05' : '0.12') + ')');
+      lg.addColorStop(0.5, 'rgba(255,255,255,' + (state.darkUi ? '0.05' : '0.12') + ')');
       lg.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.fillStyle = lg;
       ctx.fillRect(-260, -C.DESIGN.h, 520, C.DESIGN.h * 3);
@@ -3984,7 +4059,7 @@
       /* v0.38：夜间护眼（深色皮肤）**不再铺米色桌面底图** —— 一张浅色照片靠色罩压暗
        * 只会得到灰蒙蒙的脏色，护眼也做不到。深色皮肤直接走渐变分支，用皮肤自己的
        * bgTop/bg/bgDeep 三层铺夜景，纹理交给背景特效粒子层。 */
-      var img = withArt && !state.darkSkin && env.images && env.images.home_bg_desk;
+      var img = withArt && !state.darkUi && env.images && env.images.home_bg_desk;
       var bgh = DH();        // v0.31：底图/渐变铺到真实可用高度，细长屏不留边
       if (img) {
         var sc = Math.max(C.DESIGN.w / (img.width || 1), bgh / (img.height || 1)) * (fx ? 1.06 : 1);
@@ -4003,7 +4078,7 @@
         ctx.fillRect(0, 0, C.DESIGN.w, bgh);
         // 左上柔光（v0.38：夜间护眼是深底，0.85 白会糊出一大块亮斑，压到 0.10）
         var rg = ctx.createRadialGradient(180, 180, 20, 180, 180, 620);
-        var la = state.darkSkin ? 0.10 : 0.85;
+        var la = state.darkUi ? 0.10 : 0.85;
         rg.addColorStop(0, 'rgba(255,255,255,' + la + ')');
         rg.addColorStop(0.55, 'rgba(255,255,255,' + (la * 0.26).toFixed(3) + ')');
         rg.addColorStop(1, 'rgba(255,255,255,0)');
@@ -4157,7 +4232,7 @@
         shadow(10, 4, 'rgba(44,58,75,0.22)');
         rr(px, rowY - ph / 2, pw, ph, ph / 2);
         /* v0.38：夜间护眼（深底）下用半透明白底，深底深胶囊会糊在一起 */
-        ctx.fillStyle = (state.darkSkin && HU.pillFillDark) ? HU.pillFillDark : HU.pillFill;
+        ctx.fillStyle = (state.darkUi && HU.pillFillDark) ? HU.pillFillDark : HU.pillFill;
         ctx.fill();
         noShadow();
         ctx.lineWidth = HU.border;
@@ -4299,7 +4374,7 @@
         ctx.restore();
       }
       function setEntryLabel(label, x, y, sel, size) {
-        var dark = state.darkSkin || state.darkFx;
+        var dark = state.darkUi || state.darkFx;
         ctx.save();
         ctx.font = '700 ' + (size || 38) + 'px ' + (V.titleFontFamily || '"STCaiyun","华文彩云",serif');
         ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
@@ -4313,7 +4388,7 @@
       }
       function setEntry(id, key, kind, yy) {
         var sel = state.setKey === key;
-        var dark = state.darkSkin || state.darkFx;
+        var dark = state.darkUi || state.darkFx;
         /* v0.38：用户要求「关卡的按钮缩小一点点」，440×112 → 408×100（尺寸在 config 里） */
         var w = H.setW || 408, h = H.setH || 100, x = C.DESIGN.w / 2;
         addHit(x, yy, w, h, id);
@@ -4546,7 +4621,7 @@
       ctx.stroke();
       ctx.restore();
       /* 深色皮肤下 goldDeep 压不住深灰卡片，改用亮金（浅色仍用深金，白底才看得清） */
-      text(t, x, y + 1, 15, state.darkSkin ? COL.gold : COL.goldDeep, 'center', '700');
+      text(t, x, y + 1, 15, state.darkUi ? COL.gold : COL.goldDeep, 'center', '700');
     }
 
     /* v0.40：结算页「升到 ★★」用的星符串。
@@ -4605,7 +4680,7 @@
         shadow(8, 3, 'rgba(44,58,75,0.20)');
         rr(x, rowY - ph / 2, wEach, ph, ph / 2);
         /* v0.38：与主页 HUD 一致 —— 夜间护眼深底改用半透明白胶囊 */
-        ctx.fillStyle = (state.darkSkin && M.pillFillDark) ? M.pillFillDark : M.pillFill;
+        ctx.fillStyle = (state.darkUi && M.pillFillDark) ? M.pillFillDark : M.pillFill;
         ctx.fill();
         noShadow();
         ctx.lineWidth = M.border;
@@ -4818,7 +4893,7 @@
        * v0.38：夜间护眼的纸面是深色，白底会把浅墨字吞掉 → 改深底。 */
       ctx.save();
       rr(gx - 16, gy - 26, groupW + 32, 52, 26);
-      ctx.fillStyle = state.darkSkin ? 'rgba(12,18,28,0.72)' : 'rgba(255,255,255,0.82)';
+      ctx.fillStyle = state.darkUi ? 'rgba(12,18,28,0.72)' : 'rgba(255,255,255,0.82)';
       ctx.fill();
       ctx.restore();
       var bob = Math.sin(state.time / 260) * 3;
@@ -4864,7 +4939,7 @@
         tone: { bg1: '#FFF3E6', bg2: '#FFE2C7', edge: '#FFC79E', ink: '#E07B3A' },
         iconScale: 0.92 };
       /* v0.38：夜间护眼下返回键也换深色糖，避免一颗奶白按钮在深色页里发亮 */
-      if (state.darkSkin) bb.tone = { bg1: '#3A3229', bg2: '#2F2921', edge: '#241F19', ink: '#F0A76A' };
+      if (state.darkUi) bb.tone = { bg1: '#3A3229', bg2: '#2F2921', edge: '#241F19', ink: '#F0A76A' };
       addHit(bb.x, bb.y, bb.w, bb.h, 'back_levels');
       drawButton(bb);
       /* v0.17：关号从顶栏让位到卡纸内左上角（见下方「关卡标题」）。
@@ -4930,7 +5005,7 @@
       ctx.restore();
       // 纸纹（极淡）
       var paper = env.images && env.images.board_paper;
-      if (paper && state.darkSkin) {
+      if (paper && state.darkUi) {
         /* v0.38：夜间护眼不铺浅色纸质图（一张白纸在深色页面里最刺眼），
          * 改用皮肤自己的深色纸面 + 一丝浅色纹路，卡纸上的字改走浅墨（inkOnCard）。 */
         ctx.save(); rr(B.x, B.y, B.size, BH, 28); ctx.clip();
@@ -4949,7 +5024,7 @@
       } else {
         ctx.save(); rr(B.x, B.y, B.size, BH, 28); ctx.clip();
         /* v0.38：深色皮肤无纸质图时也铺深色纸面，纹路改成极淡白色 */
-        var dkPaper = !!state.darkSkin;
+        var dkPaper = !!state.darkUi;
         if (dkPaper) { ctx.fillStyle = COL.board; ctx.fillRect(B.x, B.y, B.size, BH); }
         ctx.strokeStyle = dkPaper ? 'rgba(255,255,255,0.035)' : 'rgba(44,58,75,0.022)'; ctx.lineWidth = 1;
         var rows = Math.round(BH / 27);
@@ -5142,7 +5217,7 @@
           id: tools[i2].id, x: TOOL_X[i2], y: TOOL_Y,
           w: LAY.TOOLBAR.w, h: LAY.TOOLBAR.h,
           variant: 'tool', icon: tools[i2].icon, disabled: tools[i2].disabled,
-          tone: (state.darkSkin ? TOOL_TONE_DARK : TOOL_TONE)[tools[i2].id],
+          tone: (state.darkUi ? TOOL_TONE_DARK : TOOL_TONE)[tools[i2].id],
           badge: tools[i2].badge        // v0.10：剩余档位角标（之前漏传，角标根本没画出来）
         };
         addHit(tb.x, tb.y, tb.w, tb.h, tb.id);
@@ -5297,15 +5372,16 @@
       ctx.restore();
     }
 
-    /* v0.28：深色背景特效下，卡纸仍保持浅色纸纹（保证板件辨识度），
-     * 所以「画在浅色卡纸上的文字」必须固定用深色墨，不能跟随暗色板的浅字色。 */
     /* 卡纸上的墨色（教学提示 / 跳过 / 关号抬头都走这里）。
      * v0.28 固定深墨是为了修「深色特效下浅卡纸出现白字白底」—— 那时纸面仍是
      *   board_paper 浅色图，所以深色特效也算「浅卡纸」。
      * v0.38 夜间护眼不再铺浅色纸质图、改用深色纸面，深墨会反过来糊住，
-     *   因此只有**深色皮肤**才切浅墨；深色特效（stars/nebula）纸面依旧浅，保持深墨。 */
+     *   因此只有**深色皮肤**才切浅墨。
+     * v0.49：纸面（上面的 paper 分支）和这里的墨色统一改判 state.darkUi ——
+     *   星夜/萤火/星云这类深色背景特效现在也铺深色纸面，纸面与墨色必须同进同退，
+     *   否则又会出现「浅纸配浅墨」或「深纸配深墨」。 */
     function inkOnCard(sub) {
-      if (state.darkSkin) return sub ? (COL.textSub || '#B9C6E6') : (COL.text || '#E4EBF8');
+      if (state.darkUi) return sub ? (COL.textSub || '#B9C6E6') : (COL.text || '#E4EBF8');
       return sub ? '#5A687C' : '#2C3A4B';
     }
 
@@ -6031,12 +6107,17 @@
 
     function rankRow(item, y, idx, highlight) {
       var L = C.RANK.list, x0 = L.x, w = L.w, h = L.rowH;
+      var rowBg = highlight ? COL.surfaceHi : COL.surface;
+      /* v0.49：面与字必须成对。rankRow 不再直接拿 COL.text —— 深色皮肤把
+       * COL.text 变白后，如果行底仍是浅米色（旧包/异常皮肤/中间帧），昵称会
+       * 整行消失。inkOnSurface() 按实际叠色算对比度，浅面自动落回深墨字。 */
+      var rowInk = inkOnSurface(highlight, false);
+      var rowSub = inkOnSurface(false, true);
+      var valInk = highlight ? bestInk(rowBg, COL.card, [COL.accentText, COL.textOnSurfaceHi, rowInk]) : rowInk;
       ctx.save();
       if (highlight) shadow(10, 4, hexA(COL.gold || '#FFB93D', 0.20));
       rr(x0, y - h / 2, w, h, 16);
-      /* v0.47：行底走语义色 —— 旧版写死 '#FDE7DF' / 'rgba(246,243,238,0.95)'，
-       * 深色皮肤下白字压浅米底，整行昵称直接消失（用户截图就是这个问题）。 */
-      ctx.fillStyle = highlight ? COL.surfaceHi : COL.surface;
+      ctx.fillStyle = rowBg;
       ctx.fill();
       noShadow();
       ctx.restore();
@@ -6052,15 +6133,15 @@
         /* 自己那行显示真实名次（榜尾固定条）；名次过百按「99+」收敛宽度 */
         var rk = idx + 1;
         text(String(rk > 99 ? '99+' : rk), x0 + 42, y + 1, rk > 99 ? 20 : 24,
-          highlight ? COL.accentText : COL.textSub, 'center', '700');
+          highlight ? valInk : rowSub, 'center', '700');
       }
       // 头像：v0.14 起优先用微信头像，取不到图仍退回「首字 + 底色」
       drawAvatar(x0 + 96, y, C.PLAYER.rankAvatarR, item.n, item.a, item.c || COL.gold);
       // 名字
-      text(item.n, x0 + 136, y + 1, 24, COL.text, 'left', highlight ? '700' : '500');
+      text(item.n, x0 + 136, y + 1, 24, rowInk, 'left', highlight ? '700' : '500');
       // 数值
       var unit = C.RANK.unit[state.rankTab] || '关';
-      text(item.v + ' ' + unit, x0 + w - 28, y + 1, 26, highlight ? COL.accentText : COL.text, 'right', '700');
+      text(item.v + ' ' + unit, x0 + w - 28, y + 1, 26, valInk, 'right', '700');
     }
 
     /* v0.18：好友榜。真机走开放数据域（离屏画布整块贴进来）；
@@ -6108,13 +6189,17 @@
       var tw = 176, gap = 10, tx0 = C.DESIGN.w / 2 - (tw * 3 + gap * 2) / 2;
       for (var i = 0; i < 3; i++) {
         var tx = tx0 + i * (tw + gap) + tw / 2, ty = 495 + (y0 - cy);
+        var tabOn = state.rankTab === i;
+        var tabBg = tabOn ? COL.gold : COL.chipOff;
         rr(tx - tw / 2, ty - 27, tw, 54, 27);
-        ctx.fillStyle = state.rankTab === i ? COL.gold : COL.chipOff;
+        ctx.fillStyle = tabBg;
         ctx.fill();
-        /* v0.47：选中页签的字色改用 COL.btnText（深棕，浅色皮肤下与旧值 #7A4A00 一致），
-         * 未选中的字色本来是 COL.textSub —— 它跟着皮肤变，浅底却不跟着变，深色下就糊了。
-         * 现在底走 chipOff、字走 textSub，两边都随皮肤，凑成一对。 */
-        text(R.tabs[i], tx, ty + 1, 24, state.rankTab === i ? COL.btnText : COL.textSub, 'center', '700');
+        /* v0.49：与排行行同一套配对逻辑。选中页签浅金底用深棕字，
+         * 未选中页签则按 chipOff 的实际明度在 textOnChip / textSub 里取更清楚的一支。 */
+        var tabInk = tabOn
+          ? bestInk(tabBg, COL.card, [COL.btnText, '#2A1D00', COL.inkOnLight || '#202A36'])
+          : bestInk(tabBg, COL.card, [COL.textOnChip, COL.textSub, COL.inkOnLight || '#202A36']);
+        text(R.tabs[i], tx, ty + 1, 24, tabInk, 'center', '700');
         addHit(tx, ty, tw + 12, 80, 'rank_t' + i);
       }
 
@@ -6221,13 +6306,18 @@
       var authable = profileCanAuth() && !state.me.auth;
       var ebx = C.DESIGN.w / 2 + cw / 2 - 74;
       var nickMaxW = authable ? (ebx - nx - 16) : (C.DESIGN.w / 2 + cw / 2 - 24 - nx);
-      textFit(meNick(), nx, ccy - 26, 30, COL.text, 'left', '700', nickMaxW);
+      /* v0.49：资料卡与排行榜同属「内容面」，字色必须跟着面走 */
+      var cardInk = inkOnSurface(false, false);
+      var cardSub = inkOnSurface(false, true);
+      textFit(meNick(), nx, ccy - 26, 30, cardInk, 'left', '700', nickMaxW);
       if (authable) {
-        text(P.editLabel, ebx, ccy - 26, 20, COL.goldDeep, 'center', '600');
+        text(P.editLabel, ebx, ccy - 26, 20,
+          bestInk(COL.surface, COL.card, [COL.goldDeep, COL.inkOnLight || '#202A36']), 'center', '600');
         addHit(ebx, ccy - 26, 120, 56, 'profile_rename');
       }
       textFit(profileStateText(), nx, ccy + 22, 18,
-        state.me.err ? (COL.dangerText || '#E5484D') : COL.textSub, 'left', null, C.DESIGN.w / 2 + cw / 2 - 24 - nx);
+        state.me.err ? bestInk(COL.surface, COL.card, [COL.dangerText, cardInk])
+          : cardSub, 'left', null, C.DESIGN.w / 2 + cw / 2 - 24 - nx);
 
       /* ---- 主操作：未授权 → 用微信昵称头像；已授权 / 不支持 → 改昵称 ---- */
       var b1 = { id: authable ? 'profile_auth' : 'profile_rename',
@@ -6395,109 +6485,186 @@
      * reduceMotion 为真直接走静态版（低配机与「减少动态效果」设置）。 */
     function renderFail() {
       var t = state.failT || 0, A = C.FAIL_ANIM || {};
-      var flashMs = A.flashMs || 320, enterMs = A.enterMs || 460;
-      var heartMs = A.heartMs || 640, bannerMs = A.bannerMs || 1300;
+      var flashMs = A.flashMs || 360, enterMs = A.enterMs || 440;
+      var heartMs = A.heartMs || 700, bannerMs = A.bannerMs || 1700;
+      var cardDelay = A.cardDelay || 460, shardMs = A.shardMs || 900;
       var anim = !state.reduceMotion;
-      var enter = anim ? Math.min(1, t / enterMs) : 1;
+      var enter = anim ? Math.max(0, Math.min(1, (t - cardDelay) / enterMs)) : 1;
       var e = G.easeOutCubic(enter);
-      var hitOK = !anim || enter >= 1;   // 动画未落位前不收点击
+      var cardOn = !anim || enter > 0;
+      var hitOK = !anim || enter >= 1;   // 卡片完全落位前不收点击
+      /* 桌面/按钮等内容晚于心 0.35 个进场单位出现：红心从屏幕中心飞向卡顶时，
+       * 不会穿过「已经连胜 N 关」和按钮文案。 */
+      var contentA = anim ? Math.max(0, Math.min(1, (enter - 0.55) / 0.35)) : 1;
+      var cy = DH() / 2, top = cy - 410;
+      var cx = C.DESIGN.w / 2;
 
-      /* 1) 遮罩（原本由 sheetBg 画；拆开是为了在遮罩之上叠红闪） */
+      /* 1) 遮罩 + 红色暗角 + 全屏红闪。
+       * v0.49：相比 v0.48 只在 0ms 铺一层纯红，这一版把「边缘压暗、中心透红」
+       * 的暗角也加上，失败瞬间更像画面被击中，而不是整个屏幕变粉。 */
       ctx.fillStyle = COL.mask;
       ctx.fillRect(0, 0, C.DESIGN.w, DH());
-
-      /* 2) 全屏红闪：0 → flashMs，alpha 0.34 → 0 */
       if (anim && t < flashMs) {
-        ctx.fillStyle = 'rgba(229,72,77,' + (0.34 * (1 - t / flashMs)).toFixed(3) + ')';
+        var fa = 1 - t / flashMs;
+        if (ctx.createRadialGradient) {
+          var vg = ctx.createRadialGradient(cx, cy, DH() * 0.04, cx, cy, DH() * 0.72);
+          vg.addColorStop(0, 'rgba(229,72,77,' + (0.05 * fa).toFixed(3) + ')');
+          vg.addColorStop(0.52, 'rgba(190,30,40,' + (0.18 * fa).toFixed(3) + ')');
+          vg.addColorStop(1, 'rgba(96,10,18,' + (0.58 * fa).toFixed(3) + ')');
+          ctx.fillStyle = vg;
+          ctx.fillRect(0, 0, C.DESIGN.w, DH());
+        }
+        /* 保留一块纯色红闪：低配/测试桩没有 radial gradient 时也有强反馈 */
+        ctx.fillStyle = 'rgba(229,72,77,' + (0.34 * fa).toFixed(3) + ')';
         ctx.fillRect(0, 0, C.DESIGN.w, DH());
       }
 
-      var cy = DH() / 2;
+      /* 2) 心碎碎片：从中心向外飞散。画在卡片之下，卡片进场时自然遮住。 */
+      if (anim && t < shardMs) {
+        var sp = Math.max(0, Math.min(1, t / shardMs));
+        var sr = 44 + 190 * G.easeOutCubic(sp);
+        for (var si = 0; si < 14; si++) {
+          var sa = -Math.PI / 2 + si * 2 * Math.PI / 14 + si * 0.11;
+          var ss = 9 + (si % 4) * 4;
+          ctx.save();
+          ctx.globalAlpha = (1 - sp) * 0.88;
+          ctx.translate(cx + Math.cos(sa) * sr, cy + Math.sin(sa) * sr);
+          ctx.rotate(sa + sp * 1.6);
+          ctx.beginPath();
+          ctx.moveTo(0, -ss);
+          ctx.lineTo(ss * 0.82, ss * 0.72);
+          ctx.lineTo(-ss * 0.62, ss * 0.42);
+          ctx.closePath();
+          ctx.fillStyle = si % 3 === 0 ? '#FFD7A6' : (si % 3 === 1 ? '#E5484D' : '#FF8A78');
+          ctx.fill();
+          ctx.restore();
+        }
+      }
 
-      /* 4)「时间到！」横幅：从上方 90px 砸下、略带倾斜回正，0.95s 起淡出。
-       * 画在卡片外侧（cy−470），不遮按钮，也不影响热区。 */
+      /* 3)「时间到！」横幅：砸下时带一点屏幕震动；580ms 起淡出，820ms 前退干净
+       * —— 卡片 900ms 落位，横幅必须先走，否则会压住「游戏失败」标题，
+       *    关卡里的教学提示文字也会从半透明的横幅里透出来。 */
+      var shake = anim && t < 300 ? Math.sin(t / 22) * 7 * (1 - t / 300) : 0;
       if (anim && t < bannerMs) {
         var bp = Math.min(1, t / 420);
-        var byy = (cy - 490) - (1 - G.easeOutBack(bp)) * 90;
-        var ba = t > 950 ? Math.max(0, 1 - (t - 950) / (bannerMs - 950)) : 1;
+        var byy = (cy - 520) - (1 - G.easeOutBack(bp)) * 90 + shake;
+        var ba = t > 580 ? Math.max(0, 1 - (t - 580) / (bannerMs - 580)) : 1;
         ctx.save();
         ctx.globalAlpha = ba;
-        ctx.translate(C.DESIGN.w / 2, byy);
+        ctx.translate(cx + shake, byy);
         ctx.rotate(-0.05 * (1 - bp));
         rr(-165, -34, 330, 68, 34);
         ctx.fillStyle = 'rgba(214,58,62,0.96)'; ctx.fill();
         text('时间到！', 0, 1, 38, '#FFFFFF', 'center', '700');
         ctx.restore();
       }
-      ctx.save();
-      if (anim && enter < 1) {
-        ctx.translate(C.DESIGN.w / 2, cy);
-        ctx.scale(0.94 + 0.06 * e, 0.94 + 0.06 * e);
-        ctx.translate(-C.DESIGN.w / 2, -cy + (1 - e) * 48);
+
+      /* 4) 卡片进场前先给「挑战失败」一个定格；卡片一动就立刻退场，
+       * 不能像旧版那样按 enter 淡出 —— 半透明卡片会让这行字透到按钮上。
+       * v0.49：这四字直接压在关卡的「覆盖率」行上，加一块深色胶囊托底，
+       * 免得两个字号相近的文本叠在一起像重影。 */
+      if (anim && t < cardDelay) {
+        var iy = cy + 150;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, 1 - t / cardDelay);
+        rr(cx - 118, iy - 36, 236, 72, 36);
+        ctx.fillStyle = 'rgba(74,14,18,0.55)'; ctx.fill();
+        text('挑战失败', cx, iy, 34, '#FFE3E3', 'center', '700');
+        ctx.restore();
       }
 
-      /* 3) 卡片与内容 */
-      drawCard(C.DESIGN.w / 2, cy, 600, 820, 32);
-      sheetTitle('复活', cy, 820);
-      var s = state.save;
-      var top = cy - 820 / 2;
-
-      /* 大红心：弹性放大 + 前 700ms 的轻微心跳 */
-      var hp = anim ? G.easeOutBack(Math.min(1, t / heartMs)) : 1;
-      var beat = anim ? 1 + 0.045 * Math.sin(t / 95) * Math.max(0, 1 - t / 700) : 1;
-      drawIcon('heart', C.DESIGN.w / 2, top + 175, COL.dangerText || '#FF5A5A', 3.2 * hp * beat);
-      /* 裂纹：0.28s 出现、0.62s 起淡出 —— 两条折线画在心上 */
-      if (anim && t > 280 && t < 900) {
-        var ca = Math.min(1, (t - 280) / 180) * Math.max(0, 1 - (t - 620) / 280);
+      /* 5) 复活卡片：延迟 460ms 再下滑进场，落位后恢复静态版版面。 */
+      if (cardOn) {
         ctx.save();
-        ctx.globalAlpha = ca * 0.55;
-        ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 3;
+        if (anim && enter < 1) {
+          ctx.translate(cx, cy);
+          ctx.scale(0.94 + 0.06 * e, 0.94 + 0.06 * e);
+          ctx.translate(-cx, -cy + (1 - e) * 48 + shake * 0.5);
+        }
+        /* 卡片不透明渐变：旧版 0.35→1 的半透明期会把关卡画面和「挑战失败」
+         * 透到按钮上，看起来像两层 UI 叠在一起。进场只靠位移 + 缩放表达。 */
+        ctx.globalAlpha = 1;
+        /* 失败卡是整屏焦点，先铺一层「COL.card 与底色合成后的实色」，
+         * 避免 0.96 半透明卡纸把关卡虚线透出来（动效期间尤其明显）。 */
+        var solid = overRgb(rgbOf(COL.card || '#FFFFFF'), rgbOf(COL.bg || '#000000'));
+        if (solid) {
+          ctx.fillStyle = 'rgb(' + Math.round(solid.r) + ',' + Math.round(solid.g) + ',' + Math.round(solid.b) + ')';
+          rr(cx - 300, cy - 410, 600, 820, 32);
+          ctx.fill();
+        }
+        drawCard(cx, cy, 600, 820, 32);
+        sheetTitle('游戏失败', cy, 820);
+        var s = state.save;
+        text('倒计时归零 · 复活可继续本关', cx, top + 66, 20, COL.textSub, 'center');
+
+        if (contentA > 0) {
+        ctx.save();
+        ctx.globalAlpha *= contentA;
+        /* v0.18：失败瞬间 streak 已经清零落盘了，这里要显示「断点前的值」，
+         * 否则复活面板会写「本轮挑战结束」——而复活明明还能把连胜接回来。 */
+        var showStreak = Math.max(s.streak || 0, state.streakBeforeFail || 0);
+        text(showStreak > 0 ? ('已经连胜 ' + showStreak + ' 关了') : '本轮挑战结束',
+          cx, top + 305, 32, COL.text, 'center', '600');
+        text(showStreak > 0 ? '复活可以保持连胜' : '下次再来，连胜从 1 重新算',
+          cx, top + 355, 26, COL.textSub, 'center');
+
+        /* v0.23：复活不再设每关上限 —— 反复看视频复活是允许的（用户要求）。
+         * v0.35：但整个"看视频"总额度有上限（ECON.adPerLevel=3），用完置灰。 */
+        var adLvOk = adLvLeft() > 0;
+        var canAd = !state.adSim && adLvOk;
+        // 广告复活（橙红大按钮）
+        var bAd = { id: 'ad_revive', x: cx, y: top + 465, w: 440, h: 108,
+          label: adLvOk ? '看广告复活' : '本关看视频次数已用完',
+          variant: 'danger', size: adLvOk ? 32 : 26, icon: 'tv', disabled: !adLvOk };
+        if (canAd && hitOK) addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'ad_revive');
+        drawButton(bAd);
+        /* v0.23：删掉「+90 巧币」—— 广告复活只给心。
+         * 旧版给币 → 看广告比付费复活还划算 → 最优策略变成"故意失败"。 */
+        text(adLvOk ? ('+1 心 · 继续本关 · 还可看 ' + adLvLeft() + ' 次')
+          : '+1 心 · 继续本关',
+          cx, top + 545, 24, COL.textSub, 'center', '600');
+
+        // 巧币复活
+        var canCoin = (s.coin || 0) >= C.ECON.coinRevive && !state.adSim;
+        var bCoin = { id: 'coin_revive', x: cx, y: top + 635, w: 380, h: 84,
+          label: '花 ' + C.ECON.coinRevive + ' 巧币复活', variant: 'secondary', size: 28, disabled: !canCoin };
+        if (canCoin && hitOK) addHit(bCoin.x, bCoin.y, bCoin.w, bCoin.h, 'coin_revive');
+        drawButton(bCoin);
+
+        // 忍痛放弃（按钮下方）
+        var gy = top + 750;
+        text('忍痛放弃', cx, gy, 30, COL.textSub, 'center', '500');
+        if (hitOK) addHit(cx, gy, 240, 86, 'give_up');
+        ctx.restore();
+        }
+        ctx.restore();
+      }
+
+      /* 6) 大红心：从屏幕中央弹到卡片顶部；裂纹在 0.28~1.1s 出现。
+       * 心形画在卡片之后，所以卡片进场时心仍然压在最上层，不会被卡纸吃掉。 */
+      /* 0ms 心不能是 0 尺寸：先给一个 72% 的「定格心」，再弹性长到满尺寸。
+       * 旧版 easeOutBack(0)=0，失败第一帧只剩一圈碎片，心要 200ms 后才出现。 */
+      var hp = anim ? (0.72 + 0.28 * G.easeOutBack(Math.min(1, t / heartMs))) : 1;
+      var beat = anim ? 1 + 0.055 * Math.sin(t / 90) * Math.max(0, 1 - t / 760) : 1;
+      var heartY = anim ? (cy + (top + 175 - cy) * e) : (top + 175);
+      var hs = (anim ? (3.55 - 0.35 * e) : 3.2) * hp * beat;
+      drawIcon('heart', cx, heartY, COL.dangerText || '#FF5A5A', hs);
+      if (anim && t > 280 && t < 1150) {
+        var ca = Math.min(1, (t - 280) / 180) * Math.max(0, 1 - (t - 700) / 450);
+        var k = hs / 3.2;
+        ctx.save();
+        ctx.globalAlpha = ca * 0.60;
+        ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 3 * k;
         ctx.beginPath();
-        ctx.moveTo(C.DESIGN.w / 2 - 16, top + 148);
-        ctx.lineTo(C.DESIGN.w / 2 - 2, top + 178);
-        ctx.lineTo(C.DESIGN.w / 2 - 14, top + 198);
-        ctx.moveTo(C.DESIGN.w / 2 + 14, top + 152);
-        ctx.lineTo(C.DESIGN.w / 2 + 3, top + 178);
-        ctx.lineTo(C.DESIGN.w / 2 + 16, top + 196);
+        ctx.moveTo(cx - 16 * k, heartY - 27 * k);
+        ctx.lineTo(cx - 2 * k, heartY + 3 * k);
+        ctx.lineTo(cx - 14 * k, heartY + 23 * k);
+        ctx.moveTo(cx + 14 * k, heartY - 23 * k);
+        ctx.lineTo(cx + 3 * k, heartY + 3 * k);
+        ctx.lineTo(cx + 16 * k, heartY + 21 * k);
         ctx.stroke();
         ctx.restore();
       }
-      /* v0.18：失败瞬间 streak 已经清零落盘了，这里要显示「断点前的值」，
-       * 否则复活面板会写「本轮挑战结束」——而复活明明还能把连胜接回来。 */
-      var showStreak = Math.max(s.streak || 0, state.streakBeforeFail || 0);
-      text(showStreak > 0 ? ('已经连胜 ' + showStreak + ' 关了') : '本轮挑战结束',
-        C.DESIGN.w / 2, top + 305, 32, COL.text, 'center', '600');
-      text(showStreak > 0 ? '复活可以保持连胜' : '下次再来，连胜从 1 重新算',
-        C.DESIGN.w / 2, top + 355, 26, COL.textSub, 'center');
-
-      /* v0.23：复活不再设每关上限 —— 反复看视频复活是允许的（用户要求）。
-       * v0.35：但整个"看视频"总额度有上限（ECON.adPerLevel=3），用完置灰。 */
-      var adLvOk = adLvLeft() > 0;
-      var canAd = !state.adSim && adLvOk;
-      // 广告复活（橙红大按钮）
-      var bAd = { id: 'ad_revive', x: C.DESIGN.w / 2, y: top + 465, w: 440, h: 108,
-        label: adLvOk ? '看广告复活' : '本关看视频次数已用完',
-        variant: 'danger', size: adLvOk ? 32 : 26, icon: 'tv', disabled: !adLvOk };
-      if (canAd && hitOK) addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'ad_revive');
-      drawButton(bAd);
-      /* v0.23：删掉「+90 巧币」—— 广告复活只给心。
-       * 旧版给币 → 看广告比付费复活还划算 → 最优策略变成"故意失败"。 */
-      text(adLvOk ? ('+1 心 · 继续本关 · 还可看 ' + adLvLeft() + ' 次')
-        : '+1 心 · 继续本关',
-        C.DESIGN.w / 2, top + 545, 24, COL.textSub, 'center', '600');
-
-      // 巧币复活
-      var canCoin = (s.coin || 0) >= C.ECON.coinRevive && !state.adSim;
-      var bCoin = { id: 'coin_revive', x: C.DESIGN.w / 2, y: top + 635, w: 380, h: 84,
-        label: '花 ' + C.ECON.coinRevive + ' 巧币复活', variant: 'secondary', size: 28, disabled: !canCoin };
-      if (canCoin && hitOK) addHit(bCoin.x, bCoin.y, bCoin.w, bCoin.h, 'coin_revive');
-      drawButton(bCoin);
-
-      // 忍痛放弃（按钮下方）
-      var gy = top + 750;
-      text('忍痛放弃', C.DESIGN.w / 2, gy, 30, COL.textSub, 'center', '500');
-      if (hitOK) addHit(C.DESIGN.w / 2, gy, 240, 86, 'give_up');
-      ctx.restore();
 
       /* v0.17：常驻 HUD 压在遮罩之上（位置与对局页完全相同），
        * 放在变换外 —— 它是底色层而不是卡片内容，不该跟着卡片一起弹。 */
@@ -6657,7 +6824,7 @@
       var r = box / 2;
       ctx.save();
       ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = state.darkSkin ? 'rgba(255,255,255,0.10)' : 'rgba(44,58,75,0.05)';
+      ctx.fillStyle = state.darkUi ? 'rgba(255,255,255,0.10)' : 'rgba(44,58,75,0.05)';
       ctx.fill();
       ctx.lineWidth = 1.6; ctx.strokeStyle = hexA(COL.gold, 0.55); ctx.stroke();
       ctx.clip();
@@ -6674,7 +6841,7 @@
     function drawBgSwatch(key, x, y, r) {
       var fx = C.BG_FX[key] || {}, mode = fx.mode || 'glow', i;
       var bgCol = fx.dark ? '#1B2547'
-        : (state.darkSkin ? 'rgba(255,255,255,0.12)'      // 深色皮肤：小样也别留一块亮底
+        : (state.darkUi ? 'rgba(255,255,255,0.12)'      // 深色皮肤：小样也别留一块亮底
           : (mode === 'aurora' ? '#E8E2F7' : mode === 'snow' ? '#DCEBF5'
             : mode === 'bubbles' ? '#E4F2FB' : '#FFF6E2'));
       ctx.fillStyle = bgCol;
@@ -6727,7 +6894,7 @@
       /* --- 行底 + 金色行标 --- */
       ctx.save();
       rr(rx, ry, w, INV_ROW_H, 16);
-      ctx.fillStyle = done ? hexA(COL.gold, state.darkSkin ? 0.13 : 0.10) : COL.card;
+      ctx.fillStyle = done ? hexA(COL.gold, state.darkUi ? 0.13 : 0.10) : COL.card;
       ctx.fill();
       ctx.lineWidth = 1.4;
       ctx.strokeStyle = done ? hexA(COL.gold, 0.5) : COL.line;
@@ -6735,7 +6902,7 @@
       ctx.restore();
       /* 深色皮肤下的行标不能再用「实心亮金 + 深字」—— 8 条金带叠在黑卡上太刺眼，
        * 改成半透明金 + 亮金文字，护眼模式下也还是一个"金色标签"。 */
-      var dk = !!state.darkSkin;
+      var dk = !!state.darkUi;
       ctx.save();
       rr(rx + 1, ry + 1, w - 2, INV_HEAD_H, 14);
       var hg = ctx.createLinearGradient(0, ry, 0, ry + INV_HEAD_H);
@@ -6781,7 +6948,7 @@
       if (done) {
         ctx.save();
         rr(bx - bw / 2, cy - bh / 2, bw, bh, bh / 2);
-        ctx.fillStyle = state.darkSkin ? 'rgba(255,255,255,0.07)' : 'rgba(120,130,146,0.11)';
+        ctx.fillStyle = state.darkUi ? 'rgba(255,255,255,0.07)' : 'rgba(120,130,146,0.11)';
         ctx.fill();
         ctx.restore();
         text('已领取', bx, cy + 1, 22, COL.textSub, 'center', '600');
@@ -7550,6 +7717,10 @@
         get LEVELS() { return LEVELS; }, get slots() { return SLOT_POS; },
         get dataset() { return DS; }, get setKey() { return state.setKey; },
         get COLORS() { return COL; },
+        /* v0.49：配色对比度工具 —— verify_v049 用它直接算「字色 vs 内容面」的
+         * WCAG 对比度，而不是靠截图肉眼判断深浅。 */
+        rgbOf: rgbOf, relLum: relLum, contrastOf: contrastOf, bestInk: bestInk,
+        inkOnSurface: inkOnSurface,
         get saveKey() { return SAVE_KEY; }, buildSet: buildSet,
         /* v0.6：品牌 / 主页版式 / 持续小花流，供 verify_v06 直接断言 */
         get BRAND() { return C.BRAND; },

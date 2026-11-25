@@ -187,6 +187,9 @@ function buildSfxSynth(key) {
     /* v0.48 时间到（超时失败）：A 小调下行 A4→F4→D4→A3，尾巴补 A2 闷音。
      * 与 sfx_win 同属情绪表达，不随材质风格切换、纯合成零文件。 */
     sfx_timeup: function () {
+      /* 低频落地 + 短噪声，再走 A 小调下行（与小程序端同谱） */
+      strike(82.41, 1.05, 0.20, SFX_MAT.wood, 'triangle');
+      noise(0.18, 0.13, 220, 0);
       var ns = [440.00, 349.23, 293.66, 220.00];
       for (var i = 0; i < ns.length; i++) {
         strike(ns[i], 0.46, 0.13 - i * 0.014, SFX_MAT.bell, 'sine', i * 0.19);
@@ -242,39 +245,69 @@ var sfxStyleKey = 'wood';
    * 只 clearInterval 拦不住已经排好的音——切到关卡后还会再响一整小节（2.4s），
    * 听起来就是"主页音乐切不过去"。闸门 30ms 拉到 0、随后硬停振荡器。 */
   var HOME_OSC = [], homeGate = null, homeLead = null, homeSeq = null;
-  /* v0.47：上一代正在淡出的振荡器（详见 miniprogram/game.js 同处注释）。
-   * 旧版把 stop() 挂在 190ms 定时器上，这段时间内又 homeStart 的话，
-   * 闸门被拉回 1 → 上一代已排程的音符重新出声，听起来就是两首主页曲叠在一起。 */
-  var homeDead = [], homeDeadTimer = 0;
+  /* v0.49：每一代拥有独立 gate/lead/delay（详见 miniprogram/game.js 同处注释）。
+   * v0.47 只停旧振荡器，仍共用 gate 与 delay；快速切页时旧回声尾巴会被新开闸放大。 */
+  var homeGen = null, homeDying = [];
 
-  function flushHomeDead() {
-    if (homeDeadTimer) { clearTimeout(homeDeadTimer); homeDeadTimer = 0; }
-    var list = homeDead;
-    homeDead = [];
-    for (var i = 0; i < list.length; i++) { try { list[i].stop(); } catch (e) {} }
+  function stopHomeGen(gen) {
+    if (!gen) return;
+    if (gen.stopTimer) { clearTimeout(gen.stopTimer); gen.stopTimer = 0; }
+    if (gen.seq && gen.seq.timer) { clearInterval(gen.seq.timer); gen.seq.timer = 0; }
+    if (gen.watch) { clearTimeout(gen.watch); gen.watch = 0; }
+    for (var i = 0; i < gen.osc.length; i++) {
+      try { gen.osc[i].stop(); } catch (e) {}
+    }
+    gen.osc = [];
+    try {
+      if (gen.gate && gen.gate.gain) {
+        if (gen.gate.gain.cancelScheduledValues) gen.gate.gain.cancelScheduledValues(0);
+        if (gen.gate.gain.setValueAtTime) gen.gate.gain.setValueAtTime(0, AC ? AC.currentTime : 0);
+        gen.gate.gain.value = 0;
+      }
+    } catch (e) {}
+    try { if (gen.gate) gen.gate.disconnect(); } catch (e) {}
+    try { if (gen.lead) gen.lead.disconnect(); } catch (e) {}
+    try { if (gen.delay) gen.delay.disconnect(); } catch (e) {}
+    try { if (gen.fb) gen.fb.disconnect(); } catch (e) {}
+    try { if (gen.wet) gen.wet.disconnect(); } catch (e) {}
+    var k = homeDying.indexOf(gen);
+    if (k >= 0) homeDying.splice(k, 1);
   }
 
-  function homeInit() {
-    if (!AC || homeGate) return;
+  function flushHomeDead() {
+    var list = homeDying.slice(0);
+    homeDying = [];
+    for (var i = 0; i < list.length; i++) stopHomeGen(list[i]);
+  }
+
+  function createHomeGen() {
+    if (!AC) return null;
+    var gen = { osc: [], gate: null, lead: null, delay: null, fb: null, wet: null,
+      seq: null, watch: 0, stopTimer: 0 };
     try {
-      homeGate = AC.createGain();
-      homeGate.gain.value = 0;
-      homeGate.connect(bgmGain);
+      gen.gate = AC.createGain();
+      gen.gate.gain.value = 0;
+      gen.gate.connect(bgmGain);
       var E = (C.AUDIO.home && C.AUDIO.home.echo) || {};
-      /* 主旋律单独一路：干声 + 短回声（不支持 DelayNode 的环境直接跳过） */
-      homeLead = AC.createGain();
-      homeLead.gain.value = 1;
-      homeLead.connect(homeGate);
+      gen.lead = AC.createGain();
+      gen.lead.gain.value = 1;
+      gen.lead.connect(gen.gate);
       if (AC.createDelay && E.delay) {
-        var d = AC.createDelay(1.0), fb = AC.createGain(), wet = AC.createGain();
-        d.delayTime.value = E.delay;
-        fb.gain.value = E.feedback || 0.24;
-        wet.gain.value = E.wet || 0.22;
-        homeLead.connect(d);
-        d.connect(fb); fb.connect(d);
-        d.connect(wet); wet.connect(homeGate);
+        gen.delay = AC.createDelay(1.0);
+        gen.fb = AC.createGain();
+        gen.wet = AC.createGain();
+        gen.delay.delayTime.value = E.delay;
+        gen.fb.gain.value = E.feedback || 0.24;
+        gen.wet.gain.value = E.wet || 0.22;
+        gen.lead.connect(gen.delay);
+        gen.delay.connect(gen.fb); gen.fb.connect(gen.delay);
+        gen.delay.connect(gen.wet); gen.wet.connect(gen.gate);
       }
-    } catch (e) { homeGate = null; homeLead = null; }
+    } catch (e) {
+      stopHomeGen(gen);
+      return null;
+    }
+    return gen;
   }
 
   function mtof(m) { return 440 * Math.pow(2, (m - 69) / 12); }
@@ -300,6 +333,7 @@ var sfxStyleKey = 'wood';
         if ((HOME_OSC[pi]._end || 0) > nowT) keep.push(HOME_OSC[pi]);
       }
       HOME_OSC = keep;
+      if (homeGen) homeGen.osc = keep;
     }
   }
   /* 木琴音：基音 + 很弱的 4 倍频泛音（给一点"木"的亮度，不是钟声） */
@@ -340,55 +374,60 @@ var sfxStyleKey = 'wood';
   function homeStart() {
     if (!AC || !enabled.bgm) return;
     resumeAudio();                               // v0.14.2：挂起的 AudioContext 先叫醒，否则排了也不响
-    homeInit();
-    if (!homeGate) return;
-    if (homeSeq) { applyBgmGain(); return; }          // 已在放
+    if (homeGen && homeGen.seq) { applyBgmGain(); return; }   // 已在放
+    if (homeGen) homeStop(false);                // 异常残留：先硬停，别挡新代
     var H = C.AUDIO.home;
     if (!H || !H.prog) return;
-    var beat = 60 / (H.bpm || 100), bar = beat * 4;
+    /* 旧代整张图先断开（含 delay 反馈环），再建新代 */
+    flushHomeDead();
+    var gen = createHomeGen();
+    if (!gen) return;
+    homeGen = gen; HOME_OSC = gen.osc; homeGate = gen.gate; homeLead = gen.lead;
     /* 闸门直接置 1：每个音自带 5~20ms 起音，闸门不需要再淡入；
      * 用 ramp 反而要看音频时钟推进，页面在后台时会停在 0 → 误判"没声音"。 */
-    flushHomeDead();   // v0.47：开闸前先停掉上一代，否则旧曲会被重新放出来
     try {
-      if (homeGate.gain.cancelScheduledValues) homeGate.gain.cancelScheduledValues(AC.currentTime);
-      homeGate.gain.value = 1;
+      if (gen.gate.gain.cancelScheduledValues) gen.gate.gain.cancelScheduledValues(AC.currentTime);
+      gen.gate.gain.value = 1;
     } catch (e) {}
-    homeSeq = { bar: 0, nextT: AC.currentTime + 0.04, timer: 0 };
+    var beat = 60 / (H.bpm || 100), bar = beat * 4;
+    var seq = gen.seq = { bar: 0, nextT: AC.currentTime + 0.04, timer: 0 };
+    homeSeq = seq;
     var tick = function () {
-      if (!homeSeq || !AC) return;
+      if (!homeGen || homeGen.seq !== seq || !AC) return;
       var horizon = AC.currentTime + bar * 0.98 + 0.05, guard = 0;
-      while (homeSeq.nextT < horizon && guard++ < 4) {
-        homeBar(homeSeq.bar, homeSeq.nextT, beat);
-        homeSeq.nextT += bar; homeSeq.bar++;
+      while (seq.nextT < horizon && guard++ < 4) {
+        homeBar(seq.bar, seq.nextT, beat);
+        seq.nextT += bar; seq.bar++;
       }
     };
     tick();
-    homeSeq.timer = setInterval(tick, 400);           // 提前一小节排程，定时器抖动不影响发音
+    seq.timer = setInterval(tick, 400);           // 提前一小节排程，定时器抖动不影响发音
     applyBgmGain();
   }
 
   function homeStop(soft) {
-    if (homeSeq && homeSeq.timer) clearInterval(homeSeq.timer);
-    homeSeq = null;
-    if (homeGate && AC) {
-      /* soft=true：进关卡时主页曲淡出 150ms，给 mp3 一点缓冲时间。
-       * 硬切（30ms）会先静音一两百毫秒，听感就是"音乐没了"。 */
-      var ramp = soft ? 0.15 : 0.03;
-      try {
-        homeGate.gain.cancelScheduledValues(AC.currentTime);
-        homeGate.gain.setValueAtTime(homeGate.gain.value, AC.currentTime);
-        homeGate.gain.linearRampToValueAtTime(0, AC.currentTime + ramp);
-      } catch (e) { try { homeGate.gain.value = 0; } catch (e2) {} }
+    var gen = homeGen;
+    if (gen) {
+      if (gen.seq && gen.seq.timer) { clearInterval(gen.seq.timer); gen.seq.timer = 0; }
+      gen.seq = null;
     }
-    /* 闸门归零后再硬停振荡器，避免已经排进时间轴的音继续响 */
-    /* v0.47：挂进 homeDead，淡出走完再硬停；若中途又 homeStart，那边会先同步清场 */
-    if (homeDead.length) flushHomeDead();
-    homeDead = HOME_OSC; HOME_OSC = [];
-    if (homeDeadTimer) clearTimeout(homeDeadTimer);
-    homeDeadTimer = setTimeout(function () {
-      homeDeadTimer = 0;
-      var list = homeDead; homeDead = [];
-      for (var i = 0; i < list.length; i++) { try { list[i].stop(); } catch (e) {} }
+    homeGen = null; homeSeq = null; HOME_OSC = [];
+    homeGate = null; homeLead = null;
+    flushHomeDead();
+    if (!gen || !AC) return;
+    /* soft=true：进关卡时主页曲淡出 150ms，给 mp3 一点缓冲时间。
+     * 硬切（30ms）会先静音一两百毫秒，听感就是"音乐没了"。 */
+    var ramp = soft ? 0.15 : 0.03;
+    try {
+      gen.gate.gain.cancelScheduledValues(AC.currentTime);
+      gen.gate.gain.setValueAtTime(gen.gate.gain.value, AC.currentTime);
+      gen.gate.gain.linearRampToValueAtTime(0, AC.currentTime + ramp);
+    } catch (e) { try { if (gen.gate) gen.gate.gain.value = 0; } catch (e2) {} }
+    /* 这一代自己的 gate/delay，新代开闸不会把它复活 */
+    homeDying.push(gen);
+    gen.stopTimer = setTimeout(function () {
+      gen.stopTimer = 0;
+      stopHomeGen(gen);
     }, soft ? 190 : 60);
   }
 
@@ -620,9 +659,16 @@ var sfxStyleKey = 'wood';
   /* 调试/验收钩子：tools/audio_probe.html 用它直接驱动 BGM 并读回状态 */
   audio.bgmInfo = function () {
     var info = {
-      scene: bgmScene, home: !!homeSeq, gain: (bgmGain && bgmGain.gain) ? bgmGain.gain.value : null,
-      gate: (homeGate && homeGate.gain) ? homeGate.gain.value : null,
+      scene: bgmScene, home: !!homeGen, gain: (bgmGain && bgmGain.gain) ? bgmGain.gain.value : null,
+      gate: (homeGen && homeGen.gate && homeGen.gate.gain) ? homeGen.gate.gain.value : null,
       preloaded: !!bgmPreloaded, els: Object.keys(EL).length, ac: AC ? AC.state : null,
+      live: (function () {
+        if (!AC || !homeGen) return 0;
+        var n = 0, now = AC.currentTime;
+        for (var i = 0; i < homeGen.osc.length; i++) if ((homeGen.osc[i]._end || 0) > now) n++;
+        return n;
+      })(),
+      dead: homeDying.length,
       playing: (function () { var n = 0; for (var k in EL) if (EL[k] && !EL[k].paused) n++; return n; })()
     };
     if (curEl) {

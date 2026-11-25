@@ -27,6 +27,9 @@ var L = { w: 566, h: 588, rowH: 74, step: 84, rows: 7 };
  * 否则好友榜会在深色卡片里贴一张浅色列表） */
 var K = {
   text: '#2C3A4B', sub: '#7A8A9C', rowBg: 'rgba(246,243,238,0.95)',
+  /* v0.49：行底与行字分开传。旧版昵称直接用 K.text，深色主域下 K.text 变白，
+   * 而行底若还是浅米色就整行消失；现在主域传 rowText / rowSub 配对字色。 */
+  rowText: '#2C3A4B', rowSub: '#4E5E72',
   me: '#FDE7DF', meText: '#E2624A', gold: '#FFB93D', line: '#E3E9F2'
 };
 var K_DEFAULT = {};
@@ -241,12 +244,14 @@ function draw() {
       text(String(rk), 42, y + 1, 24, '#3A2A12', 'center', '700');
     } else {
       text(String(rk > 99 ? '99+' : rk), 42, y + 1, rk > 99 ? 20 : 24,
-        hl ? K.meText : K.sub, 'center', '700');
+        hl ? K.meText : K.rowSub, 'center', '700');
     }
 
     drawAvatar(it.avatar, 96, y, 24, it.nick, FALLBACK[i % FALLBACK.length]);
-    text(fit(it.nick, cfg.w - 136 - 96, 24, hl ? '700' : '500'), 136, y + 1, 24, K.text, 'left');
-    text(it.cleared + ' 关', cfg.w - 28, y + 1, 26, hl ? K.meText : K.text, 'right', '700');
+    text(fit(it.nick, cfg.w - 136 - 96, 24, hl ? '700' : '500'), 136, y + 1, 24,
+      K.rowText, 'left');
+    text(it.cleared + ' 关', cfg.w - 28, y + 1, 26,
+      hl ? K.meText : K.rowText, 'right', '700');
   }
 }
 

@@ -197,6 +197,9 @@ store[CFG.SAVE_KEY] = JSON.stringify({
 
   clearRec();
   S.rankT = 999;
+  /* v0.49：失败页先播进场动画（红闪 → 心碎 → 卡片落位），文案在卡片落位后
+   * 才淡入。这里等动画走完再取帧，验的是玩家最终看到的那一版文案。 */
+  S.failT = 1300;
   step(16);
   check('复活页仍显示断点前的连胜数', rec.texts.some(t => t.s === '已经连胜 4 关了'),
     textsOf(rec.texts.filter(t => /连胜|挑战结束/.test(t.s))));

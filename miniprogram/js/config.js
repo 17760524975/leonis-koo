@@ -9,7 +9,7 @@
   'use strict';
 
   return {
-    version: 'v0.48',
+    version: 'v0.49',
 
     /* ---------- 品牌（v0.6 改名「方寸巧拼」） ----------
      * 游戏名只在这里定义一次：主页标题、分享文案、工程名都从这里取，
@@ -264,6 +264,14 @@
       disc: 'rgba(255,255,255,0.92)',
       accentText: '#E2624A',
       dangerText: '#E5484D',
+      /* v0.49：内容面上的「配对字色」。排行榜/资料卡不能再直接拿 COL.text，
+       * 因为 COL.text 会随皮肤变白，而 surface 是另一套面；两者必须成对出现。
+       * 另留 inkOnLight 作为运行时兜底：万一面色仍是浅色（旧包、第三方皮肤、
+       * 深色背景特效切换的中间帧），bestInk() 会自动改回深墨字。 */
+      textOnSurface: '#2C3A4B',
+      textOnSurfaceHi: '#8F3A26',
+      textOnChip: '#4E5E72',
+      inkOnLight: '#202A36',
 
       /* v0.47：倒计时胶囊。浅色皮肤下是一枚白胶囊 + 深棕数字（原样保留）；
        * 深色皮肤下必须翻过来，否则它会是整个深色页面里**最亮的一块**，
@@ -742,13 +750,17 @@
       warnSec: 20
     },
 
-    /* v0.48：超时失败的动画节奏（ms）。state.reduceMotion 为真时整段跳过，
-     * 卡片/按钮位置与静态版完全一致（热区不会错位）。 */
+    /* v0.48 失败动画时间轴（v0.49 细化）。state.reduceMotion 为真时整段跳过，
+     * 卡片/按钮位置与静态版完全一致（热区不会错位）。
+     * v0.49 把「时间到！」横幅的退场提前到卡片落位（cardDelay+enterMs=900ms）
+     * 之前 —— 否则横幅会半透明地压在卡片标题上，关卡里的教学提示还会透出来。 */
     FAIL_ANIM: {
-      flashMs: 320,        // 全屏红闪
-      enterMs: 460,        // 卡片下滑 + 轻微缩放进场
-      heartMs: 640,        // 大红心弹性放大
-      bannerMs: 1300       // 「时间到！」横幅砸下 + 停留 + 淡出
+      flashMs: 360,        // 全屏红闪 + 红色暗角
+      cardDelay: 460,      // 先让「时间到」/裂心定格，再让复活卡进场
+      enterMs: 440,        // 卡片下滑 + 轻微缩放进场（460→900ms 落位）
+      heartMs: 700,        // 大红心弹性放大
+      shardMs: 900,        // 心碎碎片飞散
+      bannerMs: 820        // 「时间到！」横幅：停留到 580ms，820ms 前完全退场（卡片 900ms 落位）
     },
 
     /* ---------- v0.5 皮肤（只覆盖配色，绝不改布局/几何） ----------
@@ -804,6 +816,8 @@
         surface: 'rgba(255,250,242,0.07)', surfaceHi: 'rgba(233,177,106,0.22)',
         chipOff: 'rgba(255,250,242,0.11)', disc: 'rgba(255,250,242,0.15)',
         accentText: '#FFCB9A', dangerText: '#FF9A9A',
+        textOnSurface: '#F2F5FF', textOnSurfaceHi: '#FFD7A6',
+        textOnChip: '#E8EDF4', inkOnLight: '#202A36',
         pillBg: 'rgba(16,21,30,0.66)', pillInk: '#E8EDF4'
       }
     },
@@ -899,6 +913,8 @@
       surface: 'rgba(255,255,255,0.075)', surfaceHi: 'rgba(255,209,102,0.20)',
       chipOff: 'rgba(255,255,255,0.10)', disc: 'rgba(255,255,255,0.16)',
       accentText: '#FFC98A', dangerText: '#FF8B8B',
+      textOnSurface: '#F2F5FF', textOnSurfaceHi: '#FFD7A6',
+      textOnChip: '#E8EDF4', inkOnLight: '#202A36',
       pillBg: 'rgba(10,15,24,0.62)', pillInk: '#F2F5FF'
     },
 
@@ -1031,8 +1047,9 @@
       /* v0.20：音效整体重做成"低频为主"的木质感（见 game.js 的 synth 注释），
        * 三个短音的响度重新配平：吸附最响（反馈最重要）、点击最轻。 */
       sfxGain: { sfx_snap: 1.00, sfx_win: 0.95, sfx_pick: 0.85, sfx_tap: 0.70, sfx_fail: 0.55,
-        /* v0.48：超时失败乐句（纯合成，不读 wav，这项只为统一口径） */
-        sfx_timeup: 0.85 },
+        /* v0.49：超时失败乐句（纯合成，不读 wav）。比普通点击响一档，
+         * 失败是强反馈，不能像 UI 轻提示一样被忽略。 */
+        sfx_timeup: 0.95 },
       fadeMs: 220,
       tapGuardMs: 40,
       snapVoices: 2

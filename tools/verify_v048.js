@@ -87,13 +87,17 @@ const D = game._debug, S = game.state;
 
 /* ================= A. 配置 ================= */
 section('A. 配置 / 版本（三端一致）');
-check('版本 = v0.48', CFG.version === 'v0.48', CFG.version);
+check('版本 ≥ v0.48', /^v0\.(4[89]|[5-9]\d)/.test(CFG.version), CFG.version);
 const A = CFG.FAIL_ANIM || {};
-check('FAIL_ANIM 四段节奏齐全且递增区间合理',
-  A.flashMs === 320 && A.enterMs === 460 && A.heartMs === 640 && A.bannerMs === 1300,
+check('FAIL_ANIM 节奏齐全且卡片延迟进场',
+  A.flashMs === 360 && A.cardDelay === 460 && A.enterMs === 440 &&
+  A.heartMs === 700 && A.shardMs === 900 && A.bannerMs === 820,
   JSON.stringify(A));
+check('横幅在卡片落位前退场（bannerMs < cardDelay + enterMs）',
+  A.bannerMs < A.cardDelay + A.enterMs,
+  `banner=${A.bannerMs} card=${A.cardDelay + A.enterMs}`);
 check('sfx_timeup 已配增益（纯合成，不进 files）',
-  CFG.AUDIO.sfxGain.sfx_timeup === 0.85 && !CFG.AUDIO.files.sfx_timeup,
+  CFG.AUDIO.sfxGain.sfx_timeup === 0.95 && !CFG.AUDIO.files.sfx_timeup,
   'gain=' + CFG.AUDIO.sfxGain.sfx_timeup);
 
 /* ================= B. 超时触发 ================= */
@@ -119,14 +123,19 @@ const banner0 = rec.texts.indexOf('时间到！') >= 0;
 check('0ms：全屏红闪在画', flash0, rec.rects.filter(r => /229,72,77/.test(r.style)).map(r => r.style).join(' '));
 check('0ms：「时间到！」横幅在画', banner0, rec.texts.join('|'));
 
-S.failT = 400;
+S.failT = 700;
 render();
-check('400ms：横幅仍在（停留段）', rec.texts.indexOf('时间到！') >= 0, rec.texts.join('|'));
-check('400ms：红闪已退场', !rec.rects.some(r => /rgba\(229,72,77,0\.\d+\)/.test(r.style)));
+check('700ms：横幅仍在（停留段，全不透明）', rec.texts.indexOf('时间到！') >= 0, rec.texts.join('|'));
+check('700ms：红闪已退场', !rec.rects.some(r => /rgba\(229,72,77,0\.\d+\)/.test(r.style)));
 
-S.failT = 1500;
+S.failT = 899;
 render();
-check('1500ms：横幅完全退场（静态版一致）', rec.texts.indexOf('时间到！') < 0, rec.texts.join('|'));
+check('899ms：横幅已开始退场（不让它压在落位的卡片上）',
+  rec.texts.indexOf('时间到！') < 0, rec.texts.join('|'));
+
+S.failT = 1900;
+render();
+check('1900ms：横幅完全退场（静态版一致）', rec.texts.indexOf('时间到！') < 0, rec.texts.join('|'));
 check('静态版仍保留复活页全部按钮文案',
   rec.texts.some(t => /看广告复活|本关看视频次数已用完/.test(t)) &&
   rec.texts.some(t => /花 \d+ 巧币复活/.test(t)) &&
@@ -170,9 +179,9 @@ check('动画期不注册热区', /hitOK/.test(coreSrc) && /if \(canAd && hitOK\
 check('failT 只在 fail 页推进',
   /if \(state\.overlay === 'fail'\) state\.failT[\s\S]{0,80}\+ dt/.test(coreSrc));
 check('三端版本号一致',
-  /version: 'v0\.48'/.test(cfgSrc) &&
-  /version: 'v0\.48'/.test(fs.readFileSync(path.join(ROOT, 'preview/js/config.js'), 'utf8')) &&
-  /version: 'v0\.48'/.test(fs.readFileSync(path.join(ROOT, 'miniprogram/js/config.js'), 'utf8')));
+  /version: 'v0\.49'/.test(cfgSrc) &&
+  /version: 'v0\.49'/.test(fs.readFileSync(path.join(ROOT, 'preview/js/config.js'), 'utf8')) &&
+  /version: 'v0\.49'/.test(fs.readFileSync(path.join(ROOT, 'miniprogram/js/config.js'), 'utf8')));
 
 console.log('\n' + (fail === 0 ? `v0.48 失败动画/音乐验收全部通过（${total} 项）`
   : `!! ${fail}/${total} 项未通过`));
