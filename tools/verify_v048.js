@@ -178,10 +178,14 @@ check('core 先 halt 再 play（顺序不能反）',
 check('动画期不注册热区', /hitOK/.test(coreSrc) && /if \(canAd && hitOK\)/.test(coreSrc));
 check('failT 只在 fail 页推进',
   /if \(state\.overlay === 'fail'\) state\.failT[\s\S]{0,80}\+ dt/.test(coreSrc));
+/* v0.50：这条改成「三端彼此一致」而不是「等于某个版本号」——
+ * 原来每升一版都要回来改这条断言，属于测试自己给自己找事。 */
+const verOf = src => (src.match(/version: '(v[0-9.]+)'/) || [])[1];
 check('三端版本号一致',
-  /version: 'v0\.49'/.test(cfgSrc) &&
-  /version: 'v0\.49'/.test(fs.readFileSync(path.join(ROOT, 'preview/js/config.js'), 'utf8')) &&
-  /version: 'v0\.49'/.test(fs.readFileSync(path.join(ROOT, 'miniprogram/js/config.js'), 'utf8')));
+  !!verOf(cfgSrc) &&
+  verOf(cfgSrc) === verOf(fs.readFileSync(path.join(ROOT, 'preview/js/config.js'), 'utf8')) &&
+  verOf(cfgSrc) === verOf(fs.readFileSync(path.join(ROOT, 'miniprogram/js/config.js'), 'utf8')),
+  'v=' + verOf(cfgSrc));
 
 console.log('\n' + (fail === 0 ? `v0.48 失败动画/音乐验收全部通过（${total} 项）`
   : `!! ${fail}/${total} 项未通过`));

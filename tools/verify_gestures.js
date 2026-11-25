@@ -129,8 +129,11 @@ function radii(p) {
 }
 
 console.log('==== 0. 环境 ====');
+/* v0.50：几何章补了 9 个图案（10→19 关），这里只锁「scale / unitScale 不变、
+ * 关卡数 = 数据集自己的关卡数」，不再写死 36。 */
 check('375×812 移动模拟，scale=' + scale + '，unitScale=' + U,
-  scale === 0.5 && U === 96 && LEVELS.length === 36);   // v0.44：U=96、七巧板 36 关（几何10 + 字母 A–Z 26）
+  scale === 0.5 && U === 96 && LEVELS.length === globalThis.TANGRAM_SETS.tangram7.levels.length,
+  'levels=' + LEVELS.length);
 check('第 1 关轮廓为正方形（边吸附构造基准）', LEVELS[0].outline.length === 4,
   JSON.stringify(LEVELS[0].outline));
 

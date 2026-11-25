@@ -70,6 +70,8 @@
     this.multi = new Uint8Array(CELLS * CELLS);
     this.targetFrac = new Uint8Array(CELLS * CELLS);
     this.targetTotal = 0;
+    /* v0.50：单块「越界」度量用的临时缓冲（测一块板有多少面积落在轮廓外） */
+    this.one = new Uint8Array(CELLS * CELLS);
   }
 
   /* 设置目标轮廓（每关一次）。outline 为 1000 坐标系多边形；
@@ -87,11 +89,52 @@
     this.targetTotal = total;
   };
 
+  /* v0.50：单块「越界」度量 —— 这块板有多少子采样落在目标轮廓内。
+   * 返回 outside 为「露在轮廓外的比例」（0 = 整块都在剪影里）。
+   *
+   * 为什么需要它：v0.49 之前通关只看整体像素覆盖率（≥99%）。
+   * 七巧板的板边都在 45° 网格上，接缝落在子采样中心时天然会漏掉一条细缝，
+   * 于是「视觉上明明拼好了」却卡在 98~99%，再也上不去 —— 这是普遍的最后一格问题。
+   * 改成逐块度量后，判定口径变成玩家能理解的那句话：
+   * 「每一块都完整落在图案里，且互不压叠」= 拼成功。
+   */
+  Judge.prototype.measure = function (poly) {
+    var one = this.one, tf = this.targetFrac;
+    one.fill(0);
+    rasterize(poly, one, null, 0, 'piece');
+    var total = 0, inside = 0;
+    for (var c = 0; c < one.length; c++) {
+      var n = one[c];
+      if (!n) continue;
+      if (n > SUB * SUB) n = SUB * SUB;
+      total += n;
+      if (tf[c]) inside += n * (tf[c] / (SUB * SUB));
+    }
+    var area = Math.abs(polySignedArea(poly));
+    if (!total) return { outside: 1, inside: 0, samples: 0, area: area };
+    return {
+      outside: 1 - inside / total,
+      inside: inside / total,
+      samples: total,
+      area: area
+    };
+  };
+
+  function polySignedArea(poly) {
+    var a = 0;
+    for (var i = 0; i < poly.length; i++) {
+      var p = poly[i], q = poly[(i + 1) % poly.length];
+      a += p[0] * q[1] - q[0] * p[1];
+    }
+    return a * 0.5;
+  }
+
   /* 判定。polys = [[poly, pieceIndex], ...]（只传已放上拼图区的板）
-   * 返回 { coverage, overflow, overlapArea, overlapPairs }
+   * 返回 { coverage, overflow, overlapPairs, pieces }
    *   coverage   目标轮廓被覆盖的比例（0~1）
    *   overflow   覆盖值超过 1 的面积 / 目标面积
    *   overlapPairs 有交叠的板序号对
+   *   pieces     逐块的 { outside }（与入参同序，v0.50 起作为通关主口径）
    */
   Judge.prototype.judge = function (polys) {
     var cnt = this.cellCnt, bits = this.cellBits, multi = this.multi;

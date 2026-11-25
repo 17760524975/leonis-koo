@@ -159,6 +159,9 @@
       S.page = 'levels'; S.fade = 1; S.pageT = 9999;
       var pg = +(q.match(/page=(\d+)/) || [])[1];
       if (!isNaN(pg)) S.lvPage = pg;
+      /* v0.50：关卡页纵向滚动位置（字母 26 关合成一章后需要滚动，截图要能滑到中间） */
+      var lvs = +(q.match(/lvscroll=(\d+)/) || [])[1];
+      if (!isNaN(lvs)) S.lvScroll = lvs;
     } else if (screen === 'play' || screen === 'hint' || screen === 'result' || screen === 'tut') {
       // 用 core 当前数据集的关卡表（切 set 后是 60 关七巧板），不能再用全局 TANGRAM_DATA.levels
       var LIB = game._debug.LEVELS;

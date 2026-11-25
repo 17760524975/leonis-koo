@@ -116,10 +116,13 @@ const f2 = n => Math.round(n * 100) / 100;
 
 /* ================= A. 配置 ================= */
 section('A. 配置：内容面配对字色（四种皮肤 + 深色特效）');
-check('版本 v0.49（三端一致）',
-  CFG.version === 'v0.49' &&
-  require(path.join(ROOT, 'preview/js/config.js')).version === 'v0.49' &&
-  require(path.join(ROOT, 'miniprogram/js/config.js')).version === 'v0.49',
+/* v0.50：本脚本验的是 v0.49 引入的能力，版本号只要求「≥ v0.49 且三端一致」，
+ * 否则每升一版这条都要回来改一次（v0.48 那条也一起改成比对三端一致性了）。 */
+const numOf = v => parseFloat(String(v).replace(/^v/, '')) || 0;
+check('版本 ≥ v0.49（三端一致）',
+  numOf(CFG.version) >= 0.49 &&
+  require(path.join(ROOT, 'preview/js/config.js')).version === CFG.version &&
+  require(path.join(ROOT, 'miniprogram/js/config.js')).version === CFG.version,
   CFG.version);
 const need = ['textOnSurface', 'textOnSurfaceHi', 'textOnChip', 'inkOnLight'];
 check('COLORS 里有四个配对字色 token',

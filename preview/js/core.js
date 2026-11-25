@@ -213,6 +213,9 @@
       ds: ds, levels: levels, LOCAL: LOCAL, TRAY_BB: TRAY_BB, SLOT_POS: SLOT_POS,
       chapPer: meta.chapPer || 20, chapNames: meta.chapNames || FALLBACK_CHAP,
       chapTitles: meta.chapTitles || null,
+      /* v0.50：数据集自带章节表（from 从 1 计，count 关数）。
+       * 有了它，关卡页不再按「每 10 关一章」硬切 —— 字母 26 关能合成一章。 */
+      chapters: meta.chapters || null,
       completeTitle: meta.completeTitle || '', completeSub: meta.completeSub || '',
       saveKey: meta.saveKey || C.SAVE_KEY, snapGrid: meta.snapGrid || null,
       fit: { totalW: totalW, totalH: totalH, band: band, pile: PACK.info }
@@ -223,6 +226,7 @@
   var DS = B0.ds, LEVELS = B0.levels, LOCAL = B0.LOCAL, TRAY_BB = B0.TRAY_BB;
   var SLOT_POS = B0.SLOT_POS, CHAP_PER = B0.chapPer, CHAP_NAMES = B0.chapNames;
   var CHAP_TITLES = B0.chapTitles, COMPLETE_TITLE = B0.completeTitle, COMPLETE_SUB = B0.completeSub;
+  var CHAP_LIST = B0.chapters;
   var SAVE_KEY = B0.saveKey, SNAP_GRID = B0.snapGrid;
   function w2d(x) { return LAY.BOARD.x + x * WS; }
   function h2d(y) { return LAY.BOARD.y + y * WS; }
@@ -252,6 +256,8 @@
       overlay: null,
       levelIdx: 0,
       lvPage: 0,            // 关卡页当前章节（0 基）
+      /* v0.50：关卡页网格的滚动（字母章 26 关一屏放不下） */
+      lvScroll: 0, lvScrollMax: 0, lvView: null,
       pieces: [],
       selId: null,
       drag: null,
@@ -644,6 +650,43 @@
           }
         } catch (e) { /* 存档损坏 → 用默认值，静默降级 */ }
       }
+      /* ---------- v0.50：题库变动（几何章加了新图案）后的关号迁移 ----------
+       * 新增的几何关插在第 11~20 位，字母整体后移。存档是按**关号**记星星的，
+       * 不迁移的话玩家的字母成绩会整体错位到别的图案上。
+       * 用「关卡名序列」当签名：签名一变就按名字把关卡数据搬到新关号，
+       * 新关留空、找不到对应名字的旧关丢弃。 */
+      try {
+        var curSig = LEVELS.map(function (l) { return l.name || ''; });
+        if (Array.isArray(s.lvSig) && s.lvSig.length &&
+            s.lvSig.join('|') !== curSig.join('|')) {
+          var oldSig = s.lvSig;
+          var mapOld2New = {};
+          for (var ni2 = 0; ni2 < curSig.length; ni2++) {
+            var oi2 = oldSig.indexOf(curSig[ni2]);
+            if (oi2 >= 0 && mapOld2New[oi2] === undefined) mapOld2New[oi2] = ni2;
+          }
+          var remapObj = function (src) {
+            var out = {};
+            for (var k in src) {
+              var oi3 = parseInt(k, 10) - 1;
+              if (isNaN(oi3) || mapOld2New[oi3] === undefined) continue;
+              out[String(mapOld2New[oi3] + 1)] = src[k];
+            }
+            return out;
+          };
+          s.starOf = remapObj(s.starOf || {});
+          s.starPaid = remapObj(s.starPaid || {});
+          s.bestTime = remapObj(s.bestTime || {});
+          s.hintUsed = remapObj(s.hintUsed || {});
+          var newUnlocked = 1;
+          for (var oi4 = 0; oi4 < (s.unlockedMax || 1); oi4++) {
+            if (mapOld2New[oi4] === undefined) continue;
+            newUnlocked = Math.max(newUnlocked, mapOld2New[oi4] + 2);
+          }
+          s.unlockedMax = Math.min(curSig.length, newUnlocked);
+        }
+        s.lvSig = curSig;
+      } catch (e2) { /* 迁移失败就当新档，绝不因为存档问题卡住进游戏 */ }
       /* v0.8：四巧板 120 关 → 30 关。老存档的解锁进度与星星按新关卡数收敛，
        * 否则会停在「已解锁 87 关」这种越界状态，关卡列表算出空章节。 */
       var maxLv = LEVELS.length;
@@ -1715,6 +1758,11 @@
       var m = state.inviteScrollMax || 0;
       state.inviteScroll = Math.max(0, Math.min(m, v));
     }
+    /* v0.50：关卡网格滚动（同样的夹取规则） */
+    function setLvScroll(v) {
+      var m = state.lvScrollMax || 0;
+      state.lvScroll = Math.max(0, Math.min(m, v));
+    }
 
     /* 分享 = 发出一张邀请券。不再当场发奖，也不再限每日一次。 */
     function doInviteShare() {
@@ -1750,7 +1798,8 @@
       var b = buildSet(key);
       DS = b.ds; LEVELS = b.levels; LOCAL = b.LOCAL; TRAY_BB = b.TRAY_BB;
       SLOT_POS = b.SLOT_POS; CHAP_PER = b.chapPer; CHAP_NAMES = b.chapNames;
-      CHAP_TITLES = b.chapTitles; COMPLETE_TITLE = b.completeTitle; COMPLETE_SUB = b.completeSub;
+      CHAP_TITLES = b.chapTitles; CHAP_LIST = b.chapters;
+      COMPLETE_TITLE = b.completeTitle; COMPLETE_SUB = b.completeSub;
       SAVE_KEY = b.saveKey; SNAP_GRID = b.snapGrid;
       state.setKey = key;
       state.save = loadSave();
@@ -1807,7 +1856,8 @@
       // 进关卡页时跳到「当前进度所在章」，关卡再多也不该每次都从第 1 章翻起
       if (page === 'levels') {
         var um = Math.max(1, Math.min(state.save.unlockedMax || 1, LEVELS.length));
-        state.lvPage = Math.floor((um - 1) / CHAP_PER);
+        state.lvPage = chapterOf(um - 1);
+        state.lvScroll = 0;
       }
     }
 
@@ -1893,9 +1943,15 @@
           dAngle: 0, dFlipped: false,
           rot: null, flip: null,
           pulse: 0, ring: 0, breathe: 0,
-          grabT: 0
+          grabT: 0,
+          /* v0.50：叠放层次。按「放上棋盘的先后」递增，先放的在下面。
+           * 旧版按 DS.pieceOrder 画，于是小三角放上去会被后画的大三角盖住。 */
+          z: 0,
+          /* v0.50：这块现在是否完整落在剪影里（绘制「已就位」描边用） */
+          fit: false
         };
       });
+      state.zSeq = 0;
       state.selId = null;
       state.drag = null;
       /* v0.21：重开不清用时/步数 —— 计时没重置，这两个也必须跟着连续，
@@ -1952,6 +2008,7 @@
               pp.x = it[1]; pp.y = it[2];
               pp.angle = it[3]; pp.dAngle = it[3];
               pp.flipped = !!it[4]; pp.dFlipped = !!it[4];
+              raisePiece(pp);      // v0.50：续玩恢复叠放层次
               break;
             }
           }
@@ -2063,9 +2120,45 @@
     function boardPieces() {
       return state.pieces.filter(function (p) { return p.onBoard; });
     }
+    /* v0.50：把一块板提到最上层（后放的在上面）。 */
+    function raisePiece(p) {
+      state.zSeq = (state.zSeq || 0) + 1;
+      p.z = state.zSeq;
+    }
+    /* 棋盘板件按叠放层次从小到大（先画在下）。z 相同的按 DS.pieceOrder 兜底。 */
+    function boardByZ() {
+      return boardPieces().sort(function (a, b) {
+        var za = a.z || 0, zb = b.z || 0;
+        if (za !== zb) return za - zb;
+        return DS.pieceOrder.indexOf(a.id) - DS.pieceOrder.indexOf(b.id);
+      });
+    }
+
+    /* ---------------- v0.50：整块落位判定 ----------------
+     * 一块板算「放好了」= 它整块都落在剪影里，且没和别的板压在一起。
+     * 判断是纯几何的（顶点在轮廓内 / 边不穿轮廓 / 不进内孔 + 凸多边形交叠面积），
+     * 不做像素统计，所以「拼得对」永远得 100%，不会再被接缝上的细缝卡住。
+     * 只有已上板的板参与比较；拖动中用同一套函数实时给高亮。 */
+    function pieceFit(p, tolOverride) {
+      var lv = LEVELS[state.levelIdx];
+      var tol = tolOverride > 0 ? tolOverride : (C.JUDGE.fitTol || 3);
+      var poly = piecePoly(p);
+      if (!G.pieceInside(poly, lv.outline, lv.holes, tol)) return false;
+      var mine = G.area(poly);
+      var lim = mine * (C.JUDGE.pairOverlapTol || 0.02);
+      var others = boardPieces();
+      for (var i = 0; i < others.length; i++) {
+        var o = others[i];
+        if (o === p) continue;
+        if (G.convexOverlapArea(poly, piecePoly(o)) > lim) return false;
+      }
+      return true;
+    }
+
     function judgeNow() {
       var lv = LEVELS[state.levelIdx];
-      var arr = boardPieces().map(function (p) {
+      var list = boardPieces();
+      var arr = list.map(function (p) {
         return [piecePoly(p), DS.pieceOrder.indexOf(p.id)];
       });
       var t0 = nowMs();
@@ -2082,7 +2175,9 @@
           areas[arr.findIndex(function (x) { return x[1] === b; })]);
         if (ov > lim) bad.push(r.overlapPairs[i]);
       }
-      return { coverage: r.coverage, overflow: r.overflow, overlaps: bad };
+      /* 逐块「是否就位」：既用于通关判定，也用于画「已就位」描边与提示选块 */
+      var fits = list.map(function (p) { return pieceFit(p); });
+      return { coverage: r.coverage, overflow: r.overflow, overlaps: bad, fits: fits, list: list };
     }
 
     /* ---------------- 判定与结算 ---------------- */
@@ -2090,9 +2185,23 @@
       var lv = LEVELS[state.levelIdx];
       var r = judgeNow();
       state.overlapPairs = r.overlaps;
+      /* v0.50：进度条改成「已就位块数 / 总块数」。
+       * 旧版显示栅格覆盖率，45° 接缝上永远差最后一格，于是玩家看到
+       * 「图都拼好了却停在 99%」——那正是用户反馈的问题①。
+       * 现在只要每块都整块落在剪影里就算就位，七块就位 = 100% = 过关，
+       * 进度条和判定用的是同一把尺子，不会再自相矛盾。 */
+      var fitN = 0;
+      for (var fq = 0; fq < r.fits.length; fq++) if (r.fits[fq]) fitN++;
+      var progTo = DS.pieceOrder.length ? fitN / DS.pieceOrder.length : 0;
       state.covFrom = state.cov;
-      state.covTo = r.coverage;
+      state.covTo = progTo;
       state.covT = 0;
+      /* 把「已就位」写回板件（绘制用）。拖动中的那块不写，它由 onMove 实时给。 */
+      var dragId = state.drag ? state.drag.id : null;
+      for (var fi = 0; fi < r.list.length; fi++) {
+        if (r.list[fi].id === dragId) continue;
+        r.list[fi].fit = !!r.fits[fi];
+      }
       if (r.overlaps.length) {
         state.overlapT = 400;
         flashMsg('有两块压在一起了');
@@ -2101,12 +2210,15 @@
         env.audio.play('sfx_fail');
         return;
       }
-      if (r.coverage >= C.JUDGE.passCoverage && r.overflow < C.JUDGE.passOverflow &&
-          boardPieces().length === DS.pieceOrder.length) {
+      /* v0.50 通关口径：七块全上板 + 每块都完整落在剪影里。
+       * 覆盖率只做兜底（防止轮廓给得比板大很多时「全在轮廓里」被误判）。 */
+      var allPlaced = boardPieces().length === DS.pieceOrder.length;
+      var allFit = r.fits.length === DS.pieceOrder.length && r.fits.every(function (x) { return x; });
+      if (allPlaced && allFit && r.coverage >= (C.JUDGE.minCoverage || 0.94)) {
         win();
         return;
       }
-      if (r.coverage >= C.JUDGE.lowCoverHint) flashMsg('还差一点点');
+      if (fitN === DS.pieceOrder.length - 1) flashMsg('还差一点点');
     }
 
     function flashMsg(t) { state.msg = t; state.msgT = 1500; }
@@ -2235,9 +2347,58 @@
       setLevelScene();
     }
 
-    /* ---------------- 吸附（v0.3 三层：顶点 > 边 > 网格） ---------------- */
+    /* ---------------- 吸附（v0.50 四层：标准解 > 顶点 > 边 > 网格） ---------------- */
+
+    /* 翻转对称：翻转前后形状完全一样（S / T1 / T2 / T3 / 两个小三角都是），
+     * 只有平行四边形 P 是手性块 —— 对称块不必要求翻转态与标准解一致。
+     * 不缓存：LOCAL 会随数据集切换整体替换（四巧/七巧板板的形状不同）。 */
+    function flipSymmetric(id) {
+      var poly = LOCAL[id];
+      if (!poly) return false;
+      var used = [], i, j;
+      for (i = 0; i < poly.length; i++) {
+        var hit = -1;
+        for (j = 0; j < poly.length; j++) {
+          if (used[j]) continue;
+          if (Math.abs(poly[i][0] + poly[j][0]) < 1e-6 &&
+              Math.abs(poly[i][1] - poly[j][1]) < 1e-6) { hit = j; break; }
+        }
+        if (hit < 0) return false;
+        used[hit] = 1;
+      }
+      return true;
+    }
+
+    /* 对准标准解：距离 + 角度 + 翻转态 三项都对得上就吸死到标准解。
+     * 返回值 true 表示本次吸附已处理（与其它层互斥）。 */
+    function snapToSolution(p) {
+      var lv = LEVELS[state.levelIdx];
+      if (!lv || !lv.solution) return false;
+      var sd = C.SNAP.solDist || 120, sa = C.SNAP.solAngle || 14;
+      for (var i = 0; i < lv.solution.length; i++) {
+        var s = lv.solution[i];
+        if (s.id !== p.id) continue;
+        var dx = s.x - p.x, dy = s.y - p.y;
+        if (dx * dx + dy * dy > sd * sd) return false;
+        var da = ((p.dAngle - s.angle) % 360 + 540) % 360 - 180;
+        if (Math.abs(da) > sa) return false;
+        if (!flipSymmetric(p.id) && (!!p.dFlipped !== !!s.flipped)) return false;
+        p.x = s.x; p.y = s.y;
+        p.dAngle = s.angle;
+        if (flipSymmetric(p.id)) p.dFlipped = !!s.flipped;
+        state.lastSnap = null;
+        state.lastEdge = null;
+        return true;
+      }
+      return false;
+    }
+
     function snapPiece(p, live) {
       var lv = LEVELS[state.levelIdx];
+      /* v0.50 第 0 层：对准标准解（最高优先级）。
+       * 后面几层（顶点/边/网格）都只能保证「贴着」，贴多准取决于玩家手抖多少；
+       * 这一层直接把板吸到该关标准解给它的那一档，七块都吸上就必然严丝合缝。 */
+      if (snapToSolution(p)) return true;
       var targets = [];
       var i;
       for (i = 0; i < lv.outline.length; i++) targets.push(lv.outline[i]);
@@ -2414,7 +2575,10 @@
           state.scrollDrag.moved = true;
           state.press = null;
         }
-        if (state.scrollDrag.moved) setInviteScroll(state.scrollDrag.s0 - sdy);
+        if (state.scrollDrag.moved) {
+          if (state.scrollDrag.kind === 'levels') setLvScroll(state.scrollDrag.s0 - sdy);
+          else setInviteScroll(state.scrollDrag.s0 - sdy);
+        }
         return;
       }
       if (state.drag) {
@@ -2437,12 +2601,15 @@
         var wx = d2w(x) - state.drag.offX;
         var wy = d2wy(y) - state.drag.offY;
         p.x = wx; p.y = wy;
-        if (!p.onBoard) p.onBoard = true;
+        if (!p.onBoard) { p.onBoard = true; raisePiece(p); }
         state.drag.moved = true;
         clampToBoard(p);
         var hit = snapPiece(p, true);
         p.ring = hit ? 1 : 0;
         p.breathe = hit ? (p.breathe || 0.001) : 0;
+        /* v0.50：整块落位实时判定 —— 拖到「整块都在剪影里、又不压别的板」时
+         * 整块亮起来（不是只在吸附点闪一下），玩家一眼知道这一块可以松手了。 */
+        p.fit = pieceFit(p);
       }
     }
     function onUp(x, y) {
@@ -2720,6 +2887,7 @@
           if (id.indexOf('online_o') === 0) { onlineClaim(id.slice(7)); break; }
           if (id.indexOf('lvpage_') === 0) {
             state.lvPage = +id.slice(7);
+            state.lvScroll = 0;
             state.pageT = 0;          // 重置入场错峰，让新一章重新入场
             break;
           }
@@ -2778,7 +2946,9 @@
     }
     /* v0.11：优先「还没上板的块」，其次是「上板但没放对的块」。
      * 旧版拿 solution[0] 兜底——当所有块都已上板（但没拼对）时会指到一块
-     * 已经摆在棋盘上的板，托盘不亮、落点高亮又被板压住，玩家什么提示都看不见。 */
+     * 已经摆在棋盘上的板，托盘不亮、落点高亮又被板压住，玩家什么提示都看不见。
+     * v0.50：「放对了」改用整块落位口径（pieceFit），和通关判定同一把尺子 ——
+     * 否则玩家按提示摆好了、提示还亮着，再点提示又指回同一块。 */
     function pickHintPiece() {
       var lv = LEVELS[state.levelIdx], i, st, p;
       for (i = 0; i < lv.solution.length; i++) {
@@ -2787,7 +2957,7 @@
       }
       for (i = 0; i < lv.solution.length; i++) {
         st = lv.solution[i]; p = pieceOf(st.id);
-        if (!pieceSolved(p, st)) return st.id;
+        if (!pieceFit(p)) return st.id;
       }
       return null;                      // 全部放对（理论上已判定通关）
     }
@@ -2808,6 +2978,14 @@
     function handlePageDown(x, y) {
       var h = hitTest(x, y);
       if (h && h.id) state.press = h.id;
+      /* v0.50：按在关卡网格视口里 → 起一个纵向滑动会话。
+       * 手指移动超过 10px 就转成滚动，并取消这次点击（见 onMove）。 */
+      if (state.page === 'levels') {
+        var V = state.lvView;
+        if (V && x >= V.x && x <= V.x + V.w && y >= V.y && y <= V.y + V.h) {
+          state.scrollDrag = { kind: 'levels', y0: y, s0: state.lvScroll || 0, moved: false };
+        }
+      }
     }
     /* 板件的内切圆半径 / 外接圆半径（世界单位）。
      * (p.x,p.y) 就是质心（LOCAL 以质心为原点），直接量质心到边/顶点的距离。 */
@@ -2873,7 +3051,7 @@
       /* 找板 v0.9：托盘改成散放后板件会互相压住，命中规则必须与绘制顺序一致 ——
        * 循环顺序 = 绘制顺序 = 后画在上层，所以「最后一个命中的」就是玩家看见的那块。
        * 旧版取「质心最近」，重叠时会选中被压住的下层板，是这次改动引入的新坑。 */
-      var best = null;
+      var best = null, bestBoard = null;
       for (var i = 0; i < state.pieces.length; i++) {
         var p = state.pieces[i];
         var poly = p.onBoard ? piecePolyDesign(p) : trayPoly(p);
@@ -2881,8 +3059,15 @@
         var sp0 = p.onBoard ? null : SLOT_POS[p.slot];
         var cx0 = p.onBoard ? w2d(p.x) : sp0.x;
         var cy0 = p.onBoard ? h2d(p.y) : sp0.y;
-        best = { p: p, d: 0, sp: sp0, cx: cx0, cy: cy0 };
+        var hit0 = { p: p, d: 0, sp: sp0, cx: cx0, cy: cy0 };
+        /* v0.50：棋盘上的板按叠放层次取最上面那块；托盘板仍按绘制顺序取最后一块。 */
+        if (p.onBoard) {
+          if (!bestBoard || (p.z || 0) >= (bestBoard.p.z || 0)) bestBoard = hit0;
+        } else {
+          best = hit0;
+        }
       }
+      if (bestBoard) best = bestBoard;
       if (!best) {
         /* 兜底：细长/尖角块纯多边形命中太窄（小三角只有 91px 宽），
          * 托盘再给「质心 44px 内」一层圆形热区；已上板的板不参与（避免误选远处板）。 */
@@ -2901,6 +3086,9 @@
       state.selId = pc.id;
       pc.grabT = 1;
       pc.rot = null;
+      /* v0.50：一碰就提到最上层 —— 后放的在上面，正在操作的永远看得见。
+       * 旧版按 DS.pieceOrder 固定层级，小三角放到大三角上会被直接盖没。 */
+      raisePiece(pc);
       // v0.3.2 B1：手柄判定已前置到 best 循环之前；这里只留原始拖拽/环形手势。
       if (!pc.onBoard) {
         // 从托盘拿起：托盘与棋盘同尺度，按抓取点偏移落到棋盘，板不会跳位置
@@ -3034,12 +3222,16 @@
       if (state.hint) {
         /* v0.20：没有计时器了 —— 提示一直亮着，直到被指的那块真的放对。
          * 放对就收工（不自动改指下一块：一次购买只换一步指引，
-         * 否则买一次就能一路看完整关解法）。 */
-        var hlv = LEVELS[state.levelIdx], hst = null;
-        for (var hi = 0; hi < hlv.solution.length; hi++) {
-          if (hlv.solution[hi].id === state.hint.id) hst = hlv.solution[hi];
-        }
-        if (hst && pieceSolved(pieceOf(hst.id), hst)) state.hint = null;
+         * 否则买一次就能一路看完整关解法）。
+         * v0.50：判定从「和标准解逐位对齐」改成「整块落位」。玩家凭自己理解
+         * 把这块摆进了图案（哪怕和标准解差几度/偏一点），金色提示就该消失，
+         * 而不是继续挂在那里、让人以为没放对（用户截图反馈的就是这个）。 */
+        var hpz = pieceOf(state.hint.id);
+        /* hpz.fit 是「上一次判定」的缓存，玩家把板摆正却还没松手时它是旧值；
+         * 这里对提示目标单独实时算一次（只一块板，代价可忽略），
+         * 保证「摆进去 → 提示立刻消失」不依赖判定时机。 */
+        if (!hpz) state.hint = null;
+        else if (hpz.onBoard && (hpz.fit || pieceFit(hpz))) state.hint = null;
       }
       if (state.press) state.pressT += dt;
       /* v0.4 A2：长按翻转已彻底移除——翻转改为 pointerup 后判定的「双击」，
@@ -4452,9 +4644,43 @@
      * 会跟拖拽手势打架，能不分页滚动就不滚）。 */
     /* v0.3 A1：CHAP_PER / CHAP_NAMES 全部从数据集读取（buildSet/useSet 已赋值），
      * 四巧板 6×20、七巧板 6×10 由同一套代码自适应。 */
-    function chapterCount() { return Math.max(1, Math.ceil(LEVELS.length / CHAP_PER)); }
+    /* ---------------- v0.50：章节 ----------------
+     * 数据集可以自带章节表（CHAP_LIST = [{name, title, from, count}]，from 从 1 计），
+     * 没带就退回旧规则「每 CHAP_PER 关一章」。字母关卡原来是 A-J/K-T/U-Z 三章，
+     * 每章只有 6~10 关、还要来回点页签；现在合成一章「字母」26 关，列表可上下滚。 */
+    function chapterInfo(c) {
+      if (CHAP_LIST && CHAP_LIST[c]) {
+        var it = CHAP_LIST[c];
+        var from0 = Math.max(0, (it.from || 1) - 1);
+        var cnt = it.count || (LEVELS.length - from0);
+        return {
+          from: from0, count: Math.min(cnt, LEVELS.length - from0),
+          name: it.name || CHAP_NAMES[c] || ('第 ' + (c + 1) + ' 章'),
+          title: it.title || null
+        };
+      }
+      var f = c * CHAP_PER;
+      return {
+        from: f, count: Math.max(0, Math.min(CHAP_PER, LEVELS.length - f)),
+        name: CHAP_NAMES[c] || ('第 ' + (c + 1) + ' 章'),
+        title: (CHAP_TITLES && CHAP_TITLES[c]) || null
+      };
+    }
+    function chapterCount() {
+      if (CHAP_LIST && CHAP_LIST.length) return CHAP_LIST.length;
+      return Math.max(1, Math.ceil(LEVELS.length / CHAP_PER));
+    }
+    /* 某一关（0 基）属于第几章 */
+    function chapterOf(idx) {
+      var n = chapterCount();
+      for (var c = 0; c < n; c++) {
+        var ci = chapterInfo(c);
+        if (idx >= ci.from && idx < ci.from + ci.count) return c;
+      }
+      return 0;
+    }
     function chapterName(c) {
-      return CHAP_NAMES[c] || ('第 ' + (c + 1) + ' 章');
+      return chapterInfo(c).name;
     }
 
     /* 选关页目标图案缩略图：outline 是 1000×1000 归一化坐标，
@@ -4514,6 +4740,7 @@
       var nCh = chapterCount();
       var page = Math.max(0, Math.min(state.lvPage || 0, nCh - 1));
       state.lvPage = page;
+      var CH = chapterInfo(page);
 
       /* 章节胶囊 */
       /* v0.30：章节数从 6 增到 9，固定 96px 胶囊会超出 750 设计宽
@@ -4522,7 +4749,7 @@
       var ph = 64;
       var pgap = nCh > 7 ? 6 : 10;
       var avail = C.DESIGN.w - 32;
-      var pw = Math.min(96, Math.floor((avail - (nCh - 1) * pgap) / nCh));
+      var pw = Math.min(nCh <= 3 ? 148 : 96, Math.floor((avail - (nCh - 1) * pgap) / nCh));
       var ptotal = nCh * pw + (nCh - 1) * pgap;
       var px0 = (C.DESIGN.w - ptotal) / 2 + pw / 2;
       var py = view.safeTop + 96 + ph / 2;
@@ -4537,27 +4764,49 @@
         if (!on) { ctx.lineWidth = 2; ctx.strokeStyle = COL.line; ctx.stroke(); }
         ctx.restore();
         // 选中章用深棕字（橙底白字对比度只有 2:1）
-        // v0.3 A1/V8：数据集自带 chapTitles（题材短名）时胶囊显示题材名，否则保持「第N章」
-        var lbl = (CHAP_TITLES && CHAP_TITLES[c]) || ('第' + (c + 1) + '章');
-        var fSize = (CHAP_TITLES && lbl.length > 2) ? 20 : 24;
+        var ci = chapterInfo(c);
+        var lbl = ci.title || ci.name;
+        var fSize = lbl.length > 3 ? 20 : 24;
         text(lbl, pcx, py, fSize, on ? COL.btnText : COL.textSub, 'center', '600');
         addHit(pcx, py, pw, ph, 'lvpage_' + c, 'btn');
       }
       // 章名放在胶囊下方，给玩家一个语义锚点（"这章在练什么"）
-      text('第 ' + (page + 1) + ' 章 · ' + chapterName(page) + '　' + (page * CHAP_PER + 1) + '-' +
-        Math.min((page + 1) * CHAP_PER, LEVELS.length) + ' 关',
-        C.DESIGN.w / 2, py + ph / 2 + 34, 24, COL.textSub, 'center');
+      var capTxt = (CH.name === CH.title || !CH.title)
+        ? ('第 ' + (page + 1) + ' 章 · ' + CH.name + '　' + (CH.from + 1) + '-' + (CH.from + CH.count) + ' 关')
+        : (CH.name + '　' + (CH.from + 1) + '-' + (CH.from + CH.count) + ' 关');
+      text(capTxt, C.DESIGN.w / 2, py + ph / 2 + 34, 24, COL.textSub, 'center');
 
-      /* 4 列 × 5 行 */
+      /* 4 列网格 */
       var cols = 4, cw = 160, chh = 196, gx = 16, gy2 = 16;
-      var n = Math.min(CHAP_PER, LEVELS.length - page * CHAP_PER);
+      var n = CH.count;
       var totalW = cols * cw + (cols - 1) * gx;
       var x0 = (C.DESIGN.w - totalW) / 2 + cw / 2;
-      var top = py + ph / 2 + 66 + chh / 2;
+      /* v0.50：字母章 26 关排 7 行，一屏放不下 → 网格区可上下拖动。
+       * 视口从章名下方开始，到底部安全区为止；内容高超出就出滚动。 */
+      var viewTop = py + ph / 2 + 56;
+      var viewBot = C.DESIGN.h - (view.safeBottom || 0) - 24;
+      var viewH = Math.max(120, viewBot - viewTop);
+      var rows = Math.ceil(n / cols);
+      var contentH = rows * chh + Math.max(0, rows - 1) * gy2;
+      var canScroll = contentH > viewH + 1;
+      state.lvScrollMax = canScroll ? (contentH - viewH) : 0;
+      if (!(state.lvScroll > 0)) state.lvScroll = 0;
+      if (state.lvScroll > state.lvScrollMax) state.lvScroll = state.lvScrollMax;
+      /* 记住视口，供按下时判断「这一下是滑动还是点卡片」 */
+      state.lvView = canScroll ? { x: 0, y: viewTop, w: C.DESIGN.w, h: viewH } : null;
+      var sc = state.lvScroll || 0;
+
+      ctx.save();
+      if (canScroll) {
+        ctx.beginPath();
+        ctx.rect(0, viewTop, C.DESIGN.w, viewH);
+        ctx.clip();
+      }
       for (var i = 0; i < n; i++) {
-        var idx = page * CHAP_PER + i;
+        var idx = CH.from + i;
         var cx = x0 + (i % cols) * (cw + gx);
-        var cy = top + Math.floor(i / cols) * (chh + gy2);
+        var cy = viewTop - sc + chh / 2 + Math.floor(i / cols) * (chh + gy2);
+        if (canScroll && (cy + chh / 2 < viewTop - 8 || cy - chh / 2 > viewBot + 8)) continue;
         var locked = (idx + 1) > state.save.unlockedMax;
         var press = state.press === 'lvl_' + (idx + 1);
         // 入场：opacity 0→1 / translateY +12→0，240ms，错峰 i×24ms
@@ -4596,7 +4845,25 @@
         // 小字关号保留在星星行下方：报关号/对答案仍方便，且不与图案、星星重叠
         text(String(idx + 1), cx, cellY + 82, 18, COL.textSub, 'center', '600');
         ctx.restore();
+        /* 滚出视口的卡片不加热区（否则会点到底下看不见的关） */
+        if (canScroll && (cellY + chh / 2 < viewTop + 4 || cellY - chh / 2 > viewBot - 4)) continue;
         addHit(cx, cellY, cw, chh, 'lvl_' + (idx + 1), 'btn');
+      }
+      ctx.restore();
+
+      /* 滚动条：只有需要滚时才画，给一个「下面还有」的信号 */
+      if (canScroll) {
+        var trackX = C.DESIGN.w - 14, trackY = viewTop + 8, trackH = viewH - 16;
+        var th = Math.max(48, trackH * viewH / contentH);
+        var ty = trackY + (trackH - th) * (sc / (contentH - viewH || 1));
+        ctx.save();
+        rr(trackX - 3, trackY, 6, trackH, 3);
+        ctx.fillStyle = state.darkUi ? 'rgba(255,255,255,0.10)' : 'rgba(44,58,75,0.06)';
+        ctx.fill();
+        rr(trackX - 3, ty, 6, th, 3);
+        ctx.fillStyle = state.darkUi ? 'rgba(255,255,255,0.34)' : 'rgba(44,58,75,0.22)';
+        ctx.fill();
+        ctx.restore();
       }
     }
 
@@ -5091,12 +5358,40 @@
       /* v0.21 教学关：标准解彩色虚影（画在轮廓之上、板件之下） */
       if (state.tut) drawTutGhost(lv);
 
-      /* 已上板的板件（先画，被拖的那块最后画） */
+      /* 已上板的板件（先画，被拖的那块最后画）。
+       * v0.50：按叠放层次升序 —— 先放上去的在下面，后放的在上面（像叠图层）。 */
       var dragging = state.drag ? state.drag.id : null;
-      for (var m = 0; m < state.pieces.length; m++) {
-        var p = state.pieces[m];
-        if (!p.onBoard || p.id === dragging) continue;
+      var boardList = boardByZ();
+      for (var m = 0; m < boardList.length; m++) {
+        var p = boardList[m];
+        if (p.id === dragging) continue;
         drawBoardPiece(p);
+      }
+      /* v0.50 字母关「内部裂缝」补块：G/H/K/Y 四关的标准解在字母内部留了 17~56 世界单位
+       * 的细长裂缝（20 单位 ≈ 6.6pt，肉眼就是一条白线）。这几关的裂缝位置由
+       * tools/make_gap_patches.js 事先算好写在 levels.gapFill 里，这里只在「裂缝所属的
+       * 那块板已就位」时按那块板的颜色填上 —— 没就位就不画，免得凭空多出一块悬空色块。 */
+      var lvGap = LEVELS[state.levelIdx];
+      if (lvGap && lvGap.gapFill && lvGap.gapFill.length) {
+        for (var gi = 0; gi < lvGap.gapFill.length; gi++) {
+          var gp = lvGap.gapFill[gi];
+          var gpiece = pieceOf(gp.a);
+          if (!gpiece || !gpiece.onBoard) continue;
+          if (!(gpiece.fit || pieceFit(gpiece))) continue;
+          var gdef = DS.pieces[gp.a];
+          if (!gdef || !gp.pts || gp.pts.length < 3) continue;
+          ctx.save();
+          ctx.beginPath();
+          for (var gj = 0; gj < gp.pts.length; gj++) {
+            var gv = gp.pts[gj];
+            if (gj === 0) ctx.moveTo(w2d(gv[0]), h2d(gv[1]));
+            else ctx.lineTo(w2d(gv[0]), h2d(gv[1]));
+          }
+          ctx.closePath();
+          ctx.fillStyle = gdef.color;
+          ctx.fill();
+          ctx.restore();
+        }
       }
 
       /* 提示引导必须画在「已上板件」之上（v0.11 修复）：
@@ -5143,7 +5438,9 @@
       ctx.lineTo(B.x + B.size - 26, B.y + B.size + 24);
       ctx.stroke();
       ctx.restore();
-      text('覆盖', P.x, P.y + P.h / 2, 26, COL.textSub, 'left');
+      /* v0.50：文案从「覆盖」改成「已拼」—— 进度条现在数的是「已经就位的块数」，
+       * 七块就位 = 100%，和过关条件同一把尺子。 */
+      text('已拼', P.x, P.y + P.h / 2, 26, COL.textSub, 'left');
       var px = P.x + 74, pw = P.w - 144;   // v0.9：右侧留 70 给百分比，绿条走满不再穿字
       rr(px, P.y, pw, P.h, P.h / 2);
       ctx.fillStyle = COL.track; ctx.fill();
@@ -5360,6 +5657,35 @@
       ctx.restore();
 
       // 描边（霓虹/荧光用亮色描边加深发光感，水晶用半透明白）
+      /* v0.50「无白缝」：已就位的板先沿自身轮廓描一圈同色、加宽的边，
+       * 相当于把板向外「胖」1.2 设计 px，正好盖住两块板之间那条约 0.2 世界单位的细线。
+       * 为免外向的脂肪把剪影边撑出彩色毛边，这一段裁在剪影轮廓内（含内孔 evenodd）。 */
+      if (opts.fitted && C.PIECE.seamBleed > 0) {
+        var lvB = LEVELS[state.levelIdx];
+        ctx.save();
+        if (lvB && lvB.outline && lvB.outline.length >= 3) {
+          ctx.beginPath();
+          ctx.moveTo(w2d(lvB.outline[0][0]), h2d(lvB.outline[0][1]));
+          for (var ob = 1; ob < lvB.outline.length; ob++) ctx.lineTo(w2d(lvB.outline[ob][0]), h2d(lvB.outline[ob][1]));
+          ctx.closePath();
+          var holB = lvB.holes || [];
+          for (var hb = 0; hb < holB.length; hb++) {
+            var hrB = holB[hb];
+            if (!hrB || hrB.length < 3) continue;
+            ctx.moveTo(w2d(hrB[0][0]), h2d(hrB[0][1]));
+            for (var hc = 1; hc < hrB.length; hc++) ctx.lineTo(w2d(hrB[hc][0]), h2d(hrB[hc][1]));
+            ctx.closePath();
+          }
+          if (ctx.clip) { try { ctx.clip('evenodd'); } catch (eB) { ctx.clip(); } }
+        }
+        path();
+        ctx.lineWidth = C.PIECE.strokeW + C.PIECE.seamBleed * 2;
+        ctx.strokeStyle = def.color;
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+        ctx.restore();
+      }
+
       path();
       var glowing = pstyle === 'neon' || pstyle === 'glow';
       ctx.lineWidth = glowing ? C.PIECE.strokeW + 0.6 : C.PIECE.strokeW;
@@ -5499,7 +5825,8 @@
         var wt = Math.min(1, state.win.t / C.ANIM.winShrink);
         winScale = 1 - 0.02 * Math.sin(wt * Math.PI);
       }
-      drawPolyPiece(pts, def, { cx: cxc, cy: cyc, scale: pulse * grab * winScale, sx: sx });
+      drawPolyPiece(pts, def, { cx: cxc, cy: cyc, scale: pulse * grab * winScale, sx: sx,
+        fitted: !!p.fit });
       /* v0.3.2 B2：选中高亮增强——半透明金色填充 + 5px 金边，拖动中也保持。
        * 叠加在板件之上（底色/形状仍可辨），成局动画/结算时隐藏。 */
       if (state.selId === p.id && !state.win) {
@@ -5510,6 +5837,23 @@
         ctx.fillStyle = 'rgba(255,185,61,0.15)';
         ctx.fill();
         ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(255,185,61,0.92)';
+        ctx.stroke();
+        ctx.restore();
+      }
+      /* v0.50：「整块落位」描边 —— 这一块已经完整落在图案里且没压到别的板。
+       * 拖动中脉动更强（可以松手了），已放好的是常驻细边（一眼看出还差哪块）。 */
+      if (p.fit && !state.win) {
+        var moving = !!(state.drag && state.drag.id === p.id);
+        var fa = moving ? (0.72 + 0.22 * Math.sin(state.time / 160)) : 0.50;
+        ctx.save();
+        ctx.beginPath();
+        for (var s3 = 0; s3 < pts.length; s3++) {
+          if (s3 === 0) ctx.moveTo(pts[s3][0], pts[s3][1]); else ctx.lineTo(pts[s3][0], pts[s3][1]);
+        }
+        ctx.closePath();
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = moving ? 6 : 3;
+        ctx.strokeStyle = 'rgba(59,178,115,' + fa.toFixed(2) + ')';
         ctx.stroke();
         ctx.restore();
       }
@@ -7679,6 +8023,8 @@
         /* v0.42：邀请面板的滑动手势 —— 验收脚本用它模拟「按住 → 拖动 → 松手」 */
         setInviteScroll: setInviteScroll,
         onDown: onDown, onMove: onMove, onUp: onUp,
+        /* v0.50：磁吸/判定验收用 —— 直接驱动一次吸附，绕开「手指命中哪块板」的干扰 */
+        snapPiece: snapPiece, piecePoly: piecePoly,
         tierRewards: tierRewards,
         /* v0.39：皮肤解锁（巧币买断）—— 供 verify_v039 直接驱动与断言 */
         pickSkinItem: pickSkinItem, buySkinItem: buySkinItem,

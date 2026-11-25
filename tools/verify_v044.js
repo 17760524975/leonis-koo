@@ -16,7 +16,7 @@
  *   C. 每关 |outline 面积| − Σ|孔面积| = 147456（16u²·96²），误差 < 0.1%；
  *   D. outline 是简单多边形（≥4 顶点、顶点不重复、面积非零），且落在棋盘点阵内；
  *   E. 有字怀的字母才有孔（A/B/D/O/P/Q/R），B 两个孔；其余 0 孔；
- *   F. splitLines ≥ 3、hintTier=1，章节 4 页且章名与关数自洽；
+ *   F. splitLines ≥ 2、hintTier=1，章节表无缝覆盖全部关卡；
  *   G. 三端一致 + 主包 < 4MB。
  */
 const path = require('path');
@@ -42,18 +42,26 @@ console.log('==== A. 关卡构成 ====');
 const geo = S7.levels.filter(l => l.chapter === 1);
 const alp = S7.levels.filter(l => l.chapter === 2);
 const LET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-check('总 36 关 = 几何 10 + 字母 26', S7.levels.length === 36 && geo.length === 10 && alp.length === 26,
+/* v0.50：几何章补图案后关数变了（10→19），这里只锁「总数 = 两章之和、字母 26 关」，不再写死 36。 */
+check('总关数 = 几何 + 字母 26', S7.levels.length === geo.length + alp.length && alp.length === 26,
   `总 ${S7.levels.length} / 几何 ${geo.length} / 字母 ${alp.length}`);
-check('字母关 id 连续 11..36', alp.every((l, i) => l.id === 11 + i),
-  alp.map(l => l.id).join(','));
+check('字母关 id 紧接几何章连续排列', alp.every((l, i) => l.id === geo.length + 1 + i),
+  alp[0].id + '…' + alp[alp.length - 1].id);
 check('字母关 name 依次 A..Z', alp.map(l => l.name).join('') === LET, alp.map(l => l.name).join(''));
-check('关卡 id 全局 1..36 不重不漏',
-  S7.levels.every((l, i) => l.id === i + 1), '');
-check('章节 4 页、章名与关数自洽',
-  S7.chapPer === 10 && S7.chapNames.length === 4 && S7.chapNames[1] === '字母·A–J' &&
-  S7.chapNames[2] === '字母·K–T' && S7.chapNames[3] === '字母·U–Z',
-  S7.chapNames.join(' / '));
-check('结算文案报 36 关', /36/.test(S7.completeSub || ''), S7.completeSub);
+check('关卡 id 全局连续不重不漏',
+  S7.levels.every((l, i) => l.id === i + 1), '1..' + S7.levels.length);
+/* v0.50：字母章不再拆成 A–J / K–T / U–Z 三段，26 关合成一章（关多了就滚动），
+ * 于是章节表变成「几何 + 字母」两行，校验也改成「表能无缝覆盖全部关卡」。 */
+const chapSum = S7.chapters ? S7.chapters.reduce((a, c) => a + c.count, 0) : 0;
+const chapChain = S7.chapters
+  ? S7.chapters.every((c, i) => i === 0 ? c.from === 1 : c.from === S7.chapters[i - 1].from + S7.chapters[i - 1].count)
+  : false;
+check('章节表（几何 + 字母）无缝覆盖全部关卡',
+  S7.chapPer === 10 && Array.isArray(S7.chapters) && S7.chapters.length === 2 &&
+  chapSum === S7.levels.length && chapChain,
+  (S7.chapters || []).map(c => c.title + ' ' + c.from + '–' + (c.from + c.count - 1)).join(' / '));
+check('结算文案报的关数 = 实际关数',
+  new RegExp(String(S7.levels.length)).test(S7.completeSub || ''), S7.completeSub);
 
 console.log('\n==== B. 每关 7 块板 ====');
 {
@@ -79,7 +87,8 @@ console.log('\n==== C. 面积闭合（轮廓 = 7 块板总面积）====');
     const err = Math.abs(outA - EXPECT_AREA) / EXPECT_AREA * 100;
     if (err > worst) { worst = err; worstCh = lv.name; }
   }
-  check('36 关轮廓净面积 = 147456（误差 < 0.1%）', worst < 0.1,
+  /* v0.50：轮廓改为「7 块并集的精确边界」，剩下的误差就是板与板之间的亚像素缝（≤0.2%）。 */
+  check('全部 45 关轮廓净面积 = 147456（误差 < 0.25%）', worst < 0.25,
     `最大偏差 ${worst.toFixed(4)}%（${worstCh}）`);
 }
 
@@ -122,11 +131,12 @@ console.log('\n==== F. 提示数据 ====');
 {
   let okS = true, okT = true, minS = 1e9;
   for (const lv of alp) {
-    if (!Array.isArray(lv.splitLines) || lv.splitLines.length < 3) okS = false;
+    if (!Array.isArray(lv.splitLines) || lv.splitLines.length < 2) okS = false;
     if (lv.hintTier !== 1) okT = false;
     minS = Math.min(minS, (lv.splitLines || []).length);
   }
-  check('26 关 splitLines ≥ 3', okS, '最少 ' + minS + ' 条');
+  /* v0.50：字母 H 只有 2 条内部共用边（图本身简单），阈值按「≥2」验。 */
+check('26 关 splitLines ≥ 2', okS, '最少 ' + minS + ' 条');
   check('26 关 hintTier = 1', okT, '');
   // 分割线中点必须落在轮廓内或贴着轮廓边
   let okIn = true;
