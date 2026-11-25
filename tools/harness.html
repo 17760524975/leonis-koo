@@ -186,13 +186,28 @@
         p.angle = st.angle; p.dAngle = st.angle;
         p.flipped = st.flipped; p.dFlipped = st.flipped;
       }
+      /* v0.55：off=P:dx:dy —— 把某块板（按 id）从标准解位置平移，
+       * 用来截「压到别的板 → 红框」「出了剪影 → 红框」这种演示图； */
+      var offArg = (q.match(/off=([A-Z0-9]+):(-?\d+):(-?\d+)/) || []);
+      if (offArg.length) {
+        var op = S.pieces.filter(function (x) { return x.id === offArg[1]; })[0];
+        var ost = lv.solution.filter(function (x) { return x.id === offArg[1]; })[0];
+        if (op && ost) {
+          op.onBoard = true;
+          op.x = ost.x + (+offArg[2]); op.y = ost.y + (+offArg[3]);
+          op.angle = ost.angle; op.dAngle = ost.angle;
+          op.flipped = !!ost.flipped; op.dFlipped = !!ost.flipped;
+        }
+      }
       // 进度必须跑真实判定，不能手填（手填会截出「只放两块却 100%」的假象）
       var jr = game._debug.judgeNow();
       /* v0.54：进度条改成「已就位块数 / 总块数」，这里同步把 fit 标记写回板件，
        * 否则截图里会看到「板摆着但进度 0/7」。 */
       var fitN = 0;
       for (var jq = 0; jq < jr.list.length; jq++) {
-        jr.list[jq].fit = !!jr.fits[jq];
+        var jp = jr.list[jq];
+        jp.fit = !!jr.fits[jq];
+        jp.issue = jp.fit ? null : (jp.issue || 'outside');
         if (jr.fits[jq]) fitN++;
       }
       S.fitN = fitN;
@@ -212,6 +227,20 @@
           tp.flipped = !isNaN(tflip) ? !ts.flipped : ts.flipped;
           tp.dFlipped = tp.flipped;
           if (!isNaN(trot)) { tp.angle = (ts.angle + 40) % 360; tp.dAngle = tp.angle; S.selId = tp.id; }
+        }
+      }
+      /* v0.55：win=1 直接触发通关特效，wint=<ms> 把特效快进到第 ms 毫秒（截图用） */
+      var winArg = q.match(/win=1/);
+      if (winArg) {
+        var wt = +(q.match(/wint=(\d+)/) || [])[1];
+        if (isNaN(wt)) wt = 0;
+        game._debug.win();
+        /* 直接把各条动画的时间轴拨到目标时刻 —— 截图脚本没法等 rAF */
+        if (wt > 0) {
+          S.win.t = wt;
+          if (S.winFx) S.winFx.t = wt;
+          if (S.flower) S.flower.t = Math.min(wt, 1500);
+          if (wt > 900) { S.overlay = 'result'; S.resT = wt - 900; }
         }
       }
       // v0.3.1 A3：sel=N 把第 N 块板放到棋盘中央并选中，用于旋转手柄截图

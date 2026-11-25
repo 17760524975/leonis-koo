@@ -1817,6 +1817,7 @@
       state.streakBeforeFail = 0;
       state.seenBeforeFail = [];
       state.flower = null;   // v0.3.4 A4a：切数据集时清掉未播完的鲜花
+      state.winFx = null;
       state.lastTap = null;  // v0.4 A1：切数据集不残留双击配对
       go('home');
     }
@@ -1853,7 +1854,7 @@
       /* v0.14：切页就撤掉盖在画布上的原生授权按钮，别让它留在别的页面上 */
       if (state.overlay !== 'settings') hideProfileButton();
       /* v0.6：离开对局页就收掉通关鲜花/结算态，避免下次进来还在飘 */
-      if (page !== 'play') { state.win = null; state.flower = null; }
+      if (page !== 'play') { state.win = null; state.flower = null; state.winFx = null; }
       // 进关卡页时跳到「当前进度所在章」，关卡再多也不该每次都从第 1 章翻起
       if (page === 'levels') {
         var um = Math.max(1, Math.min(state.save.unlockedMax || 1, LEVELS.length));
@@ -1971,6 +1972,7 @@
       state.overlapT = 0; state.overlapPairs = [];
       state.win = null; state.result = null; state.resT = 0; state.starShown = 0;
       state.flower = null;   // v0.3.4 A4a：重开关卡不残留上一局鲜花
+      state.winFx = null;
       state.lastTap = null;  // v0.4 A1：重开关卡不残留双击配对
       state.hint = null;
       state.judge = new J.Judge();
@@ -2140,20 +2142,28 @@
      * 判断是纯几何的（顶点在轮廓内 / 边不穿轮廓 / 不进内孔 + 凸多边形交叠面积），
      * 不做像素统计，所以「拼得对」永远得 100%，不会再被接缝上的细缝卡住。
      * 只有已上板的板参与比较；拖动中用同一套函数实时给高亮。 */
-    function pieceFit(p, tolOverride) {
+    /* v0.55：把「放不下」的原因也测出来 —— 玩家要看到的是红/绿两种明确状态，
+     * 不能只有「绿 or 没有」。overlap 与 outside 分别对应两种错误动作：
+     *   overlap = 压到别的板了（最常见）
+     *   outside = 出了剪影（转错角度 / 探出边）
+     * 返回值：null = 放得下；'overlap' / 'outside' = 放不下。 */
+    function pieceIssue(p, tolOverride) {
       var lv = LEVELS[state.levelIdx];
       var tol = tolOverride > 0 ? tolOverride : (C.JUDGE.fitTol || 3);
       var poly = piecePoly(p);
-      if (!G.pieceInside(poly, lv.outline, lv.holes, tol)) return false;
       var mine = G.area(poly);
-      var lim = mine * (C.JUDGE.pairOverlapTol || 0.02);
+      var lim = mine * (C.JUDGE.pairOverlapTol || 0.004);
       var others = boardPieces();
       for (var i = 0; i < others.length; i++) {
         var o = others[i];
         if (o === p) continue;
-        if (G.convexOverlapArea(poly, piecePoly(o)) > lim) return false;
+        if (G.convexOverlapArea(poly, piecePoly(o)) > lim) return 'overlap';
       }
-      return true;
+      if (!G.pieceInside(poly, lv.outline, lv.holes, tol)) return 'outside';
+      return null;
+    }
+    function pieceFit(p, tolOverride) {
+      return !pieceIssue(p, tolOverride);
     }
 
     function judgeNow() {
@@ -2203,6 +2213,8 @@
       for (var fi = 0; fi < r.list.length; fi++) {
         if (r.list[fi].id === dragId) continue;
         r.list[fi].fit = !!r.fits[fi];
+        /* v0.55：逐块记录「为什么没就位」，绘制时据此给红框 */
+        r.list[fi].issue = r.fits[fi] ? null : pieceIssue(r.list[fi]);
       }
       if (r.overlaps.length) {
         state.overlapT = 400;
@@ -2239,6 +2251,9 @@
       /* v0.21：通关即结束教学 —— 否则虚影和指令会透过结算面板继续飘 */
       if (state.tut) state.tut = null;
       state.flower = { t: 0 };   // v0.3.4 A4a：鲜花与音乐共用这一时刻起算
+      /* v0.55：通关特效（光爆 + 双扩散环 + 彩带雨）。在 render 的最上层绘制，
+       * 会从结算面板之上飞过 —— 参考视频里就是这种「彩带盖住 UI」的冲击力。 */
+      state.winFx = makeWinFx(lv);
       env.audio.play('sfx_win');
       /* 星级沿用策划 5.7 原规则（三星=时限+步数；二星=时限内）。
        * v0.3 A3 变更点：用提示（hint_used）从「只给 1 星」放宽为「封顶 ★★☆」。
@@ -2349,7 +2364,7 @@
        * 玩家补完体力关掉面板还能再点一次「下一关」。 */
       if (!openLevel(state.levelIdx + 1)) return;
       state.overlay = null;
-      state.win = null; state.result = null; state.flower = null;
+      state.win = null; state.result = null; state.flower = null; state.winFx = null;
       state.adSim = null; state.adWait = null;
       /* v0.6：离开结算页 → 从欢庆曲切回本关关卡曲 */
       setLevelScene();
@@ -2612,12 +2627,29 @@
         if (!p.onBoard) { p.onBoard = true; raisePiece(p); }
         state.drag.moved = true;
         clampToBoard(p);
+        /* v0.55 软吸附：旧版 snapPiece 会直接把板瞬移到吸附点（最远 120 单位），
+         * 手感像「拽一下就粘住」。现在先算出吸附修正量，再按距离做 smoothstep
+         * 混合 —— 离得远时几乎不动（跟手），离得近时平滑滑入，落点仍然精确。 */
+        var bx0 = p.x, by0 = p.y;
         var hit = snapPiece(p, true);
+        var sdx = p.x - bx0, sdy = p.y - by0;
+        var sd = Math.sqrt(sdx * sdx + sdy * sdy);
+        if (sd > 0.01) {
+          /* 三次方：修正量越大、拉力越弱（离得远时几乎跟手），
+           * 只在靠近目标时才明显吸过去，且 d→0 时一阶导为 0，不会「啪」地一下。 */
+          var kk = Math.pow(Math.max(0, 1 - sd / 150), 3);
+          p.x = bx0 + sdx * kk;
+          p.y = by0 + sdy * kk;
+        }
         p.ring = hit ? 1 : 0;
         p.breathe = hit ? (p.breathe || 0.001) : 0;
         /* v0.50：整块落位实时判定 —— 拖到「整块都在剪影里、又不压别的板」时
          * 整块亮起来（不是只在吸附点闪一下），玩家一眼知道这一块可以松手了。 */
-        p.fit = pieceFit(p);
+        var iss = pieceIssue(p);
+        p.issue = iss;
+        p.fit = !iss;
+        /* v0.55：压到别的板时给一点「顿一下」的反馈（只是视觉抖动，不改坐标） */
+        p.shake = iss === 'overlap' ? 240 : 0;
       }
     }
     function onUp(x, y) {
@@ -2712,8 +2744,15 @@
           } else {
             state.lastTap = null;   // 拖动手势不参与配对
             clampToBoard(p);
+            var preX = p.x, preY = p.y;
             var snapped = snapPiece(p, false);
             state.steps++;
+            /* v0.55：松手吸附不要瞬移 —— 逻辑坐标立即到位（判定用），
+             * 视觉上让板子用 90ms 滑过去（drawOff 只是画的时候加偏移）。
+             * 不能反过来：先把坐标留在原处再补间，runJudge 会读到半路坐标。 */
+            if (Math.hypot(p.x - preX, p.y - preY) > 3) {
+              p.drawOff = { x: (preX - p.x) * WS, y: (preY - p.y) * WS, t: 0, dur: 90 };
+            }
             if (snapped) {
               p.pulse = 1; p.ring = 1;
               env.audio.play('sfx_snap');
@@ -3232,10 +3271,19 @@
         if (p.ring > 0) p.ring = Math.max(0, p.ring - dt / C.SNAP.ringMs);
         if (p.grabT > 0) p.grabT = Math.max(0, p.grabT - dt / C.ANIM.grab);
         if (p.breathe > 0) p.breathe = (p.breathe + dt / C.SNAP.breatheMs) % 1;
+        if (p.shake > 0) p.shake = Math.max(0, p.shake - dt);
+        if (p.drawOff) {
+          p.drawOff.t += dt;
+          if (p.drawOff.t >= p.drawOff.dur) p.drawOff = null;
+        }
       }
       if (state.flower) {
         state.flower.t += dt;
         if (state.flower.t > C.FLOWER.total) state.flower = null;
+      }
+      if (state.winFx) {
+        state.winFx.t += dt;
+        if (state.winFx.t > 3600) state.winFx = null;
       }
       if (state.win) {
         state.win.t += dt;
@@ -3540,6 +3588,99 @@
       flowerStreamDst = key + ':' + levelIdx;
       flowerStreamCache = arr;
       return arr;
+    }
+
+
+    /* ================= v0.55 通关特效 =================
+     * 参考视频的做法：拼好的瞬间从图形中心炸开一片彩带（小方片、边飞边翻面、带重力），
+     * 同时中心白光一闪、两道圆环扩散。彩带画在最上层，会从结算面板之上飞过。
+     * 粒子用解析运动（位置 = 初速×t + ½gt²），不累加，掉帧也不会飘。 */
+    function makeWinFx(lv) {
+      var bb = G.bbox([lv.outline]);
+      var cx = w2d((bb[0] + bb[2]) / 2);
+      var cy = h2d((bb[1] + bb[3]) / 2);
+      var pal = [];
+      DS.pieceOrder.forEach(function (id) { if (DS.pieces[id]) pal.push(DS.pieces[id].color); });
+      pal = pal.concat(['#FFD93D', '#FF6B6B', '#4D96FF', '#6BCB77', '#B983FF', '#FF9F1C']);
+      var parts = [];
+      var N = state.lowFps ? 120 : 240;
+      for (var i = 0; i < N; i++) {
+        var ang = (i / N) * Math.PI * 2 + (Math.random() - 0.5) * 0.55;
+        var sp = 520 + Math.random() * 1050;
+        var upBias = 460 + Math.random() * 520;
+        parts.push({
+          x: cx + (Math.random() - 0.5) * 40,
+          y: cy + (Math.random() - 0.5) * 40,
+          vx: Math.cos(ang) * sp * 0.95,
+          vy: Math.sin(ang) * sp * 0.40 - upBias,
+          w: 8 + Math.random() * 11,
+          h: 5 + Math.random() * 7,
+          rot: Math.random() * Math.PI * 2,
+          vr: (Math.random() - 0.5) * 18,
+          sway: Math.random() * Math.PI * 2,
+          color: pal[(Math.random() * pal.length) | 0],
+          delay: Math.random() * 110
+        });
+      }
+      return { t: 0, cx: cx, cy: cy, parts: parts };
+    }
+
+    function drawWinFx() {
+      var fx = state.winFx;
+      if (!fx || state.reduceMotion) return;
+      var t = fx.t / 1000;                 // 秒
+      var cx = fx.cx, cy = fx.cy;
+
+      /* ① 中心白光：0~0.5s，半径 40→300，亮度快速衰减 */
+      if (t < 0.62) {
+        var ft = t / 0.62;
+        var rad = 50 + ft * 360;
+        var g1 = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
+        g1.addColorStop(0, 'rgba(255,255,255,' + (0.98 * Math.pow(1 - ft, 0.7)).toFixed(3) + ')');
+        g1.addColorStop(0.35, 'rgba(255,241,190,' + (0.70 * Math.pow(1 - ft, 0.8)).toFixed(3) + ')');
+        g1.addColorStop(1, 'rgba(255,241,190,0)');
+        ctx.save();
+        ctx.fillStyle = g1;
+        ctx.beginPath();
+        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+      /* ② 两道扩散圆环（错开 80ms） */
+      for (var r = 0; r < 2; r++) {
+        var rt = (t - r * 0.08) / 0.75;
+        if (rt <= 0 || rt >= 1) continue;
+        ctx.save();
+        ctx.globalAlpha = (1 - rt) * 0.5;
+        ctx.strokeStyle = r ? '#8AF0B0' : '#FFE9A8';
+        ctx.lineWidth = 5 * (1 - rt) + 1.5;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 30 + rt * 300, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+      /* ③ 彩带 */
+      var fadeAll = t > 2.3 ? Math.max(0, 1 - (t - 2.3) / 1.2) : 1;
+      if (fadeAll <= 0) return;
+      var GR = 1750;
+      for (var i = 0; i < fx.parts.length; i++) {
+        var p = fx.parts[i];
+        var tt = t - p.delay / 1000;
+        if (tt <= 0) continue;
+        var x = p.x + p.vx * tt + Math.sin(tt * 3.4 + p.sway) * 22;
+        var y = p.y + p.vy * tt + 0.5 * GR * tt * tt;
+        if (y > 1900) continue;
+        var rot = p.rot + p.vr * tt;
+        /* 翻转感：厚度随 cos 收缩，像一片方纸在翻面 */
+        var th = p.h * (0.25 + 0.75 * Math.abs(Math.cos(rot * 1.6)));
+        ctx.save();
+        ctx.globalAlpha = fadeAll * (tt < 0.12 ? tt / 0.12 : 1);
+        ctx.translate(x, y);
+        ctx.rotate(rot);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.w / 2, -th / 2, p.w, th);
+        ctx.restore();
+      }
     }
 
     function drawWinStream(t, low) {
@@ -5559,7 +5700,9 @@
       /* v0.3.4 A4a：鲜花画在对局页最后一层、结算面板之前（不写 hits，不吞按钮）。
        * reduceMotion 时不画（音乐照常）；低帧率时卫星花自动 6→3。 */
       if (state.flower && !state.reduceMotion) {
-        drawFlowers(ctx, state.flower.t, C.FLOWER, !!state.lowFps);
+        /* v0.55：让彩带先炸 260ms，鲜花随后绽放，两段不抢焦点 */
+        var flT = Math.max(0, state.flower.t - 260);
+        if (flT > 0) drawFlowers(ctx, flT, C.FLOWER, !!state.lowFps);
       }
     }
 
@@ -5796,6 +5939,22 @@
 
     function drawBoardPiece(p) {
       var pts = piecePolyDesign(p);
+      /* v0.55：两种纯视觉偏移合在一起做：
+       *   shake   —— 压到别的板时左右轻抖
+       *   drawOff —— 松手吸附的 90ms 滑动补间（逻辑坐标已经到位了） */
+      var offX = 0, offY = 0;
+      if (p.shake > 0) offX += Math.sin(state.time / 22) * 3.2 * Math.min(1, p.shake / 160);
+      if (p.drawOff) {
+        var ok2 = 1 - p.drawOff.t / p.drawOff.dur;
+        offX += p.drawOff.x * ok2;
+        offY += p.drawOff.y * ok2;
+      }
+      var shakeRestore = false;
+      if (offX || offY) {
+        ctx.save();
+        ctx.translate(offX, offY);
+        shakeRestore = true;
+      }
       var def = DS.pieces[p.id];
       var pulse = p.pulse > 0 ? 1 + 0.06 * Math.sin(p.pulse * Math.PI) : 1;
       var grab = p.grabT > 0 ? 1 + 0.04 * p.grabT : 1;
@@ -5875,30 +6034,59 @@
         ctx.stroke();
         ctx.restore();
       }
-      /* v0.50：「整块落位」描边 —— 这一块已经完整落在图案里且没压到别的板。
-       * 拖动中脉动更强（可以松手了），已放好的是常驻细边（一眼看出还差哪块）。 */
-      if (p.fit && !state.win) {
-        /* v0.54：整块落位的确认高亮，做成「整块亮起来」而不是只描一条边 ——
-         * 淡绿填充（板色仍透出来）+ 绿色柔光边 + 外发光。
-         * 拖动中脉动更强（可以松手了），已放好的是常驻，一眼看出还差哪块。 */
-        var moving = !!(state.drag && state.drag.id === p.id);
-        var fa = moving ? (0.78 + 0.20 * Math.sin(state.time / 160)) : 0.55;
+      /* v0.55：落位反馈改成「一眼就懂」的两态强提示。
+       *   放得下 → 亮绿：饱和绿描边 6px + 内发光 + 向外扩散的脉冲环（拖动中更快更亮）
+       *   放不下 → 亮红：饱和红描边 6px + 红色内发光 + 左右轻抖（压到别的板时）
+       * 旧的「淡绿 0.12 填充 + 3px 半透明边」在深色皮肤上几乎看不见，玩家读不出含义。 */
+      var moving2 = !!(state.drag && state.drag.id === p.id);
+      var issue = p.issue || null;
+      if ((p.fit || issue) && !state.win) {
+        var isBad = !!issue;
+        var cMain = isBad ? '255,38,38' : '34,197,94';
+        var t = state.time;
+        var pulse = moving2 ? (0.72 + 0.28 * Math.sin(t / 110)) : 0.92;
         ctx.save();
         ctx.beginPath();
         for (var s3 = 0; s3 < pts.length; s3++) {
           if (s3 === 0) ctx.moveTo(pts[s3][0], pts[s3][1]); else ctx.lineTo(pts[s3][0], pts[s3][1]);
         }
         ctx.closePath();
-        ctx.fillStyle = 'rgba(59,178,115,' + (moving ? 0.20 : 0.12) + ')';
+        /* ① 整块底色：让「这块已经被系统认了/否了」一眼可见 */
+        ctx.fillStyle = 'rgba(' + cMain + ',' + (isBad ? 0.34 : (moving2 ? 0.26 : 0.18)) + ')';
         ctx.fill();
+        /* ② 内发光：沿板边描一圈同色宽边，边缘有一层光晕 */
         ctx.lineJoin = 'round';
-        ctx.lineWidth = moving ? 6 : 3.5;
-        ctx.strokeStyle = 'rgba(59,178,115,' + fa.toFixed(2) + ')';
-        ctx.shadowBlur = moving ? 14 : 8;
-        ctx.shadowColor = 'rgba(59,178,115,0.85)';
+        ctx.shadowBlur = moving2 ? 26 : 18;
+        ctx.shadowColor = 'rgba(' + cMain + ',0.95)';
+        ctx.lineWidth = moving2 ? 7.5 : (isBad ? 6.5 : 5.5);
+        ctx.strokeStyle = 'rgba(' + cMain + ',' + pulse.toFixed(2) + ')';
         ctx.stroke();
+        /* ③ 白芯线：深色皮肤下也能看出边界在哪 */
+        ctx.shadowBlur = 0;
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(255,255,255,' + (isBad ? 0.72 : 0.85) + ')';
+        ctx.stroke();
+        /* ④ 向外扩散的提示环：拖动中每 620ms 一圈，明确「可以松手了」 */
+        if (moving2 && !isBad) {
+          var ph = (t % 620) / 620;
+          var grow = 4 + ph * 22;
+          ctx.globalAlpha = (1 - ph) * 0.55;
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = 'rgba(34,197,94,0.9)';
+          ctx.beginPath();
+          for (var s4 = 0; s4 < pts.length; s4++) {
+            var vx = pts[s4][0], vy = pts[s4][1];
+            var cx0 = cxc, cy0 = cyc;
+            var dxv = vx - cx0, dyv = vy - cy0, dl = Math.sqrt(dxv * dxv + dyv * dyv) || 1;
+            var px2 = vx + dxv / dl * grow, py2 = vy + dyv / dl * grow;
+            if (s4 === 0) ctx.moveTo(px2, py2); else ctx.lineTo(px2, py2);
+          }
+          ctx.closePath();
+          ctx.stroke();
+        }
         ctx.restore();
       }
+      if (shakeRestore) ctx.restore();
     }
 
     /* ================= v0.20 提示绘制（单档，画在已上板件之上） =================
@@ -7856,6 +8044,8 @@
       if (state.win && state.overlay === 'result' && !state.reduceMotion) {
         drawWinStream(state.win.t, !!state.lowFps);
       }
+      /* v0.55：通关彩带画在最后一层（结算面板之上），冲击力最强 */
+      if (state.winFx) drawWinFx();
       renderToast();
 
       if (state.fade < 1) {
@@ -8049,6 +8239,9 @@
       resize: resize,
       state: state,
       _debug: { judgeNow: judgeNow, setupLevel: setupLevel, useSet: useSet, win: win,
+        /* v0.55：拖动链路（软吸附 / 落位反馈）验收要直接驱动指针事件 */
+        onDown: onDown, onMove: onMove, onUp: onUp,
+        w2d: w2d, h2d: h2d, runJudge: runJudge,
         /* v0.52：提示选块 / 槽位占用判断（同形状板互换的验收要直接驱动这两个） */
         pickHint: pickHintPiece, slotCovered: slotCovered, useHint: useHint,
         handleAt: handleDesign,   // v0.3.2 B1：测试用，返回手柄圆心的设计坐标

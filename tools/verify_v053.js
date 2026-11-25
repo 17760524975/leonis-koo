@@ -206,6 +206,56 @@ placeAll(37);
 check('S 标准解 → 通关', !!S.win, 'win=' + !!S.win);
 check('S 进度 7/7', S.fitN === 7, 'fitN=' + S.fitN);
 
+/* ---------- 4.6 落位反馈（红/绿）与拖动手感 ---------- */
+console.log('\n==== 4.6 落位反馈与拖动 ====');
+{
+  /* ① 压到别的板 → 必须判 overlap（红色），不能再显示绿色 */
+  placeAll(3);
+  var pP = S.pieces.filter(p => p.id === 'P')[0];
+  pP.x -= 18; pP.y -= 18;
+  step(16);
+  D.runJudge(false);
+  check('压到邻板 → issue=overlap 且 fit=false', pP.issue === 'overlap' && !pP.fit,
+    'issue=' + pP.issue + ' fit=' + pP.fit);
+  /* 被 P 压到的那块会一起变红（两块都放不下），但原因必须都是 overlap */
+  var others = S.pieces.filter(p => p.id !== 'P');
+  var notFit = others.filter(p => !p.fit);
+  check('受牵连的板原因是 overlap（不是越界）', notFit.every(p => p.issue === 'overlap'),
+    notFit.map(p => p.id + ':' + p.issue).join(',') || '无');
+
+  /* ② 拖动是软吸附：手指在离标准解 40 单位处，松手前不该已经贴死（跟手），
+   *    松手后才精确落位（硬吸附）。 */
+  placeAll(3);
+  /* placeAll 摆的是标准解，会直接判通关；这里要测拖动，先把通关态清掉 */
+  S.win = null; S.overlay = null; S.result = null; S.winFx = null;
+  var lv3 = S7.levels[3];
+  var tp = S.pieces.filter(p => p.id === 'T1')[0];
+  var st = lv3.solution.filter(q => q.id === 'T1')[0];
+  S.pieces.forEach(p => { p.onBoard = false; });
+  tp.onBoard = true;
+  tp.x = st.x + 40; tp.y = st.y + 40;
+  tp.angle = st.angle; tp.dAngle = st.angle;
+  tp.flipped = !!st.flipped; tp.dFlipped = !!st.flipped;
+  step(16);
+  D.onDown(D.w2d(tp.x), D.h2d(tp.y));
+  step(16);
+  D.onMove(D.w2d(tp.x + 6), D.h2d(tp.y - 6));
+  step(16);
+  var midD = Math.hypot(tp.x - st.x, tp.y - st.y);
+  check('拖动中跟手（不瞬间贴死）', midD > 20, '离标准解 ' + midD.toFixed(1));
+  D.onUp(D.w2d(tp.x + 6), D.h2d(tp.y - 6));
+  step(16);
+  var endD = Math.hypot(tp.x - st.x, tp.y - st.y);
+  check('松手后精确落位', endD < 1, '误差 ' + endD.toFixed(2));
+
+  /* ③ 通关特效对象确实被创建，且不会残留到下一关 */
+  placeAll(3);
+  check('通关后 winFx 已创建', !!S.winFx, 'parts=' + (S.winFx ? S.winFx.parts.length : 0));
+  D.setupLevel(0);
+  step(16);
+  check('换关后 winFx 已清空', !S.winFx);
+}
+
 /* ---------- 6.5 剪影质量：不能有内部狭缝 / 自交 / 台阶 ---------- */
 console.log('\n==== 4.5 剪影质量 ====');
 {
