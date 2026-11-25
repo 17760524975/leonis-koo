@@ -33,3 +33,6 @@ tools/tanref*/*.npz
 # 参考图本身（ref/）入库，out/ 是每次跑脚本都能重新生成的
 tools/letters7/out/
 tools/figs4/out/
+
+# 生肖反解：本地备份（可由 compact.js 重新生成）
+tools/zodiac/*.bak.json

@@ -40,13 +40,17 @@ function checkSet(key, gapLimit) {
     var problems = [];
 
     /* A 面积守恒：轮廓面积 − 内孔面积 应当等于 7 块板面积和
-     *（A/B/D/O/P/Q/R 这类字母有内孔，直接比轮廓面积会把孔洞算成误差） */
+     *（A/B/D/O/P/Q/R 这类字母有内孔，直接比轮廓面积会把孔洞算成误差）
+     * v0.51：生肖章（chapter 3）的剪影是栅格描边出来的，为让「顶点相碰」的接触点
+     * 连成一个闭环，故意外扩了 1 格（0.25 世界单位），面积因此比板面积大 0.5%~0.7%。
+     * 那是 0.1 屏幕像素一圈，看不出来，所以单列 1% 口径；前两章仍是 0.2%。 */
+    var areaTol = lv.chapter >= 3 ? 0.01 : 0.002;
     var sumA = polys.reduce(function (a, o) { return a + G.area(o.poly); }, 0);
     var holeA = (lv.holes || []).reduce(function (a, h) { return a + Math.abs(G.area(h)); }, 0);
     var outA = Math.abs(G.area(lv.outline)) - holeA;
     var relA = Math.abs(sumA - outA) / outA;
     if (relA > worst.area) worst.area = relA;
-    if (relA > 0.002) problems.push('面积差 ' + (relA * 100).toFixed(2) + '%');
+    if (relA > areaTol) problems.push('面积差 ' + (relA * 100).toFixed(2) + '%');
 
     /* B 每块整块在轮廓内 */
     var outCnt = 0;
@@ -102,8 +106,13 @@ function checkSet(key, gapLimit) {
     if (gapR > worst.gap) worst.gap = gapR;
     if (overR > worst.over) worst.over = overR;
     /* 0.5% 面积 ≈ 0.3 世界单位宽的一条线 ≈ 0.1 屏幕像素，肉眼不可见；
-     * 超过这个量级才是「看得出缝」。 */
-    if (gapR > gapLimit) problems.push('缝 ' + (gapR * 100).toFixed(2) + '%');
+     * 超过这个量级才是「看得出缝」。
+     * v0.51：生肖章剪影外扩 0.25 单位，沿边一圈采样点会落在「剪影内、板外」，
+     * 这部分占 0.5%~1.5%（马最高，因为它的轮廓沿板边最长），所以该章放到 2%。
+     * 已用「板件填色 + 剪影描边」放大图逐关目检：板与板之间没有白缝，
+     * 那 1.5% 全在剪影最外圈，是外扩本身。（图：tools/zodiac/gapcheck.png） */
+    var gapLim = lv.chapter >= 3 ? 0.02 : gapLimit;
+    if (gapR > gapLim) problems.push('缝 ' + (gapR * 100).toFixed(2) + '%');
     if (overR > 0.02) problems.push('采样叠 ' + (overR * 100).toFixed(2) + '%');
 
     if (problems.length) {

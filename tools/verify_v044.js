@@ -42,9 +42,12 @@ console.log('==== A. 关卡构成 ====');
 const geo = S7.levels.filter(l => l.chapter === 1);
 const alp = S7.levels.filter(l => l.chapter === 2);
 const LET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-/* v0.50：几何章补图案后关数变了（10→19），这里只锁「总数 = 两章之和、字母 26 关」，不再写死 36。 */
-check('总关数 = 几何 + 字母 26', S7.levels.length === geo.length + alp.length && alp.length === 26,
-  `总 ${S7.levels.length} / 几何 ${geo.length} / 字母 ${alp.length}`);
+/* v0.50：几何章补图案后关数变了（10→19），这里只锁「总数 = 各章之和、字母 26 关」，不再写死 36。
+ * v0.51：又加了第 3 章「生肖」12 关，所以改成「总数 = 三章之和」。 */
+const zod = S7.levels.filter(l => l.chapter === 3);
+check('总关数 = 几何 + 字母 26 + 生肖 12',
+  S7.levels.length === geo.length + alp.length + zod.length && alp.length === 26 && zod.length === 12,
+  `总 ${S7.levels.length} / 几何 ${geo.length} / 字母 ${alp.length} / 生肖 ${zod.length}`);
 check('字母关 id 紧接几何章连续排列', alp.every((l, i) => l.id === geo.length + 1 + i),
   alp[0].id + '…' + alp[alp.length - 1].id);
 check('字母关 name 依次 A..Z', alp.map(l => l.name).join('') === LET, alp.map(l => l.name).join(''));
@@ -56,8 +59,8 @@ const chapSum = S7.chapters ? S7.chapters.reduce((a, c) => a + c.count, 0) : 0;
 const chapChain = S7.chapters
   ? S7.chapters.every((c, i) => i === 0 ? c.from === 1 : c.from === S7.chapters[i - 1].from + S7.chapters[i - 1].count)
   : false;
-check('章节表（几何 + 字母）无缝覆盖全部关卡',
-  S7.chapPer === 10 && Array.isArray(S7.chapters) && S7.chapters.length === 2 &&
+check('章节表（几何 + 字母 + 生肖）无缝覆盖全部关卡',
+  S7.chapPer === 10 && Array.isArray(S7.chapters) && S7.chapters.length === 3 &&
   chapSum === S7.levels.length && chapChain,
   (S7.chapters || []).map(c => c.title + ' ' + c.from + '–' + (c.from + c.count - 1)).join(' / '));
 check('结算文案报的关数 = 实际关数',
@@ -82,14 +85,27 @@ console.log('\n==== C. 面积闭合（轮廓 = 7 块板总面积）====');
 {
   let worst = 0, worstCh = '';
   for (const lv of S7.levels) {
+    if (lv.chapter >= 3) continue;              // 生肖章单独一组口径，见下
     const holeA = (lv.holes || []).reduce((s, h) => s + Math.abs(G.area(h)), 0);
     const outA = Math.abs(G.area(lv.outline)) - holeA;
     const err = Math.abs(outA - EXPECT_AREA) / EXPECT_AREA * 100;
     if (err > worst) { worst = err; worstCh = lv.name; }
   }
-  /* v0.50：轮廓改为「7 块并集的精确边界」，剩下的误差就是板与板之间的亚像素缝（≤0.2%）。 */
-  check('全部 45 关轮廓净面积 = 147456（误差 < 0.25%）', worst < 0.25,
+  /* v0.50：轮廓改为「7 块并集的精确边界」，剩下的误差就是板与板之间的亚像素缝（≤0.2%）。
+   * v0.51：生肖章剪影是栅格描边，为连通「顶点相碰」的接触点外扩了 1 格（0.25 单位），
+   * 面积因此比板面积大 0.5%~0.7%，该章单列 1% 口径。 */
+  check('几何 + 字母 45 关轮廓净面积 = 147456（误差 < 0.25%）', worst < 0.25,
     `最大偏差 ${worst.toFixed(4)}%（${worstCh}）`);
+  let worstZ = 0, worstZCh = '';
+  for (const lv of S7.levels) {
+    if (lv.chapter < 3) continue;
+    const holeA = (lv.holes || []).reduce((s, h) => s + Math.abs(G.area(h)), 0);
+    const outA = Math.abs(G.area(lv.outline)) - holeA;
+    const err = Math.abs(outA - EXPECT_AREA) / EXPECT_AREA * 100;
+    if (err > worstZ) { worstZ = err; worstZCh = lv.name; }
+  }
+  check('生肖 12 关轮廓净面积 = 147456（误差 < 1%）', worstZ < 1,
+    `最大偏差 ${worstZ.toFixed(4)}%（${worstZCh}）`);
 }
 
 console.log('\n==== D. 轮廓几何合法性 ====');
