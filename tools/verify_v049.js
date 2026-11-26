@@ -220,7 +220,8 @@ function inkOf(s) {
     seenName === mockNames.length && bad.length === 0, `seen=${seenName} ${bad.join(' ')}`);
 
   /* 名次 / 数值 */
-  const vInk = rec.texts.filter(t => /^\d+ 关$/.test(t.s)).map(t => t.color);
+  /* v0.65：三榜主值统一成「★N」，不再有「N 关」这种单位混排 */
+  const vInk = rec.texts.filter(t => /^★\d+$/.test(t.s)).map(t => t.color);
   check(`${skin}：数值字色全部 ≥ 4.5:1`,
     vInk.length > 0 && vInk.every(c => Math.max(contrast(c, F.surface), contrast(c, F.surfaceHi),
       contrast(c, F.card)) >= 4.5),
@@ -295,9 +296,12 @@ S.failT = 1300; render();
 const t1300 = rec.texts.map(t => t.s);
 check('1300ms：卡片落位，连胜文案出现',
   t1300.some(t => /已经连胜 3 关了/.test(t)), t1300.filter(t => /连胜/.test(t)).join(','));
+/* v0.65：文案改成「看视频复活」，巧币那只改成「币图标 + 80 · 复活」（不再有"巧币"二字） */
 check('1300ms：三个出口按钮都在',
-  t1300.some(t => /看广告复活/.test(t)) && t1300.some(t => /巧币复活/.test(t)) &&
-  t1300.some(t => t === '忍痛放弃'));
+  t1300.some(t => /^看视频复活$/.test(t)) &&
+  t1300.some(t => /^(\d+ · 复活|巧币不足 \d+\/\d+)$/.test(t)) &&
+  t1300.some(t => t === '忍痛放弃'),
+  t1300.filter(t => /复活|放弃|巧币/.test(t)).join(','));
 const hits1300 = D.hitList().filter(h => /revive|give_up/.test(h.id)).map(h => h.id);
 check('1300ms：热区齐全（看广告 / 巧币 / 放弃）',
   hits1300.length >= 2 && hits1300.indexOf('ad_revive') >= 0, hits1300.join(','));
@@ -309,7 +313,7 @@ check('0ms：红闪 + 碎片 + 横幅同时在画（失败瞬间就有反馈）'
   rec.texts.some(t => t.s === '时间到！'), 'texts=' + rec.texts.length);
 S.reduceMotion = true; render();
 check('reduceMotion：直接静态版，按钮立刻可点',
-  rec.texts.some(t => /看广告复活/.test(t.s)) && D.hitList().some(h => h.id === 'ad_revive'),
+  rec.texts.some(t => /^看视频复活$/.test(t.s)) && D.hitList().some(h => h.id === 'ad_revive'),
   rec.texts.length + ' texts');
 S.reduceMotion = false;
 S.overlay = null; S.page = 'home';
@@ -331,8 +335,9 @@ const odc = fs.readFileSync(path.join(ROOT, 'miniprogram/openDataContext/index.j
 check('state.darkUi = 深色皮肤 || 深色背景特效',
   /state\.darkUi = !!\(state\.darkSkin \|\| state\.darkFx\)/.test(coreSrc));
 check('rankRow 昵称不再直接吃 COL.text',
-  /text\(item\.n, x0 \+ 136, y \+ 1, 24, rowInk/.test(coreSrc) &&
-  !/text\(item\.n, [^,]+, [^,]+, 24, COL\.text[,)]/.test(coreSrc));
+  /* v0.65：行高从 74 收到 68，昵称改成「名字 + 副信息」两行，用 textFit 收长度 */
+  /textFit\(item\.n, x0 \+ 128, y - 11, 22, rowInk/.test(coreSrc) &&
+  !/text\(item\.n, [^,]+, [^,]+, 2\d, COL\.text[,)]/.test(coreSrc));
 check('开放数据域也用同一套配对字色',
   /rowText: '#2C3A4B'/.test(odc) && /rowSub: '#4E5E72'/.test(odc) &&
   /K\.rowText/.test(odc) && /K\.rowSub/.test(odc));

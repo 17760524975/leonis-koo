@@ -302,7 +302,8 @@ function tapD(x, y) {
   /* v0.18：好友榜改走开放数据域；Node 环境没有 env.friend → 走降级文案。
    * 关键是它不再动 state.rankList（旧版会把主线榜那份覆盖成空列表）。 */
   const mainBefore = S.rankList;
-  game._debug.selectRankTab(2);
+  /* v0.65：好友榜的页签序号从 2 变成 1（0 全服 / 1 好友 / 2 本周） */
+  game._debug.selectRankTab(1);
   await sleep(10);
   rec.texts.length = 0;
   step(16);

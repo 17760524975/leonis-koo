@@ -71,10 +71,13 @@ const cloudCtl = {
   failTabs: {},          // {0:true} 该页签返回失败
   hold: {},              // {0:[{tab,cb}]} 先扣住回调，用来造乱序
   lists: {
-    0: { list: [{ nick: '巧手0001', v: 26, me: false }, { nick: '巧手0921', v: 12, me: true }],
-      me: { nick: '巧手0921', v: 12, rank: 2 } },
-    1: { list: [{ nick: '连击王阿哲', v: 9, me: false }, { nick: '巧手0921', v: 3, me: true }],
-      me: { nick: '巧手0921', v: 3, rank: 2 } }
+    /* v0.65：tab 0 全服（stars）/ tab 2 本周（weekStars）；tab 1 是好友榜，不走云函数 */
+    0: { list: [{ nick: '巧手0001', v: 26, v2: 9, me: false }, { nick: '巧手0921', v: 12, v2: 4, me: true }],
+      me: { nick: '巧手0921', v: 12, v2: 4, rank: 2 },
+      nextResetAt: Date.now() + 2 * 86400000, weekKey: '2026-W48' },
+    2: { list: [{ nick: '连击王阿哲', v: 9, v2: 5, v3: 3, me: false }, { nick: '巧手0921', v: 3, v2: 2, v3: 1, me: true }],
+      me: { nick: '巧手0921', v: 3, v2: 2, v3: 1, rank: 2 },
+      nextResetAt: Date.now() + 2 * 86400000, weekKey: '2026-W48' }
   }
 };
 function answer(tab, cb) {
@@ -250,26 +253,29 @@ store[CFG.SAVE_KEY] = JSON.stringify({
   /* ================= 3. 页签缓存 ================= */
   section('3. 榜单页签：切走再切回不再「加载失败」');
   friendLog.available = true;
-  S.rankTab = 0; S.rankCache = { 0: null, 1: null }; S.rankList = null;
+  S.rankTab = 0; S.rankCache = {}; S.rankList = null;
   cloudLog.rankCalls.length = 0;
   D.openRank(null);
   await sleep(8);
   check('打开榜单 → 拉主线榜', cloudLog.rankCalls.join(',') === '0', JSON.stringify(cloudLog.rankCalls));
   clearRec(); S.rankT = 999; step(16);
-  check('主线榜两行都画出来', rec.texts.some(t => t.s === '巧手0001') && rec.texts.some(t => t.s === '26 关'),
-    textsOf(rec.texts.filter(t => /巧手|关$/.test(t.s))));
+  check('全服榜两行都画出来', rec.texts.some(t => t.s === '巧手0001') && rec.texts.some(t => t.s === '★26'),
+    textsOf(rec.texts.filter(t => /巧手|★/.test(t.s))));
   const cached0 = S.rankCache[0];
   check('主线榜结果进缓存', !!cached0 && cached0.list.length === 2, 'n=' + (cached0 && cached0.list.length));
 
-  D.selectRankTab(2);
-  check('切好友榜：不动主线榜缓存与当前列表', S.rankList === cached0 && S.rankCache[0] === cached0,
+  /* v0.65：好友榜是 tab 1（0 全服 / 1 好友 / 2 本周） */
+  D.selectRankTab(1);
+  check('切好友榜：不动全服榜缓存与当前列表', S.rankList === cached0 && S.rankCache[0] === cached0,
     'listSame=' + (S.rankList === cached0));
   check('切好友榜：向开放数据域要内容', friendLog.shows.length === 1, 'shows=' + friendLog.shows.length);
 
   clearRec(); S.rankT = 999; step(16);
   check('好友榜把 sharedCanvas 贴进榜单区',
     rec.drawImages.length === 1 && rec.drawImages[0].x === CFG.RANK.list.x &&
-    rec.drawImages[0].y === CFG.RANK.list.top && rec.drawImages[0].w === CFG.RANK.list.w,
+    /* v0.65：画布高度从 588 收到 532，贴图起点是「首行中心 - 行高/2」 */
+    rec.drawImages[0].y === CFG.RANK.list.top - CFG.RANK.list.rowH / 2 &&
+    rec.drawImages[0].w === CFG.RANK.list.w,
     JSON.stringify(rec.drawImages.map(d => [d.x, d.y, d.w, d.h])));
   check('好友榜带自己的资料（好友列表里没有自己）',
     friendLog.shows[0].me && friendLog.shows[0].me.nick === D.meNick(),
@@ -301,26 +307,26 @@ store[CFG.SAVE_KEY] = JSON.stringify({
   delete cloudCtl.failTabs[0];
 
   /* 无缓存 + 失败 → 失败页 + 重试 */
-  S.rankCache[1] = null;
-  cloudCtl.failTabs[1] = true;
-  D.selectRankTab(1);
+  S.rankCache[2] = null;
+  cloudCtl.failTabs[2] = true;
+  D.selectRankTab(2);
   await sleep(8);
   clearRec(); S.rankT = 999; step(16);
   check('没有缓存又失败：显示「榜单加载失败」', rec.texts.some(t => /榜单加载失败/.test(t.s)));
   check('给出具体原因', rec.texts.some(t => /网络超时/.test(t.s)));
   check('给「重新加载」按钮', rec.texts.some(t => /重新加载/.test(t.s)));
   cloudLog.rankCalls.length = 0;
-  delete cloudCtl.failTabs[1];
+  delete cloudCtl.failTabs[2];
   D.fireBtn('rank_retry');
   await sleep(8);
-  check('点重试会重新请求当前页签', cloudLog.rankCalls.join(',') === '1', JSON.stringify(cloudLog.rankCalls));
+  check('点重试会重新请求当前页签', cloudLog.rankCalls.join(',') === '2', JSON.stringify(cloudLog.rankCalls));
   clearRec(); S.rankT = 999; step(16);
-  check('重试成功后画出连胜榜', rec.texts.some(t => t.s === '连击王阿哲') && rec.texts.some(t => t.s === '9 连胜'),
-    textsOf(rec.texts.filter(t => /连胜$/.test(t.s))));
+  check('重试成功后画出本周榜', rec.texts.some(t => t.s === '连击王阿哲') && rec.texts.some(t => t.s === '★9'),
+    textsOf(rec.texts.filter(t => /连击|★/.test(t.s))));
 
   /* 乱序响应：切走以后旧页签的回调不许改界面 */
   section('5. 乱序响应：旧页签的迟到结果只进缓存');
-  S.rankCache = { 0: null, 1: null };
+  S.rankCache = {};
   cloudCtl.hold[0] = [];
   D.selectRankTab(0);                    // 扣住 tab0
   D.selectRankTab(1);                    // tab1 立即返回
@@ -337,7 +343,7 @@ store[CFG.SAVE_KEY] = JSON.stringify({
   /* ================= 6. 好友榜降级 ================= */
   section('6. 好友榜：没有开放数据域时如实说明');
   friendLog.available = false;
-  S.rankTab = 2; S.rankT = 999;
+  S.rankTab = 1; S.rankT = 999;
   clearRec(); step(16);
   check('降级文案（不是空白页）', rec.texts.some(t => /好友榜要在微信小游戏里看/.test(t.s)),
     textsOf(rec.texts.filter(t => /好友/.test(t.s))));
@@ -353,7 +359,9 @@ store[CFG.SAVE_KEY] = JSON.stringify({
   D.win();
   check('通关后发布一次好友榜数据', friendLog.published.length >= 1, 'n=' + friendLog.published.length);
   const pub = friendLog.published[friendLog.published.length - 1];
-  check('发布内容带通关数与最高连胜', pub && typeof pub.cleared === 'number' && typeof pub.streak === 'number',
+  check('发布内容带通关数 / 星数 / 最高连胜',
+    pub && typeof pub.cleared === 'number' && typeof pub.streak === 'number' &&
+    typeof pub.stars === 'number' && typeof pub.weekStars === 'number',
     JSON.stringify(pub));
 
   /* ================= 8. 工程约定 ================= */
@@ -365,8 +373,9 @@ store[CFG.SAVE_KEY] = JSON.stringify({
   const odcSrc = fs.readFileSync(odc, 'utf8');
   check('用 wx.getFriendCloudStorage 读好友', /getFriendCloudStorage/.test(odcSrc));
   check('用 wx.getSharedCanvas 输出画布', /getSharedCanvas/.test(odcSrc));
-  check('KV key 与主域一致（tangram）',
-    /KEY = 'tangram'/.test(odcSrc) && /KV = 'tangram'/.test(fs.readFileSync(path.join(ROOT, 'miniprogram/js/friendrank.js'), 'utf8')));
+  check('KV key 与主域一致（v0.65 升到 tangram_v2，旧键只读兼容）',
+    /KEY = 'tangram_v2'/.test(odcSrc) && /KEY_OLD = 'tangram'/.test(odcSrc) &&
+    /KV = 'tangram_v2'/.test(fs.readFileSync(path.join(ROOT, 'miniprogram/js/friendrank.js'), 'utf8')));
   const lMatch = odcSrc.match(/var L = \{ w: (\d+), h: (\d+), rowH: (\d+), step: (\d+), rows: (\d+)/);
   check('开放数据域的版式常数与 config.RANK.list 一致',
     !!lMatch && +lMatch[1] === CFG.RANK.list.w && +lMatch[2] === CFG.RANK.list.h &&
@@ -392,7 +401,7 @@ store[CFG.SAVE_KEY] = JSON.stringify({
   const odcCode = fs.readFileSync(odcPath2, 'utf8');
 
   function runOdc(friends, me, failIt) {
-    const r = { texts: [], fills: [], imgs: 0, strokes: [] };
+    const r = { texts: [], fills: [], imgs: 0, strokes: [], posts: [] };
     const c2 = {
       canvas: null, font: '', fillStyle: '', strokeStyle: '', lineWidth: 1,
       textAlign: 'left', textBaseline: 'top',
@@ -416,46 +425,56 @@ store[CFG.SAVE_KEY] = JSON.stringify({
         if (failIt) { o.fail({ errMsg: 'getFriendCloudStorage:fail' }); return; }
         o.success({ data: friends });
       },
-      createImage() { r.imgs++; return { set src(v) {}, onload: null, onerror: null }; }
+      createImage() { r.imgs++; return { set src(v) {}, onload: null, onerror: null }; },
+      /* v0.65：开放数据域画完把名次回传主域 */
+      postMessage(m) { r.posts.push(m); }
     };
     const box = { wx, console, Math, JSON, String, Number, Array, Object };
     box.globalThis = box;
     vm.createContext(box);
     vm.runInContext(odcCode, box);
-    onMsg({ type: 'show', w: 566, h: 588, k: 2, me });
+    onMsg({ type: 'show', w: 566, h: 532, k: 2, me });
     r.canvas = sc;
     return r;
   }
 
-  const mkFriend = (n, v, av) => ({
+  /* v0.65：KV 升到 v2（带 stars），排序主键改成星数 */
+  const mkFriend = (n, stars, av) => ({
     nickname: n, avatarUrl: av ? 'https://thirdwx.qlogo.cn/' + n : '',
-    KVDataList: [{ key: 'tangram', value: JSON.stringify({ v: 1, cleared: v, streak: 0 }) }]
+    KVDataList: [{ key: 'tangram_v2', value: JSON.stringify({
+      v: 2, stars: stars, cleared: Math.round(stars / 3), weekStars: 0, streak: 0
+    }) }]
   });
   const f8 = [mkFriend('泡泡', 120, 1), mkFriend('刘晓飞二大爷', 96, 1), mkFriend('尼西26G', 74, 1),
     mkFriend('小满', 52, 1), mkFriend('wayne wong', 41, 1), mkFriend('木木不吃鱼', 28, 1),
     mkFriend('阿树', 19, 1), mkFriend('吊车尾', 3, 0)];
-  const od = runOdc(f8, { nick: '古月三金', avatar: '', cleared: 12, streak: 0 });
+  /* 我 15 星 → 排第 8，正好在 7 行之外 */
+  const od = runOdc(f8, { nick: '古月三金', avatar: '', cleared: 5, stars: 15, streak: 0 });
 
-  check('离屏画布按 设计宽高 × k 开（566×588×2）', od.canvas.width === 1132 && od.canvas.height === 1176,
+  check('离屏画布按 设计宽高 × k 开（566×532×2）', od.canvas.width === 1132 && od.canvas.height === 1064,
     od.canvas.width + '×' + od.canvas.height);
-  const names = od.texts.filter(t => /关$/.test(t.s) === false && t.align === 'left').map(t => t.s);
-  check('好友按通关数从高到低排', names[0] === '泡泡' && names[1] === '刘晓飞二大爷',
+  const names = od.texts.filter(t => t.align === 'left' && !/关$/.test(t.s)).map(t => t.s);
+  check('好友按星数从高到低排', names[0] === '泡泡' && names[1] === '刘晓飞二大爷',
     names.join('|'));
-  check('最多 7 行：自己不在前 7 就顶掉第 7 名',
-    !od.texts.some(t => t.s === '阿树') && od.texts.some(t => t.s === '古月三金'),
+  check('最多 7 行，自己不在前 7 时不顶掉第 7 名',
+    od.texts.some(t => t.s === '阿树') && !od.texts.some(t => t.s === '古月三金'),
     names.join('|'));
-  check('自己排在最后一行', od.texts.some(t => t.s === '古月三金' && t.y > 500),
-    JSON.stringify(od.texts.filter(t => t.s === '古月三金')));
-  check('数值带「关」单位', od.texts.some(t => t.s === '120 关') && od.texts.some(t => t.s === '12 关'),
-    od.texts.filter(t => /关$/.test(t.s)).map(t => t.s).join('|'));
-  check('自己那行的数值用高亮色', od.texts.some(t => t.s === '12 关' && t.color === '#E2624A'),
-    od.texts.filter(t => /^12 关$/.test(t.s)).map(t => t.color).join(','));
-  check('有头像的好友会去加载图片（共 6 张，自己无头像）', od.imgs === 6, 'imgs=' + od.imgs);
+  check('主值带星号单位（★N）',
+    od.texts.some(t => t.s === '★120') && od.texts.some(t => t.s === '★19'),
+    od.texts.filter(t => /★/.test(t.s)).map(t => t.s).join('|'));
+  check('副信息是「通关 M 关」',
+    od.texts.some(t => t.s === '通关 40 关'),
+    od.texts.filter(t => /^通关/.test(t.s)).map(t => t.s).join('|'));
+  check('有头像的好友会去加载图片（共 7 张）', od.imgs === 7, 'imgs=' + od.imgs);
+  check('画完把名次回传主域（我第 8 / 共 9 人）',
+    od.posts.length === 1 && od.posts[0].type === 'friendRank' &&
+    od.posts[0].myRank === 8 && od.posts[0].total === 9 && od.posts[0].myStars === 15,
+    JSON.stringify(od.posts[0] || null));
 
   const odErr = runOdc([], null, true);
   check('好友数据读失败：给可读文案而不是白屏',
     odErr.texts.some(t => /暂时读不到好友数据/.test(t.s)), textsOf(odErr.texts));
-  const odEmpty = runOdc([], { nick: '古月三金', avatar: '', cleared: 0, streak: 0 });
+  const odEmpty = runOdc([], { nick: '古月三金', avatar: '', cleared: 0, stars: 0, streak: 0 });
   check('没有好友：提示邀请好友', odEmpty.texts.some(t => /还没有好友上榜/.test(t.s)), textsOf(odEmpty.texts));
 
   /* ================= 11. 主域桥（friendrank.js）================= */
@@ -480,9 +499,12 @@ store[CFG.SAVE_KEY] = JSON.stringify({
   FR.publish({ cleared: 12, streak: 3 });        // 同值不重复写
   await sleep(1350);
   check('合并写：两次同值只落一次', kv.length === 1, 'n=' + kv.length);
-  check('写入的 key 是 tangram', kv[0].list[0].key === 'tangram', JSON.stringify(kv[0].list[0].key));
+  check('写入的 key 是 tangram_v2（v0.65）', kv[0].list[0].key === 'tangram_v2', JSON.stringify(kv[0].list[0].key));
   const kvVal = JSON.parse(kv[0].list[0].value);
-  check('写入内容包含通关数与最高连胜', kvVal.cleared === 12 && kvVal.streak === 3, JSON.stringify(kvVal));
+  /* v0.65：好友榜也按星数排，所以 KV 里必须同时带 stars / weekStars */
+  check('写入内容包含通关数 / 星数 / 最高连胜',
+    kvVal.cleared === 12 && kvVal.streak === 3 && kvVal.stars === 0 && kvVal.weekStars === 0,
+    JSON.stringify(kvVal));
 
   FR.publish({ cleared: 13, streak: 3 });
   await sleep(1350);

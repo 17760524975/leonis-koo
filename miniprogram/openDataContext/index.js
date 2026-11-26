@@ -5,22 +5,27 @@
  * 它把好友榜画到 sharedCanvas 上，主域再把这块画布贴进排行榜卡片。
  *
  * 数据流：
- *   主域 wx.setUserCloudStorage({key:'tangram'})  → 微信关系链云存储
- *   本文件 wx.getFriendCloudStorage({keyList:['tangram']}) → 好友们写的那份
+ *   主域 wx.setUserCloudStorage({key:'tangram_v2'})  → 微信关系链云存储
+ *   本文件 wx.getFriendCloudStorage({keyList:[...]}) → 好友们写的那份
  *   主域 postMessage({type:'show', w, h, k, me}) → 本文件按尺寸重画
+ *   本文件 wx.postMessage({type:'friendRank', …})   → 主域画「我的名次」常驻卡
  *
- * 注意：主域 → 开放数据域是单向的（只有 postMessage / onMessage），
- * 所以「我」的那一行由主域在消息里带过来，好友列表里本来也不含自己。
+ * v0.65（口径见 docs/v0.63-排行榜重设计规格.md）：
+ *   · 排序改成按**星数**（stars ↓ cleared ↓ streak ↓ 昵称），与全服榜同口径；
+ *   · KV 读 v2（带 stars/weekStars），兼容旧的 'tangram' 键 30 天；
+ *   · 只画前 7 行，**自己不在前 7 时不顶掉第 7 行** —— 我的名次由主域常驻卡负责；
+ *   · 画完把名次 postMessage 回主域，主域据此显示「好友里第 N 名 / 再得 X 星」。
  */
 'use strict';
 
-var KEY = 'tangram';
+var KEY = 'tangram_v2';
+var KEY_OLD = 'tangram';
 var sc = wx.getSharedCanvas();
 var ctx = sc.getContext('2d');
 
 /* 与 config.RANK.list 保持一致（开放数据域读不到主域配置，只能抄同一组数；
- * 改版式时两边一起改，verify_v18 会断言这两组数相等） */
-var L = { w: 566, h: 588, rowH: 74, step: 84, rows: 7 };
+ * 改版式时两边一起改，verify_rank_v65 会断言这两组数相等） */
+var L = { w: 566, h: 532, rowH: 68, step: 76, rows: 7 };
 
 /* 与 config.COLORS 对齐的一小份配色（主域每次 show 都会带 pal 过来覆盖，
  * v0.47：这组只剩「兜底」用途 —— 深色皮肤下主域会传深色的一套，
@@ -46,7 +51,7 @@ var MEDAL = ['#F5B73D', '#C9D3DD', '#E0A276'];
 var FALLBACK = ['#FF8A5B', '#4FA8E0', '#63C88B', '#A87BE8', '#D96A9B', '#FFC53D', '#3FB8B0'];
 
 var cfg = { w: L.w, h: L.h, k: 2, me: null };
-var rows = [];            // [{nick, avatar, cleared, streak, me}]
+var rows = [];            // [{nick, avatar, stars, cleared, streak, weekStars, me}]
 var state = 'init';       // init | loading | ready | error
 var errMsg = '';
 var imgs = {};            // url -> Image（加载完重画）
@@ -119,17 +124,31 @@ function drawAvatar(url, cx, cy, r, nick, color) {
 }
 
 /* ---------------- 数据 ---------------- */
+function num(v) {
+  if (typeof v === 'number' && isFinite(v)) return v;
+  var n = parseInt(v, 10);
+  return isFinite(n) ? n : 0;
+}
+/* v0.65：一份 KV 记录 → 归一化。v2 带 stars/weekStars；旧键只有 cleared/streak，
+ * 兼容期按「通关数 × 3」给个近似星数，等老客户端升级后自然被真实值覆盖。 */
 function pick(f) {
-  var arr = f.KVDataList || [], i;
+  var arr = f.KVDataList || [], i, o = null;
   for (i = 0; i < arr.length; i++) {
-    if (arr[i] && arr[i].key === KEY) {
-      try {
-        var o = JSON.parse(arr[i].value);
-        return { cleared: Math.max(0, o.cleared | 0), streak: Math.max(0, o.streak | 0) };
-      } catch (e) { /* 脏数据当 0 */ }
-    }
+    var it = arr[i];
+    if (!it) continue;
+    if (it.key === KEY) { o = it; break; }
+    if (it.key === KEY_OLD && !o) o = it;      // 旧键只作兜底，找到 v2 就不看它
   }
-  return { cleared: 0, streak: 0 };
+  if (!o) return { stars: 0, cleared: 0, streak: 0, weekStars: 0 };
+  try {
+    var d = JSON.parse(o.value) || {};
+    return {
+      stars: Math.max(0, num(d.stars)),
+      cleared: Math.max(0, num(d.cleared)),
+      streak: Math.max(0, num(d.streak)),
+      weekStars: Math.max(0, num(d.weekStars))
+    };
+  } catch (e) { return { stars: 0, cleared: 0, streak: 0, weekStars: 0 }; }
 }
 
 function build(friends) {
@@ -139,49 +158,76 @@ function build(friends) {
     var v = pick(f);
     out.push({
       nick: f.nickname || '好友', avatar: f.avatarUrl || '',
-      cleared: v.cleared, streak: v.streak, me: false
+      stars: v.stars, cleared: v.cleared, streak: v.streak, weekStars: v.weekStars,
+      me: false
     });
   }
-  /* 自己：主域带过来（好友列表里没有自己），排在同分的前面一点点，
-   * 让玩家一眼能找到自己 —— 不是作弊，同分本来就是并列。 */
+  /* 自己：主域带过来（好友列表里没有自己） */
   if (cfg.me && cfg.me.nick) {
     out.push({
       nick: cfg.me.nick, avatar: cfg.me.avatar || '',
-      cleared: Math.max(0, cfg.me.cleared | 0), streak: Math.max(0, cfg.me.streak | 0),
+      stars: Math.max(0, num(cfg.me.stars)),
+      cleared: Math.max(0, num(cfg.me.cleared)),
+      streak: Math.max(0, num(cfg.me.streak)),
+      weekStars: Math.max(0, num(cfg.me.weekStars)),
       me: true
     });
   }
+  /* v0.65：星数优先（与全服榜同口径），再通关数、再连胜、最后昵称；
+   * 同分时自己排前面一点点 —— 不是作弊，同分本来就是并列。 */
   out.sort(function (a, b) {
+    if (b.stars !== a.stars) return b.stars - a.stars;
     if (b.cleared !== a.cleared) return b.cleared - a.cleared;
     if (b.streak !== a.streak) return b.streak - a.streak;
     if (a.me !== b.me) return a.me ? -1 : 1;
-    return 0;
+    return String(a.nick) < String(b.nick) ? -1 : 1;
   });
   return out;
+}
+
+/* v0.65：画完把名次回传主域（主域据此画「我的名次」常驻卡） */
+function report() {
+  var myRank = 0, myStars = 0, total = rows.length;
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].me) { myRank = i + 1; myStars = rows[i].stars; break; }
+  }
+  var top = rows[0];
+  try {
+    if (wx.postMessage) {
+      wx.postMessage({
+        type: 'friendRank', myRank: myRank, myStars: myStars,
+        topStars: top ? top.stars : 0, total: total, state: state
+      });
+    }
+  } catch (e) { /* 老基础库没有 postMessage：主域显示「好友排名读取中…」 */ }
 }
 
 function load() {
   state = 'loading';
   draw();
-  if (!wx.getFriendCloudStorage) { state = 'error'; errMsg = '当前基础库不支持好友榜'; draw(); return; }
+  if (!wx.getFriendCloudStorage) { state = 'error'; errMsg = '当前基础库不支持好友榜'; draw(); report(); return; }
   try {
     wx.getFriendCloudStorage({
-      keyList: [KEY],
+      /* v0.65：两个键一起要，v2 优先（老客户端只写了旧键） */
+      keyList: [KEY, KEY_OLD],
       success: function (res) {
         rows = build((res && res.data) || []);
         state = 'ready';
         draw();
+        report();
       },
       fail: function (e) {
         state = 'error';
         errMsg = (e && (e.errMsg || e.message)) || '读取失败';
         draw();
+        report();
       }
     });
   } catch (e) {
     state = 'error';
     errMsg = String((e && e.message) || e);
     draw();
+    report();
   }
 }
 
@@ -199,25 +245,17 @@ function draw() {
     text('确认网络正常后再进来看', cfg.w / 2, cfg.h / 2 + 18, 19, K.sub, 'center');
     return;
   }
-  if (!rows.length || (rows.length === 1 && rows[0].me && !rows[0].cleared)) {
+  /* 只有自己、而且一颗星都没有 → 等同于空榜 */
+  if (!rows.length || (rows.length === 1 && rows[0].me && !rows[0].stars)) {
     text('还没有好友上榜', cfg.w / 2, cfg.h / 2 - 26, 26, K.text, 'center', '600');
     text('邀请微信好友一起拼，通关就会出现在这里', cfg.w / 2, cfg.h / 2 + 18, 19, K.sub, 'center');
     return;
   }
 
-  /* 最多 N 行：自己不在前 N 就把最后一行让给自己（与主线榜的「我的排名」同规矩） */
-  var list = rows.slice(0, L.rows), selfIn = false, i;
-  for (i = 0; i < list.length; i++) if (list[i].me) selfIn = true;
-  if (!selfIn) {
-    for (i = 0; i < rows.length; i++) {
-      if (rows[i].me) {
-        list = rows.slice(0, L.rows - 1);
-        list.push(rows[i]);
-        break;
-      }
-    }
-  }
-
+  /* v0.65：只画前 7 行。自己不在前 7 时**不顶掉第 7 行** ——
+   * 旧版把第 7 名挤掉换成自己，等于篡改了别人的名次，
+   * 而「我第几」本来就该由主域的常驻卡负责。 */
+  var list = rows.slice(0, L.rows), i;
   for (i = 0; i < list.length; i++) {
     var it = list[i], y = L.rowH / 2 + i * L.step;
     var hl = !!it.me;
@@ -237,21 +275,22 @@ function draw() {
     if (i < 3 && !hl) {
       ctx.save();
       ctx.beginPath();
-      ctx.arc(42, y, 23, 0, Math.PI * 2);
+      ctx.arc(42, y, 21, 0, Math.PI * 2);
       ctx.fillStyle = MEDAL[i];
       ctx.fill();
       ctx.restore();
-      text(String(rk), 42, y + 1, 24, '#3A2A12', 'center', '700');
+      text(String(rk), 42, y + 1, 22, '#3A2A12', 'center', '700');
     } else {
-      text(String(rk > 99 ? '99+' : rk), 42, y + 1, rk > 99 ? 20 : 24,
+      text(String(rk > 99 ? '99+' : rk), 42, y + 1, rk > 99 ? 18 : 22,
         hl ? K.meText : K.rowSub, 'center', '700');
     }
 
-    drawAvatar(it.avatar, 96, y, 24, it.nick, FALLBACK[i % FALLBACK.length]);
-    text(fit(it.nick, cfg.w - 136 - 96, 24, hl ? '700' : '500'), 136, y + 1, 24,
+    drawAvatar(it.avatar, 92, y, 22, it.nick, FALLBACK[i % FALLBACK.length]);
+    /* v0.65：两行 —— 名字在上、副信息在下（行高 68 放得下 22px + 18px） */
+    text(fit(it.nick, cfg.w - 128 - 120, 22, hl ? '700' : '500'), 128, y - 11, 22,
       K.rowText, 'left');
-    text(it.cleared + ' 关', cfg.w - 28, y + 1, 26,
-      hl ? K.meText : K.rowText, 'right', '700');
+    text('通关 ' + it.cleared + ' 关', 128, y + 15, 18, K.rowSub, 'left');
+    text('★' + it.stars, cfg.w - 24, y - 8, 24, hl ? K.meText : K.rowText, 'right', '700');
   }
 }
 

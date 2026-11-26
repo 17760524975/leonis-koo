@@ -185,7 +185,7 @@ check('分享请求截图', shareLog[0] && shareLog[0].capture === true);
 tap(CFG.DESIGN.w / 2 + 118, CFG.WIN.row2Y);
 step(16);
 check('点「排行榜」打开榜单', S.overlay === 'rank', 'overlay=' + S.overlay);
-tap(CFG.DESIGN.w / 2, 1300);
+tap(CFG.DESIGN.w / 2, CFG.RANK.close.y);          // v0.65：关闭钮 y 从 1300 下移到 1372
 step(16);
 check('关闭榜单退回结算页', S.overlay === 'result', 'overlay=' + S.overlay);
 
@@ -240,20 +240,30 @@ check('主线榜按「关」计数', S.overlay === 'rank');
 const myNick = game._debug.meNick();
 const selfRow = rec.texts.filter(r => r.s === myNick);
 check('底部固定「我的排名」一行', selfRow.length >= 1, 'nick=' + myNick + ' hits=' + selfRow.length);
-check('我的通关数正确（3 关）', rec.texts.some(r => r.s === '3 关'), '期望 3 关');
+/* v0.65：常驻卡右侧是一个串「★总星 · N 关」（旧版只有「N 关」） */
+check('我的星数与通关数正确（★6 · 3 关）',
+  rec.texts.some(r => /^★6 · 3 关$/.test(r.s)),
+  rec.texts.filter(r => /关$/.test(r.s)).map(r => r.s).join(','));
 /* 榜尾名次 = 示例榜里比我高的 + 1 = 8 */
 check('榜尾名次显示 8', rec.texts.some(r => r.s === '8'), '');
+/* v0.65：页签改成 0 全服 / 1 好友 / 2 本周（连胜榜已并入本周榜的次排序键） */
 clearRec();
 tap(CFG.DESIGN.w / 2, 495);
 step(16);
-check('点「连胜榜」切页签', S.rankTab === 1, 'tab=' + S.rankTab);
+check('点中间页签切到「好友榜」', S.rankTab === 1, 'tab=' + S.rankTab);
 clearRec();
 for (let i = 0; i < 2; i++) step(16);
-check('连胜榜单位是「连胜」', rec.texts.some(r => /连胜$/.test(r.s)), '');
+check('好友榜画出榜单行（主值仍是星星）',
+  rec.texts.some(r => /^★\d+$/.test(r.s)), rec.texts.map(r => r.s).slice(0, 6).join(','));
 clearRec();
 tap(CFG.DESIGN.w / 2 + 186, 495);
 step(16);
-check('点「好友榜」切页签', S.rankTab === 2, 'tab=' + S.rankTab);
+check('点「本周榜」切页签', S.rankTab === 2, 'tab=' + S.rankTab);
+clearRec();
+for (let i = 0; i < 2; i++) step(16);
+check('本周榜副信息带「连胜 S · 本周 M 关」',
+  rec.texts.some(r => /^连胜 \d+ · 本周 \d+ 关$/.test(r.s)),
+  rec.texts.filter(r => /本周/.test(r.s)).slice(0, 3).map(r => r.s).join(','));
 CFG.RANK.useMock = false;   // 复原，避免污染后续用例
 
 /* 从主页进入 → 关闭应回主页，不误回结算页 */
@@ -261,7 +271,7 @@ S.overlay = null; S.page = 'home';
 game._debug.fireBtn('entry_rank');
 step(16);
 check('主页入口可打开榜单', S.overlay === 'rank');
-tap(CFG.DESIGN.w / 2, 1300);
+tap(CFG.DESIGN.w / 2, CFG.RANK.close.y);
 step(16);
 check('主页进入的榜单关闭后回主页', S.overlay === null, 'overlay=' + S.overlay);
 

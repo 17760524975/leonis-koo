@@ -17,8 +17,27 @@
 
 function createFriend() {
   var odc = null, shared = null, ready = false, booted = false;
-  var KV = 'tangram';                 // 与 openDataContext/index.js 里的 keyList 一致
+  /* v0.65：KV 键升到 v2（多带 stars / weekStars）。开放数据域读 v2 为主、兼容旧的
+   * 'tangram' —— 老客户端还在写旧键，只读 v2 会让好友榜突然全是 0。 */
+  var KV = 'tangram_v2';
+  var KV_OLD = 'tangram';
   var lastVal = '', timer = null;
+  var rankCbs = [], msgHooked = false;
+
+  /* 开放数据域画完会 postMessage 回主域（type:'friendRank'），主域用 onMessage 收 */
+  function hookMsg() {
+    if (msgHooked) return;
+    msgHooked = true;
+    try {
+      if (typeof wx === 'undefined' || !wx.onMessage) return;
+      wx.onMessage(function (msg) {
+        if (!msg || msg.type !== 'friendRank') return;
+        for (var i = 0; i < rankCbs.length; i++) {
+          try { rankCbs[i](msg); } catch (e) {}
+        }
+      });
+    } catch (e) { /* 静默：拿不到回传时主域显示「好友排名读取中…」 */ }
+  }
 
   function ensure() {
     if (booted) return ready;
@@ -28,6 +47,7 @@ function createFriend() {
       odc = wx.getOpenDataContext();
       shared = (odc && odc.canvas) || null;
       ready = !!(odc && shared);
+      if (ready) hookMsg();
     } catch (e) { ready = false; }
     return ready;
   }
@@ -58,7 +78,7 @@ function createFriend() {
         odc.postMessage({
           type: 'show',
           w: Math.round(opt.w || 566),
-          h: Math.round(opt.h || 588),
+          h: Math.round(opt.h || 532),
           k: Math.max(1, Math.min(3, opt.k || 2)),
           /* v0.47：主域当前的配色（开放数据域读不到 config，只能随消息带过去）。
            * 不带时那边用内置的浅色默认值，行为与旧版一致。 */
@@ -74,8 +94,10 @@ function createFriend() {
     publish: function (stats) {
       if (typeof wx === 'undefined' || !wx.setUserCloudStorage) return false;
       var val = JSON.stringify({
-        v: 1,
+        v: 2,
         cleared: Math.max(0, (stats && stats.cleared) | 0),
+        stars: Math.max(0, (stats && stats.stars) | 0),
+        weekStars: Math.max(0, (stats && stats.weekStars) | 0),
         streak: Math.max(0, (stats && stats.streak) | 0),
         ts: Date.now()
       });
@@ -85,9 +107,17 @@ function createFriend() {
       return true;
     },
 
+    /* v0.65：开放数据域回传名次（主域据此画「我的名次」常驻卡）。
+     * 回调式而不是返回值：名次是异步画完才有的，且可能不止一次。 */
+    onRank: function (cb) {
+      if (typeof cb !== 'function') return;
+      rankCbs.push(cb);
+      hookMsg();
+    },
+
     /* 设置页/联调用 */
     status: function () {
-      return { available: ensure(), key: KV, last: lastVal };
+      return { available: ensure(), key: KV, legacy: KV_OLD, last: lastVal };
     }
   };
 }

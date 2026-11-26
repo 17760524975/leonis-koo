@@ -116,16 +116,23 @@ function createCloud() {
       });
     },
 
-    /* 榜单：tab 0=主线(通关数) 1=连胜 2=好友(需开放数据域，本期不返回数据) */
+    /* 榜单（v0.65 页签序号变了）：
+     *   0 全服榜（stars 为主，cleared 为次）  1 好友榜（走开放数据域，这里只回 note）
+     *   2 本周榜（weekStars 为主）
+     * nextResetAt / weekKey 原样透传给核心层：倒计时与「本周榜缓存分桶」都要用。 */
     rank: function (tab, cb) {
       cb = cb || function () {};
-      if (tab === 2) {
+      if (tab === 1) {
         cb(null, { list: [], me: null, note: 'friend' });
         return;
       }
       call('rank', { tab: tab }, function (err, res) {
         if (err) { cb(err); return; }
-        cb(null, { list: res.list || [], me: res.me || null, note: res.note || '' });
+        cb(null, {
+          list: res.list || [], me: res.me || null, note: res.note || '',
+          nextResetAt: res.nextResetAt || 0, weekKey: res.weekKey || '',
+          totalPlayers: res.totalPlayers || 0
+        });
       });
     },
 

@@ -137,8 +137,10 @@ S.failT = 1900;
 render();
 check('1900ms：横幅完全退场（静态版一致）', rec.texts.indexOf('时间到！') < 0, rec.texts.join('|'));
 check('静态版仍保留复活页全部按钮文案',
-  rec.texts.some(t => /看广告复活|本关看视频次数已用完/.test(t)) &&
-  rec.texts.some(t => /花 \d+ 巧币复活/.test(t)) &&
+  /* v0.65：文案改成「看视频复活」；巧币那只去掉汉字，只留「币图标 + 80 · 复活」 */
+  rec.texts.some(t => /看视频复活|本关看视频次数已用完/.test(t)) &&
+  /* 够钱 →「80 · 复活」；不够 →「巧币不足 50/80」（这条支路也必须有，玩家得能读出差多少） */
+  rec.texts.some(t => /^(\d+ · 复活|巧币不足 \d+\/\d+)$/.test(t)) &&
   rec.texts.some(t => t === '忍痛放弃'), rec.texts.join('|'));
 
 /* ================= D. reduceMotion ================= */

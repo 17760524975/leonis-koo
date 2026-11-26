@@ -343,7 +343,13 @@
       var rtab = +(q.match(/tab=(\d+)/) || [])[1];
       if (!isNaN(rtab)) S.rankTab = rtab;
       /* v0.18：好友榜在浏览器里没有开放数据域 → &friendmock=1 用示例好友验版式 */
-      if (/friendmock=1/.test(q)) { C.RANK.useMock = true; S.rankTab = 2; }
+      /* v0.65 页签序号变了：0 全服 / 1 好友 / 2 本周，好友榜是 tab 1 */
+      if (/friendmock=1/.test(q)) { C.RANK.useMock = true; S.rankTab = 1; }
+      /* v0.65：&mockrank=1 打开示例榜单（三页签都走 config.RANK.mock） */
+      if (/mockrank=1/.test(q)) { C.RANK.useMock = true; }
+      /* v0.65：&reset=<ms 后重置> 伪造本周榜重置点，用来截倒计时四档文案 */
+      var rsq = (q.match(/reset=(\d+)/) || [])[1];
+      if (rsq) S.rankMeta.nextResetAt = Date.now() + (+rsq);
       /* v0.18：&rankerr=1 复现「加载失败 + 重新加载」页 */
       if (/rankerr=1/.test(q)) {
         S.rankErr = '网络超时'; S.rankList = null;
@@ -354,10 +360,12 @@
        * 因为浏览器预览没有云环境，默认会显示"未开启云同步" */
       if (/ranklive=1/.test(q)) {
         S.rankList = { list: [
-          { nick: '巧手0001', v: 26, me: false }, { nick: '巧手3308', v: 21, me: false },
-          { nick: '巧手7752', v: 18, me: false }, { nick: '巧手0921', v: 12, me: true },
-          { nick: '巧手4417', v: 9, me: false }, { nick: '巧手6620', v: 6, me: false }
-        ], me: { nick: '巧手0921', v: 12, rank: 4 } };
+          { nick: '巧手0001', v: 198, v2: 66, me: false }, { nick: '巧手3308', v: 173, v2: 61, me: false },
+          { nick: '巧手7752', v: 152, v2: 55, me: false }, { nick: '巧手0921', v: 129, v2: 44, me: true },
+          { nick: '巧手4417', v: 96, v2: 34, me: false }, { nick: '巧手6620', v: 71, v2: 26, me: false }
+        ], me: { nick: '巧手0921', v: 129, v2: 44, rank: 4 },
+          nextResetAt: Date.now() + 2 * 86400000 + 13 * 3600000, weekKey: '2026-W48',
+          weekStars: 24, weekCleared: 9 };
         S.net = { on: true, ready: true, nick: '巧手0921', syncing: false, ts: 1, err: '' };
         /* v0.14：资料态下把化名换成人名 + 头像，验证榜单头像是真头像而不是首字 */
         if (profMode === 'wx' || profMode === 'custom') {

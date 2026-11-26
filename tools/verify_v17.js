@@ -275,9 +275,11 @@ function md5(p) { var __s = p; return require('crypto').createHash('md5').update
   tx = grab(() => step(16));
   check('复活弹层上仍画出巧币 210', hudTexts(tx).some(t => t.s === '210'), textsOf(hudTexts(tx)));
   check('复活弹层上仍画出体力', hudTexts(tx).some(t => t.s === '/16'), textsOf(hudTexts(tx)));
-  check('复活按钮的报价（100）与余额并存，玩家能自己判断够不够',
-    tx.some(t => /花 \d+ 巧币复活/.test(t.s)) && hudTexts(tx).some(t => t.s === '210'),
-    textsOf(tx.filter(t => /巧币复活/.test(t.s))));
+  /* v0.65：报价文案去掉了「花/巧币/复活」这些汉字，改成「币图标 + 80 · 复活」。
+   * 断言口径不变：**数字必须还在**（玩家得能自己判断够不够），余额也还在。 */
+  check('复活按钮的报价（80）与余额并存，玩家能自己判断够不够',
+    tx.some(t => /^\d+ · 复活$/.test(t.s)) && hudTexts(tx).some(t => t.s === '210'),
+    textsOf(tx.filter(t => /复活/.test(t.s))));
 
   S.overlay = 'result'; S.resT = 999; S.win = null;
   S.result = { stars: 3, coin: 20, energy: 0 };

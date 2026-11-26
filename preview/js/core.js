@@ -241,9 +241,13 @@ me: { nick: '', avatar: '', src: 'auto', auth: false, err: '', busy: false },
 rankList: null,
 rankErr: '',
 rankLoading: false,
-rankCache: { 0: null, 1: null },
+rankCache: {},
 rankListTab: -1,
 rankSeq: 0,
+rankMeta: { nextResetAt: 0, weekKey: '', weekStars: 0, weekCleared: 0 },
+friendRankInfo: null,
+rankTickAt: 0,
+rankPaintSig: '',
 streakBeforeFail: 0,
 seenBeforeFail: [],
 friendT: 0,
@@ -724,19 +728,69 @@ if ((sets[sk].bestStreak || 0) > best) best = sets[sk].bestStreak || 0;
 }
 return {
 sets: sets,
-stats: { stars: stars, cleared: cleared, streak: best },
+stats: { stars: stars, cleared: cleared, streak: best,
+weekEvents: (state.save.weekQ || []).slice(0, 12) },
 profile: { nick: meNick(), avatar: meAvatarUrl(), src: state.me.src, auth: !!state.me.auth }
 };
 }
+function pad2(n) { return (n < 10 ? '0' : '') + n; }
+function dayKeyCN(t) {
+var d = new Date((t || Date.now()) + 8 * 3600 * 1000);
+return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate());
+}
+function weekKeyCN(t) {
+var d = new Date((t || Date.now()) + 8 * 3600 * 1000);
+var day = d.getUTCDay() || 7;
+var thu = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 4 - day));
+var y0 = Date.UTC(thu.getUTCFullYear(), 0, 1);
+var wk = Math.ceil(((thu - y0) / 86400000 + 1) / 7);
+return thu.getUTCFullYear() + '-W' + pad2(wk);
+}
+function lvUid(lv) { return (lv && (lv.uid || String(lv.id || ''))) || ''; }
+function weekLedger() {
+var s = state.save, wk = weekKeyCN();
+if (s.weekWeek !== wk) { s.weekWeek = wk; s.weekSeen = {}; }
+if (!s.weekSeen) s.weekSeen = {};
+return s.weekSeen;
+}
+function weekStats() {
+var seen = weekLedger(), sum = 0, uids = {}, n = 0, dk, u;
+for (dk in seen) for (u in seen[dk]) {
+sum += seen[dk][u] | 0;
+if (!uids[u]) { uids[u] = 1; n++; }
+}
+return { stars: sum, cleared: n };
+}
+function recordWeekWin(lv, stars) {
+if (!lv || !stars) return false;
+var seen = weekLedger(), dk = dayKeyCN();
+var day = seen[dk] || (seen[dk] = {});
+var u = lvUid(lv);
+if (!u) return false;
+if ((day[u] | 0) >= stars) return false;
+day[u] = stars;
+var s = state.save;
+if (!s.weekQ) s.weekQ = [];
+s.weekQ.push({ uid: u, rev: (lv.rev | 0) || 1, stars: stars | 0, day: dk });
+if (s.weekQ.length > 40) s.weekQ = s.weekQ.slice(-40);
+return true;
+}
 function friendStats() {
-var ks = saveKeys(), i, cleared = 0, best = state.save.bestStreak || 0;
+var st = myStats(), wk = weekStats();
+return { cleared: st.cleared, streak: st.streak, stars: st.stars, weekStars: wk.stars };
+}
+function myStats() {
+var ks = saveKeys(), i, stars = 0, cleared = 0, best = 0, o;
 for (i = 0; i < ks.length; i++) {
-var o = readSaveByKey(ks[i]);
+o = (ks[i] === SAVE_KEY) ? state.save : readSaveByKey(ks[i]);
 if (!o) continue;
-for (var lv in (o.starOf || {})) if ((o.starOf[lv] || 0) > 0) cleared++;
+for (var lv in (o.starOf || {})) {
+var v = o.starOf[lv] || 0;
+if (v > 0) { cleared++; stars += v; }
+}
 if ((o.bestStreak || 0) > best) best = o.bestStreak || 0;
 }
-return { cleared: cleared, streak: best, stars: starsOfSave(state.save) };
+return { stars: stars, cleared: cleared, streak: best };
 }
 function publishFriend() {
 if (!env.friend || !env.friend.publish) return;
@@ -754,7 +808,9 @@ if (!cloudOn() || !state.net.ready) return;
 if (pushing) { pushAgain = true; return; }
 pushing = true;
 state.net.syncing = true;
-CLOUD.save(collectCloud(), function (err, res) {
+var payload = collectCloud();
+var sent = payload.stats.weekEvents || [];
+CLOUD.save(payload, function (err, res) {
 pushing = false;
 state.net.syncing = false;
 if (pushAgain) { pushAgain = false; cloudPush(true); }
@@ -762,6 +818,13 @@ if (err) { state.net.err = String((err && err.msg) || err); return; }
 state.net.err = '';
 state.net.ts = Date.now();
 if (res && res.me) state.rankMe = res.me;
+if (res && res.weekResetAt) state.rankMeta.nextResetAt = res.weekResetAt;
+if (sent.length) {
+var q = state.save.weekQ || [];
+var keep = [];
+for (var qi = 0; qi < q.length; qi++) if (sent.indexOf(q[qi]) < 0) keep.push(q[qi]);
+if (keep.length !== q.length) { state.save.weekQ = keep; persist(); }
+}
 });
 }
 function cloudPull() {
@@ -790,26 +853,35 @@ publishFriend();
 cloudPush(true);
 });
 }
+function rankCacheKey(tab) {
+return tab === 2 ? ('2:' + (state.rankMeta.weekKey || 'na')) : String(tab);
+}
 function cloudRank(tab) {
 if (!cloudOn()) { state.rankLoading = false; return; }
-var seq = ++state.rankSeq;
+var seq = ++state.rankSeq, ck = rankCacheKey(tab);
 state.rankLoading = true;
 if (state.rankTab === tab) state.rankErr = '';
 CLOUD.rank(tab, function (err, res) {
 if (seq !== state.rankSeq) {
-if (!err && res && !state.rankCache[tab]) state.rankCache[tab] = res;
+if (!err && res && !state.rankCache[ck]) state.rankCache[ck] = res;
 return;
 }
 state.rankLoading = false;
 if (err) {
 if (state.rankTab === tab) {
 state.rankErr = (err && err.msg) || '网络异常';
-if (!state.rankCache[tab]) { state.rankList = null; state.rankListTab = tab; }
+if (!state.rankCache[ck]) { state.rankList = null; state.rankListTab = tab; }
 }
 return;
 }
 var data = res || { list: [], me: null };
-state.rankCache[tab] = data;
+state.rankCache[ck] = data;
+if (data.nextResetAt) state.rankMeta.nextResetAt = data.nextResetAt;
+if (data.weekKey) state.rankMeta.weekKey = data.weekKey;
+if (data.me && tab === 2) {
+state.rankMeta.weekStars = data.me.v || 0;
+state.rankMeta.weekCleared = data.me.v2 || 0;
+}
 state.dirty = true;
 if (state.rankTab === tab) { state.rankList = data; state.rankListTab = tab; }
 });
@@ -818,8 +890,10 @@ function selectRankTab(tab) {
 state.rankTab = tab;
 state.rankErr = '';
 state.rankLoading = false;
-if (tab === 2) { openFriendRank(); return; }
-state.rankList = state.rankCache[tab] || null;
+state.rankPaintSig = '';
+if (tab === 1) { state.rankListTab = 1; openFriendRank(); state.dirty = true; return; }
+var ck = rankCacheKey(tab);
+state.rankList = state.rankCache[ck] || null;
 state.rankListTab = tab;
 state.dirty = true;
 cloudRank(tab);
@@ -834,6 +908,7 @@ var k = (view.scale || 1) * (view.dpr || 1);
 if (!(k > 0)) k = 2;
 k = Math.max(1, Math.min(3, k));
 state.friendT = Date.now();
+state.friendRankInfo = null;
 var fs = friendStats();
 try {
 env.friend.show({
@@ -845,9 +920,16 @@ rowSub: COL.textOnChip || COL.textSub,
 me: COL.surfaceHi, meText: COL.accentText,
 gold: COL.gold, line: COL.line
 },
-me: { nick: meNick(), avatar: meAvatarUrl(), cleared: fs.cleared, streak: fs.streak }
+me: { nick: meNick(), avatar: meAvatarUrl(), cleared: fs.cleared,
+stars: fs.stars, weekStars: fs.weekStars, streak: fs.streak }
 });
 } catch (e) { }
+}
+function applyFriendRankInfo(info) {
+if (!info || state.rankTab !== 1) return;
+state.friendRankInfo = info;
+state.rankPaintSig = '';
+state.dirty = true;
 }
 function netText() {
 if (state.net.ready && (state.net.nick || state.me.nick)) {
@@ -1727,6 +1809,7 @@ prevStars: prevStars, bestStars: bestStars,
 first: firstClear, up: bestStars > prevStars,
 gain: gain, target: targetTotal, adUsed: false };
 s.starOf[k] = bestStars;
+recordWeekWin(lv, stars);
 if (gain > 0) {
 s.coin = Math.max(0, (s.coin || 0) + gain);
 s.starPaid[k] = targetTotal;
@@ -2538,7 +2621,15 @@ state.resT += dt;
 var n = Math.min(3, Math.floor(state.resT / C.ANIM.starStep));
 state.starShown = state.result ? Math.min(state.result.stars, n) : 0;
 }
-if (state.overlay === 'rank') state.rankT += dt;
+if (state.overlay === 'rank') {
+state.rankT += dt;
+if (Date.now() - state.rankTickAt > 60000) {
+state.rankTickAt = Date.now();
+state.dirty = true;
+if (state.rankTab === 2 && state.rankMeta.nextResetAt &&
+Date.now() > state.rankMeta.nextResetAt) cloudRank(2);
+}
+}
 if (state.hint) {
 var hsH = null, lvH = LEVELS[state.levelIdx];
 for (var qh = 0; qh < lvH.solution.length; qh++) {
@@ -3083,10 +3174,11 @@ text(bt, bcx, bcy + 1, 16, COL.btnText, 'center', '700');
 } else if (b.variant === 'ghost') {
 text(b.label, b.x, b.y + dy, b.size || 22, pressed ? COL.text : COL.textSub, 'center', '500');
 } else {
-rr(x, y, b.w, b.h, 20);
+var srad = b.pill ? b.h / 2 : 20;
+rr(x, y, b.w, b.h, srad);
 ctx.fillStyle = b.disabled ? COL.disabledBg : COL.card; ctx.fill();
 ctx.lineWidth = 1.5; ctx.strokeStyle = b.disabled ? COL.disabledBg : COL.cardEdge; ctx.stroke();
-ctx.save(); rr(x, y, b.w, b.h, 20); ctx.clip();
+ctx.save(); rr(x, y, b.w, b.h, srad); ctx.clip();
 ctx.fillStyle = b.disabled ? COL.disabledBg : COL.cardEdge;
 ctx.fillRect(x, y + b.h - C.LAYOUT.BTN_EDGE + (pressed ? 2 : 0), b.w, C.LAYOUT.BTN_EDGE * 2);
 ctx.restore();
@@ -3317,10 +3409,6 @@ ctx.beginPath(); ctx.arc(10, 9, 4.6, 0, Math.PI * 2); ctx.fill();
 ctx.lineWidth = 3;
 ctx.beginPath(); ctx.moveTo(-7, -2); ctx.lineTo(6, -8); ctx.stroke();
 ctx.beginPath(); ctx.moveTo(-7, 2); ctx.lineTo(6, 8); ctx.stroke();
-} else if (name === 'tv') {
-ctx.lineWidth = 3;
-rr(-15, -11, 30, 22, 5); ctx.stroke();
-ctx.beginPath(); ctx.moveTo(-4, -6); ctx.lineTo(8, 0); ctx.lineTo(-4, 6); ctx.closePath(); ctx.fill();
 } else if (name === 'video') {
 ctx.save();
 ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -5430,70 +5518,100 @@ ctx.restore();
 adLayer();
 if (state.adSim || state.adWait) hits = [];
 }
-function rankValue(tab) {
-var s = state.save;
-if (tab === 1) return Math.max(s.bestStreak || 0, s.streak || 0);
-var n = 0;
-for (var k in s.starOf) if ((s.starOf[k] || 0) > 0) n++;
-return n;
+var RANK_COLORS = ['#FF8A5B', '#4FA8E0', '#63C88B', '#A87BE8', '#D96A9B', '#FFC53D', '#3FB8B0'];
+function num(v) {
+if (typeof v === 'number' && isFinite(v)) return v;
+var n = parseInt(v, 10);
+return isFinite(n) ? n : 0;
+}
+function myRankPair(tab) {
+var st = myStats();
+if (tab === 2) {
+var wk = weekStats();
+return { v: Math.max(wk.stars, state.rankMeta.weekStars || 0), v2: st.streak };
+}
+return { v: st.stars, v2: st.cleared };
+}
+function rankSubText(tab, item) {
+if (tab === 2) return '连胜 ' + (item.v2 || 0) + ' · 本周 ' + (item.v3 || 0) + ' 关';
+return '通关 ' + (item.v2 || 0) + ' 关';
 }
 function rankData() {
-var tab = state.rankTab, raw = [];
+var tab = state.rankTab, raw = [], i;
 if (C.RANK.useMock) raw = (C.RANK.mock[tab] || []).slice();
-else if (tab !== 2 && state.rankList && state.rankList.list) raw = state.rankList.list;
+else if (tab !== 1 && state.rankList && state.rankList.list) raw = state.rankList.list;
 var list = [];
-for (var i = 0; i < raw.length; i++) {
+for (i = 0; i < raw.length; i++) {
 var r = raw[i];
 list.push({
 n: r.n || r.nick || '玩家',
-v: (r.v !== undefined ? r.v : r.value) || 0,
+v: num(r.v !== undefined ? r.v : r.value),
+v2: num(r.v2), v3: num(r.v3),
 c: r.c || r.color || RANK_COLORS[i % RANK_COLORS.length],
 a: r.a || r.avatar || '',
 me: !!r.me
 });
 }
-var mine = null, rank = 0;
-for (var j = 0; j < list.length; j++) if (list[j].me) { mine = list[j]; rank = j + 1; }
-if (!mine) {
-var mc = state.rankList && state.rankList.me;
-mine = { n: (mc && mc.nick) || meNick(), v: rankValue(tab), me: true,
-c: COL.gold, a: meAvatarUrl() };
-rank = (mc && mc.rank) || (list.length + 1);
-}
 var rows = C.RANK.list.rows || 7;
 var top = list.slice(0, rows);
-var inTop = false;
-for (var k = 0; k < top.length; k++) if (top[k].me) inTop = true;
-return { top: top, mine: mine, rank: rank, inTop: inTop, empty: list.length === 0 };
+var mine = null, rank = 0;
+for (i = 0; i < list.length; i++) if (list[i].me) { mine = list[i]; rank = i + 1; }
+var mc = (tab !== 1 && state.rankList) ? state.rankList.me : null;
+var fi = state.friendRankInfo;
+if (!mine && tab === 1 && fi) {
+var fv = myRankPair(1);
+mine = { n: meNick(), v: num(fi.myStars != null ? fi.myStars : fv.v),
+v2: fv.v2, v3: 0, c: COL.gold, a: meAvatarUrl(), me: true };
+rank = fi.myRank || ((fi.total || 0) + 1);
+} else if (!mine) {
+var pv = myRankPair(tab);
+mine = {
+n: (mc && mc.nick) || meNick(),
+v: (mc && mc.v !== undefined) ? num(mc.v) : pv.v,
+v2: (mc && mc.v2 !== undefined) ? num(mc.v2) : pv.v2,
+v3: (mc && mc.v3 !== undefined) ? num(mc.v3) : (tab === 2 ? weekStats().cleared : 0),
+c: COL.gold, a: meAvatarUrl(), me: true
+};
+rank = (mc && mc.rank) || (list.length + 1);
 }
-var RANK_COLORS = ['#FF8A5B', '#4FA8E0', '#63C88B', '#A87BE8', '#D96A9B', '#FFC53D', '#3FB8B0'];
+var inTop = false;
+for (i = 0; i < top.length; i++) if (top[i].me) inTop = true;
+var need = 0;
+if (!inTop && top.length >= rows) need = Math.max(1, top[rows - 1].v - mine.v + 1);
+return { top: top, mine: mine, rank: rank, inTop: inTop,
+empty: list.length === 0, need: need, rows: rows };
+}
 function rankRow(item, y, idx, highlight) {
-var L = C.RANK.list, x0 = L.x, w = L.w, h = L.rowH;
+var L = C.RANK.list, x0 = L.x, w = L.w, h = L.rowH, tab = state.rankTab;
 var rowBg = highlight ? COL.surfaceHi : COL.surface;
 var rowInk = inkOnSurface(highlight, false);
 var rowSub = inkOnSurface(false, true);
 var valInk = highlight ? bestInk(rowBg, COL.card, [COL.accentText, COL.textOnSurfaceHi, rowInk]) : rowInk;
 ctx.save();
-if (highlight) shadow(10, 4, hexA(COL.gold || '#FFB93D', 0.20));
 rr(x0, y - h / 2, w, h, 16);
 ctx.fillStyle = rowBg;
 ctx.fill();
-noShadow();
+if (highlight) {
+ctx.lineWidth = 2;
+ctx.strokeStyle = hexA(COL.gold || '#FFB93D', 0.55);
+ctx.stroke();
+}
 ctx.restore();
 if (idx < 3 && !highlight) {
 var medal = ['#F5B73D', '#C9D3DD', '#E0A276'][idx];
-ctx.beginPath(); ctx.arc(x0 + 42, y, 23, 0, Math.PI * 2);
+ctx.beginPath(); ctx.arc(x0 + 42, y, 21, 0, Math.PI * 2);
 ctx.fillStyle = medal; ctx.fill();
-text(String(idx + 1), x0 + 42, y + 1, 24, '#3A2A12', 'center', '700');
+text(String(idx + 1), x0 + 42, y + 1, 22, '#3A2A12', 'center', '700');
 } else {
 var rk = idx + 1;
-text(String(rk > 99 ? '99+' : rk), x0 + 42, y + 1, rk > 99 ? 20 : 24,
+text(String(rk > 99 ? '99+' : rk), x0 + 42, y + 1, rk > 99 ? 18 : 22,
 highlight ? valInk : rowSub, 'center', '700');
 }
-drawAvatar(x0 + 96, y, C.PLAYER.rankAvatarR, item.n, item.a, item.c || COL.gold);
-text(item.n, x0 + 136, y + 1, 24, rowInk, 'left', highlight ? '700' : '500');
-var unit = C.RANK.unit[state.rankTab] || '关';
-text(item.v + ' ' + unit, x0 + w - 28, y + 1, 26, valInk, 'right', '700');
+drawAvatar(x0 + 92, y, 22, item.n, item.a, item.c || COL.gold);
+textFit(item.n, x0 + 128, y - 11, 22, rowInk, 'left', highlight ? '700' : '500',
+x0 + w - 120 - (x0 + 128));
+text(rankSubText(tab, item), x0 + 128, y + 15, 18, rowSub, 'left');
+text('★' + item.v, x0 + w - 24, y - 8, 24, valInk, 'right', '700');
 }
 function renderFriendRank(d, ry) {
 var L = C.RANK.list, img = null;
@@ -5501,38 +5619,85 @@ if (friendOn() && state.friendT) {
 try { img = env.friend.image(); } catch (e) { img = null; }
 }
 if (img) {
-ctx.drawImage(img, L.x, ry, L.w, L.h);
-text(C.RANK.friendNote, C.DESIGN.w / 2, ry + L.h + 32, 18, COL.textSub, 'center');
+ctx.drawImage(img, L.x, ry - L.rowH / 2, L.w, L.h);
 return;
 }
 if (C.RANK.useMock) {
-var lst = d.top.slice(0);
-if (!d.inTop && lst.length >= L.rows) lst = lst.slice(0, L.rows - 1);
-for (var i = 0; i < lst.length; i++) {
-rankRow(lst[i], ry + i * L.step, i, !!lst[i].me);
+for (var i = 0; i < d.top.length; i++) {
+rankRow(d.top[i], ry + i * L.step, i, !!d.top[i].me);
 }
-if (!d.inTop) rankRow(d.mine, ry + lst.length * L.step + 6, d.rank - 1, true);
-text('预览示例 · 真机显示微信好友', C.DESIGN.w / 2, ry + L.h + 32, 18, COL.textSub, 'center');
 return;
 }
-text('好友榜要在微信小游戏里看', C.DESIGN.w / 2, ry + 120, 26, COL.text, 'center', '600');
-text('浏览器预览拿不到微信好友关系链', C.DESIGN.w / 2, ry + 164, 19, COL.textSub, 'center');
-text('真机上会自动读取已授权好友的通关数', C.DESIGN.w / 2, ry + 196, 19, COL.textSub, 'center');
+text('好友榜要在微信小游戏里看', C.DESIGN.w / 2, ry + 100, 26, COL.text, 'center', '600');
+text('浏览器预览拿不到微信好友关系链', C.DESIGN.w / 2, ry + 144, 19, COL.textSub, 'center');
+text('真机上会自动读取已授权好友的通关星数', C.DESIGN.w / 2, ry + 176, 19, COL.textSub, 'center');
+}
+function rankCountdown(nextAt) {
+if (!nextAt) return '';
+var left = nextAt - Date.now();
+if (left <= 0) return '即将重置';
+var min = Math.floor(left / 60000);
+if (min < 1) return '即将重置';
+var dd = Math.floor(min / 1440), hh = Math.floor((min % 1440) / 60), mm = min % 60;
+if (dd >= 1) return '距重置 ' + dd + '天 ' + hh + '小时';
+if (hh >= 1) return '距重置 ' + hh + '小时 ' + mm + '分';
+var ss = Math.floor(left / 1000) % 60;
+return '距重置 ' + mm + '分 ' + ss + '秒';
+}
+function rankInfoText() {
+var tab = state.rankTab;
+if (tab === 1) return '好友榜 · 数据来自微信关系链';
+if (tab === 2) {
+var cd = rankCountdown(state.rankMeta.nextResetAt);
+return '本周新增星数 · ' + (cd || '每周一 00:00 重置');
+}
+return '全服累计 · 星星越多排名越高 · 永不重置';
+}
+function renderMyRankCard(d) {
+var M = C.RANK.mine, x0 = M.x, w = M.w, h = M.h, cy = M.y, tab = state.rankTab;
+var bg = COL.surfaceHi;
+var ink = inkOnSurface(true, false);
+var sub = inkOnSurface(true, true);
+var valInk = bestInk(bg, COL.card, [COL.accentText, ink]);
+rr(x0, cy - h / 2, w, h, 20);
+ctx.fillStyle = bg; ctx.fill();
+ctx.lineWidth = 1.5; ctx.strokeStyle = hexA(COL.gold || '#FFB93D', 0.35); ctx.stroke();
+var rk = d.rank || 0;
+ctx.beginPath(); ctx.arc(x0 + 42, cy - 20, 24, 0, Math.PI * 2);
+ctx.fillStyle = COL.gold; ctx.fill();
+text(rk > 99 ? '99+' : String(rk || '—'), x0 + 42, cy - 19, rk > 99 ? 16 : 22,
+COL.btnText, 'center', '700');
+drawAvatar(x0 + 100, cy - 20, 30, d.mine.n, d.mine.a, COL.gold);
+textFit(d.mine.n, x0 + 144, cy - 20, 24, ink, 'left', '700', w - 144 - 180);
+var val = tab === 2 ? ('★' + d.mine.v + ' · 连胜 ' + (d.mine.v2 || 0))
+: ('★' + d.mine.v + ' · ' + (d.mine.v2 || 0) + ' 关');
+text(val, x0 + w - 24, cy - 20, 22, valInk, 'right', '700');
+text(rankCardHint(d, tab), x0 + 24, cy + 30, 18, sub, 'left');
+}
+function rankCardHint(d, tab) {
+if (tab === 1 && !C.RANK.useMock) {
+if (!friendOn()) return '邀请微信好友一起拼 · 真机上才能读关系链';
+if (!state.friendRankInfo) return '好友排名读取中…';
+if (!state.friendRankInfo.total) return '邀请微信好友一起拼';
+if (d.inTop) return '已在榜上 · 好友里第 ' + d.rank + ' 名';
+return '再得 ' + (d.need || 1) + ' 星进入好友前 7';
+}
+if (d.empty) return '通关一关即可上榜';
+if (d.inTop) return '已在榜上 · 第 ' + d.rank + ' 名';
+if (d.need) return '再得 ' + d.need + ' 星进入前 7';
+return '我的名次 · 第 ' + d.rank + ' 名';
 }
 function renderRank() {
 var R = C.RANK;
-var W = 660, H = 900, cy = 812;
+var W = R.card.w, H = R.card.h, cy = R.card.cy;
 ctx.fillStyle = COL.mask;
 ctx.fillRect(0, 0, C.DESIGN.w, DH());
-var e = G.easeOutCubic(Math.min(1, state.rankT / 180));
-ctx.save();
-ctx.globalAlpha = e;
-var y0 = cy + (1 - e) * 20;
-drawCard(C.DESIGN.w / 2, y0, W, H, 34);
-text('排行榜', C.DESIGN.w / 2, 425 + (y0 - cy), 40, COL.text, 'center', '700');
+var dy = 0;
+drawCard(C.DESIGN.w / 2, cy + dy, W, H, 34);
+text('排行榜', C.DESIGN.w / 2, R.title.y + dy, R.title.size, COL.text, 'center', '700');
 var tw = 176, gap = 10, tx0 = C.DESIGN.w / 2 - (tw * 3 + gap * 2) / 2;
 for (var i = 0; i < 3; i++) {
-var tx = tx0 + i * (tw + gap) + tw / 2, ty = 495 + (y0 - cy);
+var tx = tx0 + i * (tw + gap) + tw / 2, ty = R.tabsY + dy;
 var tabOn = state.rankTab === i;
 var tabBg = tabOn ? COL.gold : COL.chipOff;
 rr(tx - tw / 2, ty - 27, tw, 54, 27);
@@ -5544,10 +5709,15 @@ var tabInk = tabOn
 text(R.tabs[i], tx, ty + 1, 24, tabInk, 'center', '700');
 addHit(tx, ty, tw + 12, 80, 'rank_t' + i);
 }
-var L = C.RANK.list;
+var I = R.info;
+rr(I.x, I.y + dy - I.h / 2, I.w, I.h, I.h / 2);
+ctx.fillStyle = COL.chipOff; ctx.fill();
+text(rankInfoText(), C.DESIGN.w / 2, I.y + dy + 1, I.size,
+COL.textOnChip || COL.textSub, 'center', '500');
+var L = R.list;
 var d = rankData();
-var ry = L.top + (y0 - cy), step = L.step;
-if (state.rankTab === 2) {
+var ry = L.top + dy, step = L.step;
+if (state.rankTab === 1) {
 renderFriendRank(d, ry);
 } else if (state.rankLoading && !d.top.length) {
 text('正在加载榜单…', C.DESIGN.w / 2, ry + 120, 24, COL.textSub, 'center');
@@ -5565,32 +5735,32 @@ text('开启后可跨设备同步并与全服玩家比进度', C.DESIGN.w / 2, r
 } else if (d.empty) {
 text('还没有人上榜', C.DESIGN.w / 2, ry + 96, 26, COL.text, 'center', '600');
 text('拼完一关就会出现在这里', C.DESIGN.w / 2, ry + 140, 19, COL.textSub, 'center');
-rankRow(d.mine, ry + 200, Math.max(0, d.rank - 1), true);
 } else {
 for (var j = 0; j < d.top.length; j++) {
 rankRow(d.top[j], ry + j * step, j, !!d.top[j].me);
 }
-if (!d.inTop) {
-rankRow(d.mine, ry + d.top.length * step + 6, d.rank - 1, true);
 }
-}
+renderMyRankCard(d);
 text(C.RANK.useMock ? '示例榜单 · 仅供本地调试'
-: (state.rankTab === 2) ? (friendOn() ? '好友榜 · 数据来自微信关系链'
+: (state.rankTab === 1) ? (friendOn() ? '好友榜 · 数据来自微信关系链'
 : '浏览器预览 · 看不到微信好友')
 : (state.rankErr) ? (d.top.length ? '网络不稳定 · 显示的是上次的榜单' : '加载失败 · 可点上面按钮重试')
-: (state.rankTab === 1) ? '按历史最高连胜排名 · 每关在一段连胜里只计一次'
+: (state.rankTab === 2) ? '本周一 00:00 重置 · 只统计本周新增星数'
 : ((cloudOn() || state.rankList) ? '全服实时榜 · 数据来自云开发' : '本地预览 · 未连接云端'),
-C.DESIGN.w / 2, 1222 + (y0 - cy), 18, COL.textSub, 'center');
-ctx.beginPath(); ctx.arc(C.DESIGN.w / 2, 1300, 38, 0, Math.PI * 2);
+C.DESIGN.w / 2, C.RANK.foot.y + dy, C.RANK.foot.size, COL.textSub, 'center');
+var cby = C.RANK.close.y;
+ctx.beginPath(); ctx.arc(C.DESIGN.w / 2, cby, C.RANK.close.r, 0, Math.PI * 2);
 ctx.fillStyle = COL.disc; ctx.fill();
-drawIcon('close', C.DESIGN.w / 2, 1300, COL.text, 1.0);
-addHit(C.DESIGN.w / 2, 1300, 100, 100, 'close_rank');
+drawIcon('close', C.DESIGN.w / 2, cby, COL.text, 1.0);
+addHit(C.DESIGN.w / 2, cby, 100, 100, 'close_rank');
 ctx.restore();
 }
 function openRank(from) {
 state.rankBack = from || null;
 state.overlay = 'rank';
 state.rankT = 0;
+state.rankTickAt = Date.now();
+state.rankPaintSig = '';
 selectRankTab(state.rankTab);
 }
 function sharePattern() {
@@ -5844,20 +6014,24 @@ text(showStreak > 0 ? '复活可以保持连胜' : '下次再来，连胜从 1 �
 cx, top + 355, 26, COL.textSub, 'center');
 var adLvOk = adLvLeft() > 0;
 var canAd = !state.adSim && adLvOk;
-var bAd = { id: 'ad_revive', x: cx, y: top + 465, w: 440, h: 108,
-label: adLvOk ? '看广告复活' : '本关看视频次数已用完',
-variant: 'danger', size: adLvOk ? 32 : 26, icon: 'tv', disabled: !adLvOk };
+var bAd = { id: 'ad_revive', x: cx, y: top + 465, w: 480, h: 96,
+label: adLvOk ? '看视频复活' : '本关看视频次数已用完',
+variant: 'danger', size: adLvOk ? 32 : 25, disabled: !adLvOk,
+icon: 'video', iconInline: true, iconScale: 1.05 };
 if (canAd && hitOK) addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'ad_revive');
 drawButton(bAd);
 text(adLvOk ? ('+1 心 · 继续本关 · 还可看 ' + adLvLeft() + ' 次')
 : '+1 心 · 继续本关',
-cx, top + 545, 24, COL.textSub, 'center', '600');
+cx, top + 533, 24, COL.textSub, 'center', '600');
 var canCoin = (s.coin || 0) >= C.ECON.coinRevive && !state.adSim;
-var bCoin = { id: 'coin_revive', x: cx, y: top + 635, w: 380, h: 84,
-label: '花 ' + C.ECON.coinRevive + ' 巧币复活', variant: 'secondary', size: 28, disabled: !canCoin };
+var bCoin = { id: 'coin_revive', x: cx, y: top + 612, w: 480, h: 96,
+label: canCoin ? (C.ECON.coinRevive + ' · 复活')
+: ('巧币不足 ' + (s.coin || 0) + '/' + C.ECON.coinRevive),
+variant: 'secondary', size: 30, disabled: !canCoin,
+icon: 'coin', iconInline: true, iconScale: 1.06, pill: true };
 if (canCoin && hitOK) addHit(bCoin.x, bCoin.y, bCoin.w, bCoin.h, 'coin_revive');
 drawButton(bCoin);
-var gy = top + 750;
+var gy = top + 740;
 text('忍痛放弃', cx, gy, 30, COL.textSub, 'center', '500');
 if (hitOK) addHit(cx, gy, 240, 86, 'give_up');
 ctx.restore();
@@ -5899,7 +6073,8 @@ var used = freeEnergyUsedToday(), total = C.ECON.freeEnergyPerDay;
 var leftN = Math.max(0, total - used);
 var can = leftN > 0 && !state.adSim;
 var bAd = { id: 'free_ad', x: C.DESIGN.w / 2, y: top + 400, w: 460, h: 96,
-label: C.ECON.freeEnergyAdMul + ' 倍获得', variant: 'danger', size: 30, disabled: !can, icon: 'tv' };
+label: C.ECON.freeEnergyAdMul + ' 倍获得', variant: 'danger', size: 30, disabled: !can,
+icon: 'video', iconInline: true, iconScale: 1.05 };
 addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'free_ad');
 drawButton(bAd);
 text('单次 ' + C.ECON.freeEnergyShare + ' 点 × ' + C.ECON.freeEnergyAdMul + ' 倍 · 每日 ' + total + ' 次',
@@ -6634,6 +6809,12 @@ try { PROFILE.restore(state.save.profile || null); } catch (e) {}
 if (profileOn() && PROFILE.onChange) {
 PROFILE.onChange(function (p) { applyProfile(p); syncProfileButton(); });
 }
+if (profileOn() && PROFILE.onImg) {
+try { PROFILE.onImg(function () { state.dirty = true; }); } catch (e) {}
+}
+if (env.friend && env.friend.onRank) {
+try { env.friend.onRank(function (info) { applyFriendRankInfo(info); }); } catch (e) {}
+}
 if (profileOn() && PROFILE.boot) { try { PROFILE.boot(); } catch (e) {} }
 resize();
 env.bindInput(function (type, cssX, cssY) {
@@ -6720,7 +6901,9 @@ timeLimitOf: timeLimitOf, heartsOf: heartsOf, totalStars: totalStars,
 homeLayout: homeLayout, designH: DH,
 cloudPush: cloudPush, cloudPull: cloudPull, cloudRank: cloudRank,
 openRank: openRank, netText: netText, go: go,
-selectRankTab: selectRankTab, rankData: rankData, rankValue: rankValue,
+selectRankTab: selectRankTab, rankData: rankData, myStats: myStats,
+weekStats: weekStats, recordWeekWin: recordWeekWin, rankCacheKey: rankCacheKey,
+applyFriendRankInfo: applyFriendRankInfo, rankCountdown: rankCountdown,
 friendStats: friendStats, publishFriend: publishFriend, friendOn: friendOn,
 openFriendRank: openFriendRank, failLevel: failLevel,
 giveUp: giveUp,

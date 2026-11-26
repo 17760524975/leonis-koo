@@ -390,12 +390,20 @@ function failNow() {
   section('6. 文案 / 配置口径');
   {
     clearRec();
-    S.rankTab = 1; S.overlay = 'rank'; S.rankT = 999; S.page = 'home';
+    /* v0.65：连胜榜已下线，连胜退成本周榜的次排序键 →
+     * 本周榜的脚注要写明重置节奏，信息条要带倒计时。 */
+    S.rankTab = 2; S.overlay = 'rank'; S.rankT = 999; S.page = 'home';
     S.rankErr = '';
+    /* +1 分钟余量：2天13小时整会被 floor 成 2天12小时59分（正常，别让用例卡在边界上） */
+    S.rankMeta = { nextResetAt: Date.now() + 2 * 86400000 + 13 * 3600000 + 60000, weekKey: '2026-W48',
+      weekStars: 0, weekCleared: 0 };
     step(16); step(16);
-    check('连胜榜脚注改用新口径',
-      rec.texts.some(t => /每关在一段连胜里只计一次/.test(t.s)),
-      textsOf(rec.texts.filter(t => /连胜|排名/.test(t.s))));
+    check('本周榜脚注写明重置节奏',
+      rec.texts.some(t => /周一 00:00 重置/.test(t.s)),
+      textsOf(rec.texts.filter(t => /重置|本周/.test(t.s))));
+    check('本周榜信息条带倒计时（距重置 2天 13小时）',
+      rec.texts.some(t => /距重置 2天 13小时/.test(t.s)),
+      textsOf(rec.texts.filter(t => /距重置/.test(t.s))));
     check('脚注不再写「重玩不计」旧说法',
       !rec.texts.some(t => /中途失败会中断/.test(t.s)),
       textsOf(rec.texts.filter(t => /中断/.test(t.s))));

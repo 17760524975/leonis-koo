@@ -319,14 +319,23 @@
        *   custom 玩家自己起的名字
        * auth 只表示「微信资料已授权」，与 src=wx 不完全等价（授权后改过名仍是 auth=true）。 */
       me: { nick: '', avatar: '', src: 'auto', auth: false, err: '', busy: false },
-      rankList: null,         // null=未拉取；{list,me}=云榜结果（只放「当前页签」那一份）
+      rankList: null,         // null=未拉取；{list,me,nextResetAt,weekKey}=云榜结果（只放「当前页签」那一份）
       rankErr: '',
       rankLoading: false,
-      /* v0.18：三个页签各自的最后一次成功结果。切回某个页签时先显缓存、
-       * 再后台刷新 —— 不能像旧版那样把 rankList 清空，否则网络一抖就只剩「加载失败」。 */
-      rankCache: { 0: null, 1: null },
+      /* v0.65：三个页签各自的最后一次成功结果，按「页签」缓存，本周榜再按 weekKey 分桶
+       *（key 形如 '2:2026-W48'）—— 跨周后旧桶自然失效，不会拿上周的星数当本周。
+       * 切回某个页签时先显缓存、再后台刷新，网络一抖也不会只剩「加载失败」。 */
+      rankCache: {},
       rankListTab: -1,        // rankList 属于哪个页签（乱序响应据此丢弃）
       rankSeq: 0,             // 请求序号（只认最后一次发出的请求）
+      /* v0.65：周榜重置时间点（云函数给的毫秒时间戳）与当前周键，
+       * 倒计时文案与「跨周自动重拉」都靠它们；拿不到时只是不显示倒计时。 */
+      rankMeta: { nextResetAt: 0, weekKey: '', weekStars: 0, weekCleared: 0 },
+      /* v0.65：好友榜回传的 {myRank,myStars,top7Stars,total}（开放数据域画完前为空） */
+      friendRankInfo: null,
+      /* v0.65：榜单页的 60s 倒计时 tick 与重绘节流 */
+      rankTickAt: 0,
+      rankPaintSig: '',       // 上一次绘制的内容签名（内容没变就不重画，省掉手机上的卡顿）
       /* v0.18：失败（计时归零）会把当前连胜清零，但复活要能恢复 →
        * 断点前停在 state 里，不写盘；玩家强杀进程也不会把旧的连胜留下来。
        * v0.19：连胜的计数单位变成「本段内成功的一局」，所以除了数值，
@@ -1006,7 +1015,11 @@
       }
       return {
         sets: sets,
-        stats: { stars: stars, cleared: cleared, streak: best },
+        /* v0.65：weekEvents = 待上报的周星事件（云函数按 openid+uid+rev+dayKey 去重，
+         * 重复上报是幂等的；这里只发事件、不发"我本周多少星"，总量由服务端算，
+         * 客户端改包也刷不出周榜成绩）。 */
+        stats: { stars: stars, cleared: cleared, streak: best,
+          weekEvents: (state.save.weekQ || []).slice(0, 12) },
         /* v0.14：昵称头像跟着存档一起上行，players 集合里存的就是排行榜展示的那一份 */
         profile: { nick: meNick(), avatar: meAvatarUrl(), src: state.me.src, auth: !!state.me.auth }
       };
@@ -1014,15 +1027,78 @@
 
     /* v0.18 好友榜：把成绩写进「微信托管数据」（与云开发是两套东西）。
      * 开放数据域只能读 wx.getFriendCloudStorage，读不到 players 集合。 */
+    /* v0.65：本周星数的本地账本。
+     * 服务端口径（docs/v0.63 §2）：本周内每次通关按**本次星级**累加，
+     * 同一关**同一天**只取最高星级计一次 —— 所以满星老玩家重玩 3★ 的关，
+     * 每周上限和首通新玩家一样，不存在"老玩家没得比"。
+     * 客户端照同一规则记一份，用于 ① 好友榜 KV 的 weekStars ② 云端没回来时的
+     * 本周榜兜底；权威值仍以云函数为准（它按 openid+uid+rev+dayKey 去重）。 */
+    function pad2(n) { return (n < 10 ? '0' : '') + n; }
+    function dayKeyCN(t) {
+      var d = new Date((t || Date.now()) + 8 * 3600 * 1000);
+      return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate());
+    }
+    /* ISO 周（UTC+8），必须与云函数 weekKeyOf 同算法，否则周切换会差一周 */
+    function weekKeyCN(t) {
+      var d = new Date((t || Date.now()) + 8 * 3600 * 1000);
+      var day = d.getUTCDay() || 7;
+      var thu = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 4 - day));
+      var y0 = Date.UTC(thu.getUTCFullYear(), 0, 1);
+      var wk = Math.ceil(((thu - y0) / 86400000 + 1) / 7);
+      return thu.getUTCFullYear() + '-W' + pad2(wk);
+    }
+    /* 关卡稳定标识：v0.65 起每关都有 uid（插队/改名都不变），
+     * 旧数据没有就退回关号 —— 周星去重 key 只需要"同一关稳定"，两者都满足。 */
+    function lvUid(lv) { return (lv && (lv.uid || String(lv.id || ''))) || ''; }
+    function weekLedger() {
+      var s = state.save, wk = weekKeyCN();
+      if (s.weekWeek !== wk) { s.weekWeek = wk; s.weekSeen = {}; }
+      if (!s.weekSeen) s.weekSeen = {};
+      return s.weekSeen;
+    }
+    function weekStats() {
+      var seen = weekLedger(), sum = 0, uids = {}, n = 0, dk, u;
+      for (dk in seen) for (u in seen[dk]) {
+        sum += seen[dk][u] | 0;
+        if (!uids[u]) { uids[u] = 1; n++; }
+      }
+      return { stars: sum, cleared: n };
+    }
+    /* 通关后记一笔本周账 + 待上行事件。返回是否真的产生了新事件 */
+    function recordWeekWin(lv, stars) {
+      if (!lv || !stars) return false;
+      var seen = weekLedger(), dk = dayKeyCN();
+      var day = seen[dk] || (seen[dk] = {});
+      var u = lvUid(lv);
+      if (!u) return false;
+      if ((day[u] | 0) >= stars) return false;      // 当天这关已经记过更高星
+      day[u] = stars;
+      var s = state.save;
+      if (!s.weekQ) s.weekQ = [];
+      s.weekQ.push({ uid: u, rev: (lv.rev | 0) || 1, stars: stars | 0, day: dk });
+      if (s.weekQ.length > 40) s.weekQ = s.weekQ.slice(-40);
+      return true;
+    }
+
     function friendStats() {
-      var ks = saveKeys(), i, cleared = 0, best = state.save.bestStreak || 0;
+      var st = myStats(), wk = weekStats();
+      return { cleared: st.cleared, streak: st.streak, stars: st.stars, weekStars: wk.stars };
+    }
+    /* 两套题库合计的「我的成绩」（云函数也是按全部存档合计上报的，口径必须一致） */
+    function myStats() {
+      var ks = saveKeys(), i, stars = 0, cleared = 0, best = 0, o;
       for (i = 0; i < ks.length; i++) {
-        var o = readSaveByKey(ks[i]);
+        /* v0.65：当前数据集那一份必须用内存里的 state.save —— 它比 storage 新
+         *（刚通关那一下还没落盘），否则榜上「我的星数」会比刚拼完的关少一颗星。 */
+        o = (ks[i] === SAVE_KEY) ? state.save : readSaveByKey(ks[i]);
         if (!o) continue;
-        for (var lv in (o.starOf || {})) if ((o.starOf[lv] || 0) > 0) cleared++;
+        for (var lv in (o.starOf || {})) {
+          var v = o.starOf[lv] || 0;
+          if (v > 0) { cleared++; stars += v; }
+        }
         if ((o.bestStreak || 0) > best) best = o.bestStreak || 0;
       }
-      return { cleared: cleared, streak: best, stars: starsOfSave(state.save) };
+      return { stars: stars, cleared: cleared, streak: best };
     }
     function publishFriend() {
       if (!env.friend || !env.friend.publish) return;
@@ -1044,7 +1120,11 @@
       if (pushing) { pushAgain = true; return; }
       pushing = true;
       state.net.syncing = true;
-      CLOUD.save(collectCloud(), function (err, res) {
+      /* v0.65：记下这次带出去的周星事件对象，成功后按引用把它们从队列里摘掉
+       *（在途期间新产生的事件不能一起清 —— 否则刚通关那次的周星就丢了）。 */
+      var payload = collectCloud();
+      var sent = payload.stats.weekEvents || [];
+      CLOUD.save(payload, function (err, res) {
         pushing = false;
         state.net.syncing = false;
         /* 在途期间又被要求即时上行 → 用它补一次（此时 pushing 已复位，不会递归） */
@@ -1053,6 +1133,13 @@
         state.net.err = '';
         state.net.ts = Date.now();
         if (res && res.me) state.rankMe = res.me;
+        if (res && res.weekResetAt) state.rankMeta.nextResetAt = res.weekResetAt;
+        if (sent.length) {
+          var q = state.save.weekQ || [];
+          var keep = [];
+          for (var qi = 0; qi < q.length; qi++) if (sent.indexOf(q[qi]) < 0) keep.push(q[qi]);
+          if (keep.length !== q.length) { state.save.weekQ = keep; persist(); }
+        }
       });
     }
     function cloudPull() {
@@ -1091,17 +1178,22 @@
      *   ① 好友榜也走 state.rankList，把主线榜那份数据覆盖成空列表；
      *   ② 只有 state.rankErr 一个错误位，且失败时把 rankList 置 null ——
      *      切回去的瞬间没有数据可画，只能显示「加载失败」。
-     * 现在：按页签各自缓存 + 请求序号丢弃迟到回调，失败时绝不清掉已有缓存。 */
+     * 现在：按页签各自缓存 + 请求序号丢弃迟到回调，失败时绝不清掉已有缓存。
+     * v0.65：缓存键带上周键（本周榜跨周后旧桶自动失效），并把云函数返回的
+     * nextResetAt / weekKey 记进 rankMeta（倒计时与「我本周多少星」都靠它）。 */
+    function rankCacheKey(tab) {
+      return tab === 2 ? ('2:' + (state.rankMeta.weekKey || 'na')) : String(tab);
+    }
     function cloudRank(tab) {
       if (!cloudOn()) { state.rankLoading = false; return; }
-      var seq = ++state.rankSeq;
+      var seq = ++state.rankSeq, ck = rankCacheKey(tab);
       state.rankLoading = true;
       if (state.rankTab === tab) state.rankErr = '';
       CLOUD.rank(tab, function (err, res) {
         if (seq !== state.rankSeq) {
           /* 用户已经切走：结果只补缓存（且只补空白页签，不覆盖更新的那份），
            * 下次切回这个页签就能直接看到，不用再等一次网络。 */
-          if (!err && res && !state.rankCache[tab]) state.rankCache[tab] = res;
+          if (!err && res && !state.rankCache[ck]) state.rankCache[ck] = res;
           return;
         }
         state.rankLoading = false;
@@ -1109,24 +1201,35 @@
           /* 有缓存就继续用缓存渲染，只在「一份旧数据都没有」时才让玩家看到失败 */
           if (state.rankTab === tab) {
             state.rankErr = (err && err.msg) || '网络异常';
-            if (!state.rankCache[tab]) { state.rankList = null; state.rankListTab = tab; }
+            if (!state.rankCache[ck]) { state.rankList = null; state.rankListTab = tab; }
           }
           return;
         }
         var data = res || { list: [], me: null };
-        state.rankCache[tab] = data;
+        state.rankCache[ck] = data;
+        if (data.nextResetAt) state.rankMeta.nextResetAt = data.nextResetAt;
+        if (data.weekKey) state.rankMeta.weekKey = data.weekKey;
+        if (data.me && tab === 2) {
+          state.rankMeta.weekStars = data.me.v || 0;
+          state.rankMeta.weekCleared = data.me.v2 || 0;
+        }
         state.dirty = true;          // v0.62：榜单异步到达 → 立刻重画
         if (state.rankTab === tab) { state.rankList = data; state.rankListTab = tab; }
       });
     }
 
-    /* 切页签：先把缓存摆上去，再后台刷新。好友榜不走云开发。 */
+    /* 切页签：先把缓存摆上去，再后台刷新。好友榜不走云开发（走开放数据域）。
+     * v0.65 页签序号变了：0 全服 / 1 好友 / 2 本周（连胜榜已并入本周榜的次排序键）。 */
     function selectRankTab(tab) {
       state.rankTab = tab;
       state.rankErr = '';
       state.rankLoading = false;
-      if (tab === 2) { openFriendRank(); return; }
-      state.rankList = state.rankCache[tab] || null;
+      state.rankPaintSig = '';      // 换页签 → 内容一定变了，允许重画
+      /* 好友榜不动 rankList（那是云榜的缓存），但要把"当前页签"记下来 ——
+       * 迟到的全服榜响应靠 rankListTab 判断该不该改界面。 */
+      if (tab === 1) { state.rankListTab = 1; openFriendRank(); state.dirty = true; return; }
+      var ck = rankCacheKey(tab);
+      state.rankList = state.rankCache[ck] || null;
       state.rankListTab = tab;
       state.dirty = true;
       cloudRank(tab);
@@ -1145,6 +1248,7 @@
       if (!(k > 0)) k = 2;
       k = Math.max(1, Math.min(3, k));
       state.friendT = Date.now();
+      state.friendRankInfo = null;      // v0.65：新的一次拉取，名次等开放数据域回传
       var fs = friendStats();
       try {
         env.friend.show({
@@ -1161,9 +1265,19 @@
             me: COL.surfaceHi, meText: COL.accentText,
             gold: COL.gold, line: COL.line
           },
-          me: { nick: meNick(), avatar: meAvatarUrl(), cleared: fs.cleared, streak: fs.streak }
+          /* v0.65：好友榜也按星数排 —— 把 stars / weekStars 一起带过去 */
+          me: { nick: meNick(), avatar: meAvatarUrl(), cleared: fs.cleared,
+            stars: fs.stars, weekStars: fs.weekStars, streak: fs.streak }
         });
       } catch (e) { /* 开放数据域不可用 → 界面走降级文案 */ }
+    }
+    /* v0.65：开放数据域画完后回传「我在好友里第几」，主域用它填常驻卡
+     *（好友榜的列表由离屏画布画，但「我的名次」永远由主域绘制，三页签统一）。 */
+    function applyFriendRankInfo(info) {
+      if (!info || state.rankTab !== 1) return;
+      state.friendRankInfo = info;
+      state.rankPaintSig = '';
+      state.dirty = true;
     }
 
     /* 云同步状态一句话（设置页显示） */
@@ -2395,6 +2509,10 @@
         first: firstClear, up: bestStars > prevStars,
         gain: gain, target: targetTotal, adUsed: false };
       s.starOf[k] = bestStars;
+      /* v0.65：本周星事件。按**本次星级**记一笔，同一关同一天只取最高一次；
+       * 真正的去重与累加在云函数（openid+uid+rev+dayKey），客户端只负责如实上报。
+       * 必须放在 persist() 之前 —— weekQ 要跟着存档一起落盘，下次启动补发。 */
+      recordWeekWin(lv, stars);
       if (gain > 0) {
         s.coin = Math.max(0, (s.coin || 0) + gain);
         s.starPaid[k] = targetTotal;
@@ -3395,7 +3513,17 @@
         var n = Math.min(3, Math.floor(state.resT / C.ANIM.starStep));
         state.starShown = state.result ? Math.min(state.result.stars, n) : 0;
       }
-      if (state.overlay === 'rank') state.rankT += dt;
+      if (state.overlay === 'rank') {
+        state.rankT += dt;
+        /* v0.65：排行榜是静态页，不做入场动画 → 平时一帧都不重绘（交给跳帧）。
+         * 只有本周榜的倒计时每分钟要跟着走，才置一次 dirty。 */
+        if (Date.now() - state.rankTickAt > 60000) {
+          state.rankTickAt = Date.now();
+          state.dirty = true;
+          if (state.rankTab === 2 && state.rankMeta.nextResetAt &&
+              Date.now() > state.rankMeta.nextResetAt) cloudRank(2);
+        }
+      }
       if (state.hint) {
         /* v0.20：没有计时器了 —— 提示一直亮着，直到被指的那个位置真的被填上。
          * 放对就收工（不自动改指下一块：一次购买只换一步指引，
@@ -4047,10 +4175,14 @@
         text(b.label, b.x, b.y + dy, b.size || 22, pressed ? COL.text : COL.textSub, 'center', '500');
       } else {
         // secondary
-        rr(x, y, b.w, b.h, 20);
+        /* v0.65：b.pill —— 与主按钮同款胶囊半径（h/2）。
+         * 复活弹窗的「巧币复活」要和上面的橙红「看视频复活」并排成一对，
+         * 半径 20 的方胶囊 + h/2 的圆胶囊摆在一起，高度一样也像两种控件。 */
+        var srad = b.pill ? b.h / 2 : 20;
+        rr(x, y, b.w, b.h, srad);
         ctx.fillStyle = b.disabled ? COL.disabledBg : COL.card; ctx.fill();
         ctx.lineWidth = 1.5; ctx.strokeStyle = b.disabled ? COL.disabledBg : COL.cardEdge; ctx.stroke();
-        ctx.save(); rr(x, y, b.w, b.h, 20); ctx.clip();
+        ctx.save(); rr(x, y, b.w, b.h, srad); ctx.clip();
         ctx.fillStyle = b.disabled ? COL.disabledBg : COL.cardEdge;
         ctx.fillRect(x, y + b.h - C.LAYOUT.BTN_EDGE + (pressed ? 2 : 0), b.w, C.LAYOUT.BTN_EDGE * 2);
         ctx.restore();
@@ -4322,10 +4454,6 @@
         ctx.lineWidth = 3;
         ctx.beginPath(); ctx.moveTo(-7, -2); ctx.lineTo(6, -8); ctx.stroke();
         ctx.beginPath(); ctx.moveTo(-7, 2); ctx.lineTo(6, 8); ctx.stroke();
-      } else if (name === 'tv') {
-        ctx.lineWidth = 3;
-        rr(-15, -11, 30, 22, 5); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(-4, -6); ctx.lineTo(8, 0); ctx.lineTo(-4, 6); ctx.closePath(); ctx.fill();
       } else if (name === 'video') {
         /* v0.59：可爱风「看视频」图标 —— 用户要求把「看视频」三个字换成图标。
          * 结构：兔耳天线（两条外撇短线 + 圆头）→ 圆角小电视（半透明屏）
@@ -6965,89 +7093,133 @@
       if (state.adSim || state.adWait) hits = [];
     }
 
-    /* ---------------- v0.8 排行榜 ---------------- */
-    /* 主线榜 = 通关关数；连胜榜 = 历史最高连胜（v0.18 改口径，见 config.STREAK 注释）；
-     * 好友榜 = 微信开放数据域读到的好友通关数（不走云开发）。 */
-    function rankValue(tab) {
-      var s = state.save;
-      if (tab === 1) return Math.max(s.bestStreak || 0, s.streak || 0);
-      var n = 0;
-      for (var k in s.starOf) if ((s.starOf[k] || 0) > 0) n++;
-      return n;
+    /* ---------------- v0.65 排行榜（全服 / 好友 / 本周） ----------------
+     * 口径唯一来源：docs/v0.63-排行榜重设计规格.md
+     *   0 全服榜  stars ↓ → cleared ↓        1 好友榜（同口径，走开放数据域）
+     *   2 本周榜  weekStars ↓ → streak ↓
+     * 三榜主值都是星星；连胜不再单独成榜，退成本周榜的次排序键 + 行内副信息。
+     *
+     * v0.65 性能（用户反馈「手机上点开排行榜卡顿」），三处主因都改在这里：
+     *   ① 每行都 shadow(10,4)：Canvas2D 的 shadowBlur 是 CPU 高斯模糊，
+     *      8 行 = 8 次大半径模糊，点开那一下直接掉帧 → 改成 1px 描边。
+     *   ② 入场动画期间没有任何地方置 dirty，v0.62 的「静态浮层跳帧」把动画吃掉，
+     *      卡片在 1 秒后「啪」地跳到位 → 现在 rankT < 240ms 期间逐帧重绘。
+     *   ③ 头像图加载完不通知重绘，只能等 1s 保底重画时集体补 → 现在图到了立刻置 dirty。
+     */
+    var RANK_COLORS = ['#FF8A5B', '#4FA8E0', '#63C88B', '#A87BE8', '#D96A9B', '#FFC53D', '#3FB8B0'];
+
+    function num(v) {
+      if (typeof v === 'number' && isFinite(v)) return v;
+      var n = parseInt(v, 10);
+      return isFinite(n) ? n : 0;
     }
-    /* v0.9：榜单数据只认云端。useMock 只在本地调试时给出示例，默认关闭；
+    /* 我这一行的主值 / 次值（云端没回来、或好友榜没回传时的兜底） */
+    function myRankPair(tab) {
+      var st = myStats();
+      if (tab === 2) {
+        var wk = weekStats();
+        return { v: Math.max(wk.stars, state.rankMeta.weekStars || 0), v2: st.streak };
+      }
+      return { v: st.stars, v2: st.cleared };
+    }
+    function rankSubText(tab, item) {
+      if (tab === 2) return '连胜 ' + (item.v2 || 0) + ' · 本周 ' + (item.v3 || 0) + ' 关';
+      return '通关 ' + (item.v2 || 0) + ' 关';
+    }
+    /* v0.65：榜单数据只认云端（好友榜认开放数据域）。useMock 只在本地调试时给示例，
      * 云端没数据时返回空榜，界面显示「还没有人上榜」而不是编造名次。 */
     function rankData() {
-      var tab = state.rankTab, raw = [];
+      var tab = state.rankTab, raw = [], i;
       if (C.RANK.useMock) raw = (C.RANK.mock[tab] || []).slice();
-      /* v0.18：好友榜绝不读 state.rankList —— 那份缓存是云榜（主线/连胜）的，
+      /* 好友榜绝不读 state.rankList —— 那份缓存是云榜的，
        * 旧版就是被好友榜这次请求覆盖成空列表，切回来才变成「加载失败」。 */
-      else if (tab !== 2 && state.rankList && state.rankList.list) raw = state.rankList.list;
+      else if (tab !== 1 && state.rankList && state.rankList.list) raw = state.rankList.list;
 
       var list = [];
-      for (var i = 0; i < raw.length; i++) {
+      for (i = 0; i < raw.length; i++) {
         var r = raw[i];
         list.push({
           n: r.n || r.nick || '玩家',
-          v: (r.v !== undefined ? r.v : r.value) || 0,
+          v: num(r.v !== undefined ? r.v : r.value),
+          v2: num(r.v2), v3: num(r.v3),
           c: r.c || r.color || RANK_COLORS[i % RANK_COLORS.length],
           a: r.a || r.avatar || '',
           me: !!r.me
         });
       }
-      var mine = null, rank = 0;
-      for (var j = 0; j < list.length; j++) if (list[j].me) { mine = list[j]; rank = j + 1; }
-      if (!mine) {
-        var mc = state.rankList && state.rankList.me;
-        mine = { n: (mc && mc.nick) || meNick(), v: rankValue(tab), me: true,
-          c: COL.gold, a: meAvatarUrl() };
-        rank = (mc && mc.rank) || (list.length + 1);
-      }
       var rows = C.RANK.list.rows || 7;
       var top = list.slice(0, rows);
+      var mine = null, rank = 0;
+      for (i = 0; i < list.length; i++) if (list[i].me) { mine = list[i]; rank = i + 1; }
+      var mc = (tab !== 1 && state.rankList) ? state.rankList.me : null;
+      var fi = state.friendRankInfo;
+      if (!mine && tab === 1 && fi) {
+        /* 好友榜：好友列表里本来不含自己，名次由开放数据域回传 */
+        var fv = myRankPair(1);
+        mine = { n: meNick(), v: num(fi.myStars != null ? fi.myStars : fv.v),
+          v2: fv.v2, v3: 0, c: COL.gold, a: meAvatarUrl(), me: true };
+        rank = fi.myRank || ((fi.total || 0) + 1);
+      } else if (!mine) {
+        var pv = myRankPair(tab);
+        mine = {
+          n: (mc && mc.nick) || meNick(),
+          v: (mc && mc.v !== undefined) ? num(mc.v) : pv.v,
+          v2: (mc && mc.v2 !== undefined) ? num(mc.v2) : pv.v2,
+          v3: (mc && mc.v3 !== undefined) ? num(mc.v3) : (tab === 2 ? weekStats().cleared : 0),
+          c: COL.gold, a: meAvatarUrl(), me: true
+        };
+        rank = (mc && mc.rank) || (list.length + 1);
+      }
       var inTop = false;
-      for (var k = 0; k < top.length; k++) if (top[k].me) inTop = true;
-      return { top: top, mine: mine, rank: rank, inTop: inTop, empty: list.length === 0 };
+      for (i = 0; i < top.length; i++) if (top[i].me) inTop = true;
+      /* 离前 7 还差多少星（第 7 名主值 − 我的主值 + 1，至少 1） */
+      var need = 0;
+      if (!inTop && top.length >= rows) need = Math.max(1, top[rows - 1].v - mine.v + 1);
+      return { top: top, mine: mine, rank: rank, inTop: inTop,
+        empty: list.length === 0, need: need, rows: rows };
     }
-    var RANK_COLORS = ['#FF8A5B', '#4FA8E0', '#63C88B', '#A87BE8', '#D96A9B', '#FFC53D', '#3FB8B0'];
 
     function rankRow(item, y, idx, highlight) {
-      var L = C.RANK.list, x0 = L.x, w = L.w, h = L.rowH;
+      var L = C.RANK.list, x0 = L.x, w = L.w, h = L.rowH, tab = state.rankTab;
       var rowBg = highlight ? COL.surfaceHi : COL.surface;
-      /* v0.49：面与字必须成对。rankRow 不再直接拿 COL.text —— 深色皮肤把
-       * COL.text 变白后，如果行底仍是浅米色（旧包/异常皮肤/中间帧），昵称会
-       * 整行消失。inkOnSurface() 按实际叠色算对比度，浅面自动落回深墨字。 */
+      /* v0.49：面与字必须成对。深色皮肤把 COL.text 变白后，如果行底仍是浅米色
+       * （旧包/异常皮肤/中间帧），昵称会整行消失。inkOnSurface() 按实际叠色算对比度。 */
       var rowInk = inkOnSurface(highlight, false);
       var rowSub = inkOnSurface(false, true);
       var valInk = highlight ? bestInk(rowBg, COL.card, [COL.accentText, COL.textOnSurfaceHi, rowInk]) : rowInk;
       ctx.save();
-      if (highlight) shadow(10, 4, hexA(COL.gold || '#FFB93D', 0.20));
       rr(x0, y - h / 2, w, h, 16);
       ctx.fillStyle = rowBg;
       ctx.fill();
-      noShadow();
+      /* v0.65：这里原来是 shadow(10,4)。8 行 = 8 次 CPU 高斯模糊，
+       * 手机上点开排行榜那一下的掉帧主要来自它，改用 1px 描边交代边界。 */
+      if (highlight) {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = hexA(COL.gold || '#FFB93D', 0.55);
+        ctx.stroke();
+      }
       ctx.restore();
       // 名次
       if (idx < 3 && !highlight) {
         var medal = ['#F5B73D', '#C9D3DD', '#E0A276'][idx];
-        ctx.beginPath(); ctx.arc(x0 + 42, y, 23, 0, Math.PI * 2);
+        ctx.beginPath(); ctx.arc(x0 + 42, y, 21, 0, Math.PI * 2);
         ctx.fillStyle = medal; ctx.fill();
-        /* 金银铜三色都偏亮，名次字统一用深墨色（浅色皮肤下原来是白字，
-         * 银牌 #C9D3DD 上的白字只有 1.5:1，本来就偏糊） */
-        text(String(idx + 1), x0 + 42, y + 1, 24, '#3A2A12', 'center', '700');
+        /* 金银铜三色都偏亮，名次字统一用深墨色（白字在银牌上只有 1.5:1） */
+        text(String(idx + 1), x0 + 42, y + 1, 22, '#3A2A12', 'center', '700');
       } else {
-        /* 自己那行显示真实名次（榜尾固定条）；名次过百按「99+」收敛宽度 */
+        /* 自己那行显示真实名次；名次过百按「99+」收敛宽度 */
         var rk = idx + 1;
-        text(String(rk > 99 ? '99+' : rk), x0 + 42, y + 1, rk > 99 ? 20 : 24,
+        text(String(rk > 99 ? '99+' : rk), x0 + 42, y + 1, rk > 99 ? 18 : 22,
           highlight ? valInk : rowSub, 'center', '700');
       }
       // 头像：v0.14 起优先用微信头像，取不到图仍退回「首字 + 底色」
-      drawAvatar(x0 + 96, y, C.PLAYER.rankAvatarR, item.n, item.a, item.c || COL.gold);
-      // 名字
-      text(item.n, x0 + 136, y + 1, 24, rowInk, 'left', highlight ? '700' : '500');
-      // 数值
-      var unit = C.RANK.unit[state.rankTab] || '关';
-      text(item.v + ' ' + unit, x0 + w - 28, y + 1, 26, valInk, 'right', '700');
+      drawAvatar(x0 + 92, y, 22, item.n, item.a, item.c || COL.gold);
+      // 名字 + 副信息（两行：v0.65 行高 68，够放 22px + 18px）
+      textFit(item.n, x0 + 128, y - 11, 22, rowInk, 'left', highlight ? '700' : '500',
+        x0 + w - 120 - (x0 + 128));
+      text(rankSubText(tab, item), x0 + 128, y + 15, 18, rowSub, 'left');
+      // 主值
+      text('★' + item.v, x0 + w - 24, y - 8, 24, valInk, 'right', '700');
     }
 
     /* v0.18：好友榜。真机走开放数据域（离屏画布整块贴进来）；
@@ -7058,50 +7230,115 @@
         try { img = env.friend.image(); } catch (e) { img = null; }
       }
       if (img) {
-        ctx.drawImage(img, L.x, ry, L.w, L.h);
-        text(C.RANK.friendNote, C.DESIGN.w / 2, ry + L.h + 32, 18, COL.textSub, 'center');
+        ctx.drawImage(img, L.x, ry - L.rowH / 2, L.w, L.h);
         return;
       }
       if (C.RANK.useMock) {
-        /* 与开放数据域同一规矩：自己不在前 7 就顶掉第 7 名，占最后一行。
-         * 否则 7 行 + 我的排名 = 8 行，会压到下面的说明文字。 */
-        var lst = d.top.slice(0);
-        if (!d.inTop && lst.length >= L.rows) lst = lst.slice(0, L.rows - 1);
-        for (var i = 0; i < lst.length; i++) {
-          rankRow(lst[i], ry + i * L.step, i, !!lst[i].me);
+        /* v0.65：自己不在前 7 也不再「顶掉第 7 行」—— 我的名次由下面的常驻卡显示 */
+        for (var i = 0; i < d.top.length; i++) {
+          rankRow(d.top[i], ry + i * L.step, i, !!d.top[i].me);
         }
-        if (!d.inTop) rankRow(d.mine, ry + lst.length * L.step + 6, d.rank - 1, true);
-        text('预览示例 · 真机显示微信好友', C.DESIGN.w / 2, ry + L.h + 32, 18, COL.textSub, 'center');
         return;
       }
-      text('好友榜要在微信小游戏里看', C.DESIGN.w / 2, ry + 120, 26, COL.text, 'center', '600');
-      text('浏览器预览拿不到微信好友关系链', C.DESIGN.w / 2, ry + 164, 19, COL.textSub, 'center');
-      text('真机上会自动读取已授权好友的通关数', C.DESIGN.w / 2, ry + 196, 19, COL.textSub, 'center');
+      text('好友榜要在微信小游戏里看', C.DESIGN.w / 2, ry + 100, 26, COL.text, 'center', '600');
+      text('浏览器预览拿不到微信好友关系链', C.DESIGN.w / 2, ry + 144, 19, COL.textSub, 'center');
+      text('真机上会自动读取已授权好友的通关星数', C.DESIGN.w / 2, ry + 176, 19, COL.textSub, 'center');
+    }
+
+    /* v0.65：倒计时四档文案（规格 §4.1）
+     *   ≥1天「距重置 2天 13小时」 / <1天「距重置 13小时 42分」
+     *   <1小时「距重置 42分 18秒」 / <1分钟「即将重置」 */
+    function rankCountdown(nextAt) {
+      if (!nextAt) return '';
+      var left = nextAt - Date.now();
+      if (left <= 0) return '即将重置';
+      var min = Math.floor(left / 60000);
+      if (min < 1) return '即将重置';
+      var dd = Math.floor(min / 1440), hh = Math.floor((min % 1440) / 60), mm = min % 60;
+      if (dd >= 1) return '距重置 ' + dd + '天 ' + hh + '小时';
+      if (hh >= 1) return '距重置 ' + hh + '小时 ' + mm + '分';
+      var ss = Math.floor(left / 1000) % 60;
+      return '距重置 ' + mm + '分 ' + ss + '秒';
+    }
+
+    /* 信息条：三页签都占位（高度固定，切页签时列表不跳） */
+    function rankInfoText() {
+      var tab = state.rankTab;
+      if (tab === 1) return '好友榜 · 数据来自微信关系链';
+      if (tab === 2) {
+        var cd = rankCountdown(state.rankMeta.nextResetAt);
+        return '本周新增星数 · ' + (cd || '每周一 00:00 重置');
+      }
+      return '全服累计 · 星星越多排名越高 · 永不重置';
+    }
+
+    /* v0.65：「我的名次」常驻卡。三页签都画，位置固定在列表下方 ——
+     * 旧版只有「我不在前 7」时才补一行，自己在榜内就看不到名次，也没有"离前 7 差多少"。 */
+    function renderMyRankCard(d) {
+      var M = C.RANK.mine, x0 = M.x, w = M.w, h = M.h, cy = M.y, tab = state.rankTab;
+      var bg = COL.surfaceHi;
+      var ink = inkOnSurface(true, false);
+      var sub = inkOnSurface(true, true);
+      var valInk = bestInk(bg, COL.card, [COL.accentText, ink]);
+      rr(x0, cy - h / 2, w, h, 20);
+      ctx.fillStyle = bg; ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = hexA(COL.gold || '#FFB93D', 0.35); ctx.stroke();
+
+      /* 名次徽标：>99 收敛成 99+ */
+      var rk = d.rank || 0;
+      ctx.beginPath(); ctx.arc(x0 + 42, cy - 20, 24, 0, Math.PI * 2);
+      ctx.fillStyle = COL.gold; ctx.fill();
+      text(rk > 99 ? '99+' : String(rk || '—'), x0 + 42, cy - 19, rk > 99 ? 16 : 22,
+        COL.btnText, 'center', '700');
+      /* 头像 + 昵称 */
+      drawAvatar(x0 + 100, cy - 20, 30, d.mine.n, d.mine.a, COL.gold);
+      textFit(d.mine.n, x0 + 144, cy - 20, 24, ink, 'left', '700', w - 144 - 180);
+      /* 右侧主值（副值跟在后面） */
+      var val = tab === 2 ? ('★' + d.mine.v + ' · 连胜 ' + (d.mine.v2 || 0))
+        : ('★' + d.mine.v + ' · ' + (d.mine.v2 || 0) + ' 关');
+      text(val, x0 + w - 24, cy - 20, 22, valInk, 'right', '700');
+      /* 第二行：名次说明 */
+      text(rankCardHint(d, tab), x0 + 24, cy + 30, 18, sub, 'left');
+    }
+    function rankCardHint(d, tab) {
+      if (tab === 1 && !C.RANK.useMock) {
+        if (!friendOn()) return '邀请微信好友一起拼 · 真机上才能读关系链';
+        if (!state.friendRankInfo) return '好友排名读取中…';
+        if (!state.friendRankInfo.total) return '邀请微信好友一起拼';
+        if (d.inTop) return '已在榜上 · 好友里第 ' + d.rank + ' 名';
+        return '再得 ' + (d.need || 1) + ' 星进入好友前 7';
+      }
+      if (d.empty) return '通关一关即可上榜';
+      if (d.inTop) return '已在榜上 · 第 ' + d.rank + ' 名';
+      if (d.need) return '再得 ' + d.need + ' 星进入前 7';
+      return '我的名次 · 第 ' + d.rank + ' 名';
     }
 
     function renderRank() {
       var R = C.RANK;
-      var W = 660, H = 900, cy = 812;
+      var W = R.card.w, H = R.card.h, cy = R.card.cy;
       ctx.fillStyle = COL.mask;
       ctx.fillRect(0, 0, C.DESIGN.w, DH());
-      var e = G.easeOutCubic(Math.min(1, state.rankT / 180));
-      ctx.save();
-      ctx.globalAlpha = e;
-      var y0 = cy + (1 - e) * 20;
-      drawCard(C.DESIGN.w / 2, y0, W, H, 34);
-      text('排行榜', C.DESIGN.w / 2, 425 + (y0 - cy), 40, COL.text, 'center', '700');
+      /* v0.65：**取消入场动画**。旧版卡片从 0 透明度 + 下移 20px 用 180ms 滑入，
+       * 而 v0.62 的静态浮层跳帧不给动画置 dirty —— 结果只画了第一帧就冻住，
+       * 1 秒后保底重画才「啪」跳到终点，玩家看到的就是"点开卡一下"。
+       * 与其给动画补 dirty（每帧重绘一整张榜，正是卡顿的来源），不如直接一帧定版：
+       * 排行榜是静态页，没有任何信息要靠滑入表达。 */
+      var dy = 0;
+      drawCard(C.DESIGN.w / 2, cy + dy, W, H, 34);
+      text('排行榜', C.DESIGN.w / 2, R.title.y + dy, R.title.size, COL.text, 'center', '700');
 
-      // 页签
+      /* 页签：3×176，gap 10，y=495（v0.65 只改文案与单位，位置不动） */
       var tw = 176, gap = 10, tx0 = C.DESIGN.w / 2 - (tw * 3 + gap * 2) / 2;
       for (var i = 0; i < 3; i++) {
-        var tx = tx0 + i * (tw + gap) + tw / 2, ty = 495 + (y0 - cy);
+        var tx = tx0 + i * (tw + gap) + tw / 2, ty = R.tabsY + dy;
         var tabOn = state.rankTab === i;
         var tabBg = tabOn ? COL.gold : COL.chipOff;
         rr(tx - tw / 2, ty - 27, tw, 54, 27);
         ctx.fillStyle = tabBg;
         ctx.fill();
-        /* v0.49：与排行行同一套配对逻辑。选中页签浅金底用深棕字，
-         * 未选中页签则按 chipOff 的实际明度在 textOnChip / textSub 里取更清楚的一支。 */
+        /* v0.49：与排行行同一套配对逻辑 —— 选中浅金底用深棕字，
+         * 未选中按 chipOff 的实际明度在 textOnChip / textSub 里取更清楚的一支。 */
         var tabInk = tabOn
           ? bestInk(tabBg, COL.card, [COL.btnText, '#2A1D00', COL.inkOnLight || '#202A36'])
           : bestInk(tabBg, COL.card, [COL.textOnChip, COL.textSub, COL.inkOnLight || '#202A36']);
@@ -7109,59 +7346,62 @@
         addHit(tx, ty, tw + 12, 80, 'rank_t' + i);
       }
 
-      // 榜单
-      var L = C.RANK.list;
+      /* 信息条（v0.65 新增）：三页签固定占位，tab2 带实时倒计时 */
+      var I = R.info;
+      rr(I.x, I.y + dy - I.h / 2, I.w, I.h, I.h / 2);
+      ctx.fillStyle = COL.chipOff; ctx.fill();
+      text(rankInfoText(), C.DESIGN.w / 2, I.y + dy + 1, I.size,
+        COL.textOnChip || COL.textSub, 'center', '500');
+
+      /* 榜单 */
+      var L = R.list;
       var d = rankData();
-      var ry = L.top + (y0 - cy), step = L.step;
-      if (state.rankTab === 2) {
+      var ry = L.top + dy, step = L.step;
+      if (state.rankTab === 1) {
         renderFriendRank(d, ry);
       } else if (state.rankLoading && !d.top.length) {
         text('正在加载榜单…', C.DESIGN.w / 2, ry + 120, 24, COL.textSub, 'center');
       } else if (state.rankErr && !d.top.length) {
-        /* v0.18：错误优先于「未开启云同步」——能报出具体原因的，就不该用一句
-         * 笼统的降级文案盖过去（这张图也正是用户看到的「数据直接加载失败」）。 */
+        /* 错误优先于「未开启云同步」—— 能报出具体原因的，就不该用一句笼统的降级文案盖过去 */
         text('榜单加载失败', C.DESIGN.w / 2, ry + 96, 26, COL.text, 'center', '600');
         text(state.rankErr, C.DESIGN.w / 2, ry + 140, 19, COL.textSub, 'center');
-        /* 给一条活路。以前失败只能关掉重开，重开还是那次失败的缓存 */
         var bR = { id: 'rank_retry', x: C.DESIGN.w / 2, y: ry + 224, w: 260, h: 76,
           label: '重新加载', variant: 'primary', size: 26 };
         addHit(bR.x, bR.y, bR.w, bR.h, 'rank_retry');
         drawButton(bR);
       } else if (!cloudOn() && !C.RANK.useMock && !state.rankList) {
         text('未开启云同步', C.DESIGN.w / 2, ry + 96, 26, COL.text, 'center', '600');
-        /* 给玩家看的话，不是给开发看的：只在真机上永远不该出现在这里 */
         text('当前进度只保存在这台手机上', C.DESIGN.w / 2, ry + 140, 19, COL.textSub, 'center');
         text('开启后可跨设备同步并与全服玩家比进度', C.DESIGN.w / 2, ry + 172, 19, COL.textSub, 'center');
       } else if (d.empty) {
         text('还没有人上榜', C.DESIGN.w / 2, ry + 96, 26, COL.text, 'center', '600');
         text('拼完一关就会出现在这里', C.DESIGN.w / 2, ry + 140, 19, COL.textSub, 'center');
-        /* 空榜时仍把自己那一行画出来，玩家能看到自己的进度 */
-        rankRow(d.mine, ry + 200, Math.max(0, d.rank - 1), true);
       } else {
         /* 自己进了前 7 也要高亮（旧版只高亮榜尾那条，自己排第 4 会被当成路人） */
         for (var j = 0; j < d.top.length; j++) {
           rankRow(d.top[j], ry + j * step, j, !!d.top[j].me);
         }
-        // 自己不在前 7 → 底部固定一条「我的排名」
-        if (!d.inTop) {
-          rankRow(d.mine, ry + d.top.length * step + 6, d.rank - 1, true);
-        }
       }
+
+      /* 常驻「我的名次」卡 */
+      renderMyRankCard(d);
+
       text(C.RANK.useMock ? '示例榜单 · 仅供本地调试'
-        : (state.rankTab === 2) ? (friendOn() ? '好友榜 · 数据来自微信关系链'
+        : (state.rankTab === 1) ? (friendOn() ? '好友榜 · 数据来自微信关系链'
           : '浏览器预览 · 看不到微信好友')
         : (state.rankErr) ? (d.top.length ? '网络不稳定 · 显示的是上次的榜单' : '加载失败 · 可点上面按钮重试')
-        : (state.rankTab === 1) ? '按历史最高连胜排名 · 每关在一段连胜里只计一次'
+        : (state.rankTab === 2) ? '本周一 00:00 重置 · 只统计本周新增星数'
         : ((cloudOn() || state.rankList) ? '全服实时榜 · 数据来自云开发' : '本地预览 · 未连接云端'),
-        C.DESIGN.w / 2, 1222 + (y0 - cy), 18, COL.textSub, 'center');
+        C.DESIGN.w / 2, C.RANK.foot.y + dy, C.RANK.foot.size, COL.textSub, 'center');
 
       // 关闭（卡片外的圆形按钮，参考图同位置）
-      ctx.beginPath(); ctx.arc(C.DESIGN.w / 2, 1300, 38, 0, Math.PI * 2);
+      var cby = C.RANK.close.y;
+      ctx.beginPath(); ctx.arc(C.DESIGN.w / 2, cby, C.RANK.close.r, 0, Math.PI * 2);
       /* v0.47：这枚钮浮在遮罩上，不再是"白卡上的一块白"，改走 COL.disc ——
        * 深色皮肤下换成半透明白纱，里面的 × 用 COL.text（近白）才看得见。 */
       ctx.fillStyle = COL.disc; ctx.fill();
-      drawIcon('close', C.DESIGN.w / 2, 1300, COL.text, 1.0);
-      addHit(C.DESIGN.w / 2, 1300, 100, 100, 'close_rank');
+      drawIcon('close', C.DESIGN.w / 2, cby, COL.text, 1.0);
+      addHit(C.DESIGN.w / 2, cby, 100, 100, 'close_rank');
       ctx.restore();
     }
 
@@ -7170,6 +7410,8 @@
       state.rankBack = from || null;
       state.overlay = 'rank';
       state.rankT = 0;
+      state.rankTickAt = Date.now();
+      state.rankPaintSig = '';
       /* v0.18：每次打开都刷新当前页签。有缓存就先显缓存，
        * 不再像旧版那样「有 rankList 就不拉了」——那样榜单永远是上次的。 */
       selectRankTab(state.rankTab);
@@ -7526,27 +7768,37 @@
          * v0.35：但整个"看视频"总额度有上限（ECON.adPerLevel=3），用完置灰。 */
         var adLvOk = adLvLeft() > 0;
         var canAd = !state.adSim && adLvOk;
-        // 广告复活（橙红大按钮）
-        var bAd = { id: 'ad_revive', x: cx, y: top + 465, w: 440, h: 108,
-          label: adLvOk ? '看广告复活' : '本关看视频次数已用完',
-          variant: 'danger', size: adLvOk ? 32 : 26, icon: 'tv', disabled: !adLvOk };
+        /* v0.65：用户要求两枚复活按钮**同尺寸同风格**，且「看视频」图标与
+         * 提示面板（查找道具）那枚统一。
+         *   旧版：看广告 440×108 橙红实心 + 线性小电视图标；巧币 380×84 白底
+         *         半径 20 的直角胶囊 + 「花 80 巧币复活」整句文字 ——
+         *         两者宽度差 60、高度差 24、圆角半径差 34，读起来像两种控件。
+         *   现在：都 480×96、都走 h/2 胶囊（secondary 加 pill）、字号 32/30 一致，
+         *         巧币只用「币图标 + 80 · 复活」，与提示面板的「币图标 + 30 · 买 1 次」同构。 */
+        var bAd = { id: 'ad_revive', x: cx, y: top + 465, w: 480, h: 96,
+          label: adLvOk ? '看视频复活' : '本关看视频次数已用完',
+          variant: 'danger', size: adLvOk ? 32 : 25, disabled: !adLvOk,
+          icon: 'video', iconInline: true, iconScale: 1.05 };
         if (canAd && hitOK) addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'ad_revive');
         drawButton(bAd);
         /* v0.23：删掉「+90 巧币」—— 广告复活只给心。
          * 旧版给币 → 看广告比付费复活还划算 → 最优策略变成"故意失败"。 */
         text(adLvOk ? ('+1 心 · 继续本关 · 还可看 ' + adLvLeft() + ' 次')
           : '+1 心 · 继续本关',
-          cx, top + 545, 24, COL.textSub, 'center', '600');
+          cx, top + 533, 24, COL.textSub, 'center', '600');
 
-        // 巧币复活
+        // 巧币复活（与上面那枚同宽同高同圆角，只换配色与图标）
         var canCoin = (s.coin || 0) >= C.ECON.coinRevive && !state.adSim;
-        var bCoin = { id: 'coin_revive', x: cx, y: top + 635, w: 380, h: 84,
-          label: '花 ' + C.ECON.coinRevive + ' 巧币复活', variant: 'secondary', size: 28, disabled: !canCoin };
+        var bCoin = { id: 'coin_revive', x: cx, y: top + 612, w: 480, h: 96,
+          label: canCoin ? (C.ECON.coinRevive + ' · 复活')
+            : ('巧币不足 ' + (s.coin || 0) + '/' + C.ECON.coinRevive),
+          variant: 'secondary', size: 30, disabled: !canCoin,
+          icon: 'coin', iconInline: true, iconScale: 1.06, pill: true };
         if (canCoin && hitOK) addHit(bCoin.x, bCoin.y, bCoin.w, bCoin.h, 'coin_revive');
         drawButton(bCoin);
 
         // 忍痛放弃（按钮下方）
-        var gy = top + 750;
+        var gy = top + 740;
         text('忍痛放弃', cx, gy, 30, COL.textSub, 'center', '500');
         if (hitOK) addHit(cx, gy, 240, 86, 'give_up');
         ctx.restore();
@@ -7603,7 +7855,10 @@
       var leftN = Math.max(0, total - used);
       var can = leftN > 0 && !state.adSim;
       var bAd = { id: 'free_ad', x: C.DESIGN.w / 2, y: top + 400, w: 460, h: 96,
-        label: C.ECON.freeEnergyAdMul + ' 倍获得', variant: 'danger', size: 30, disabled: !can, icon: 'tv' };
+        label: C.ECON.freeEnergyAdMul + ' 倍获得', variant: 'danger', size: 30, disabled: !can,
+        /* v0.65：图标与提示面板（查找道具）统一 —— 旧版这里是线性小电视 'tv'，
+         * 和「看视频」按钮那枚兔耳小电视不是一套，同屏出现像两个来源的素材。 */
+        icon: 'video', iconInline: true, iconScale: 1.05 };
       addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'free_ad');
       drawButton(bAd);
       text('单次 ' + C.ECON.freeEnergyShare + ' 点 × ' + C.ECON.freeEnergyAdMul + ' 倍 · 每日 ' + total + ' 次',
@@ -8529,6 +8784,16 @@
         /* 平台层异步变化（已授权用户静默刷新到头像、或授权成功后回调） */
         PROFILE.onChange(function (p) { applyProfile(p); syncProfileButton(); });
       }
+      /* v0.65：头像图加载完成要立刻重绘。榜单有 7~8 个远端头像，
+       * 旧版只能等 1s 保底重画时集体补上 —— 打开榜单头一秒全是"首字头像"，
+       * 然后整块闪一下全变真头像，体感又是一次卡顿。 */
+      if (profileOn() && PROFILE.onImg) {
+        try { PROFILE.onImg(function () { state.dirty = true; }); } catch (e) {}
+      }
+      /* v0.65：好友榜开放数据域画完会回传名次（主域据此填「我的名次」常驻卡） */
+      if (env.friend && env.friend.onRank) {
+        try { env.friend.onRank(function (info) { applyFriendRankInfo(info); }); } catch (e) {}
+      }
       /* 此前授权过的人：启动时静默刷新一次昵称头像（换头像能跟上），没授权的不打扰 */
       if (profileOn() && PROFILE.boot) { try { PROFILE.boot(); } catch (e) {} }
       resize();
@@ -8645,7 +8910,9 @@
         cloudPush: cloudPush, cloudPull: cloudPull, cloudRank: cloudRank,
         openRank: openRank, netText: netText, go: go,
         /* v0.18：页签缓存 / 好友榜 / 连胜口径，供 verify_v18 直接驱动 */
-        selectRankTab: selectRankTab, rankData: rankData, rankValue: rankValue,
+        selectRankTab: selectRankTab, rankData: rankData, myStats: myStats,
+        weekStats: weekStats, recordWeekWin: recordWeekWin, rankCacheKey: rankCacheKey,
+        applyFriendRankInfo: applyFriendRankInfo, rankCountdown: rankCountdown,
         friendStats: friendStats, publishFriend: publishFriend, friendOn: friendOn,
         openFriendRank: openFriendRank, failLevel: failLevel,
         /* v0.19：连胜口径（段内去重）直接驱动 —— 放弃 / 复活 / 通关 三条路径 */

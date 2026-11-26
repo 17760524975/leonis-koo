@@ -31,6 +31,12 @@ function createProfile() {
 
   var btn = null, btnSig = '';
   var imgs = {}, imgKeys = [];
+  var imgListeners = [];                 // v0.65：头像图加载完成的回调（core 用来置 dirty）
+  function notifyImg() {
+    for (var i = 0; i < imgListeners.length; i++) {
+      try { imgListeners[i](); } catch (e) {}
+    }
+  }
   var listeners = [];
   var pendingCb = null;
   var kbBound = false, kbCb = null;
@@ -165,7 +171,9 @@ function createProfile() {
     }
     try {
       var img = wx.createImage();
-      img.onload = function () { rec.ok = true; };
+      /* v0.65：加载完通知核心层重绘。榜单/设置页有远端头像，
+       * 不通知的话只能等 1s 保底重画时集体补上（先显示首字再整块闪一下）。 */
+      img.onload = function () { rec.ok = true; notifyImg(); };
       img.onerror = function () { rec.ok = false; };
       img.src = url;
       rec.img = img;
@@ -176,6 +184,8 @@ function createProfile() {
   /* ---------------- 对外 ---------------- */
   return {
     enabled: function () { return supported; },
+    /* v0.65：core 注册「头像图到了」的回调（内部据此置 dirty 立刻重绘） */
+    onImg: function (fn) { if (typeof fn === 'function') imgListeners.push(fn); },
     canAuth: function () { return canAuth; },
     state: snapshot,
     onChange: function (fn) { if (typeof fn === 'function') listeners.push(fn); },

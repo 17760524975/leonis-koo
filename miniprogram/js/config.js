@@ -5,7 +5,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = C;
 })(typeof window !== 'undefined' ? window : globalThis, function () {
 'use strict';
 return {
-version: 'v0.64',
+version: 'v0.65',
 BRAND: {
 name: '方寸巧拼',
 slogan: '四巧 · 七巧，拼出你的形状',
@@ -210,39 +210,46 @@ row3Y: 1102, row3H: 50
 },
 STREAK: { step: 5, coin: 60 },
 RANK: {
-tabs: ['主线榜', '连胜榜', '好友榜'],
+tabs: ['全服榜', '好友榜', '本周榜'],
+unit: ['★', '★', '★'],
 useMock: false,
 topN: 20,
-unit: ['关', '连胜', '关'],
-list: { x: 92, w: 566, top: 566, step: 84, rowH: 74, rows: 7, h: 588 },
+list: { x: 92, w: 566, top: 584, step: 76, rowH: 68, rows: 7, h: 532 },
+card: { w: 660, h: 1000, cy: 812 },
+title: { y: 388, size: 40 },
+info: { x: 92, w: 566, h: 42, y: 446, size: 20 },
+tabsY: 495,
+mine: { x: 92, w: 566, h: 110, y: 1140 },
+foot: { y: 1252, size: 18 },
+close: { y: 1372, r: 38 },
 friendNote: '好友榜只显示已授权微信好友 · 数据来自微信关系链',
 mock: {
 0: [
-{ n: '废的柴', v: 18153, c: '#FF8A5B' },
-{ n: '泡泡', v: 14410, c: '#4FA8E0' },
-{ n: '刘晓飞二大爷', v: 13903, c: '#63C88B' },
-{ n: '尼西ヾ゛26G', v: 10470, c: '#A87BE8' },
-{ n: 'wayne wong', v: 9338, c: '#D96A9B' },
-{ n: '彩云之川', v: 9249, c: '#FFC53D' },
-{ n: '木木不吃鱼', v: 8032, c: '#3FB8B0' }
+{ n: '废的柴', v: 268, v2: 93, c: '#FF8A5B' },
+{ n: '泡泡', v: 241, v2: 88, c: '#4FA8E0' },
+{ n: '刘晓飞二大爷', v: 226, v2: 84, c: '#63C88B' },
+{ n: '尼西ヾ゛26G', v: 189, v2: 71, c: '#A87BE8' },
+{ n: 'wayne wong', v: 163, v2: 62, c: '#D96A9B' },
+{ n: '彩云之川', v: 141, v2: 55, c: '#FFC53D' },
+{ n: '木木不吃鱼', v: 120, v2: 47, c: '#3FB8B0' }
 ],
 1: [
-{ n: '连击王阿哲', v: 126, c: '#FF8A5B' },
-{ n: '泡泡', v: 98, c: '#4FA8E0' },
-{ n: '废的柴', v: 87, c: '#63C88B' },
-{ n: '小满', v: 66, c: '#A87BE8' },
-{ n: 'wayne wong', v: 51, c: '#D96A9B' },
-{ n: '彩云之川', v: 40, c: '#FFC53D' },
-{ n: '木木不吃鱼', v: 33, c: '#3FB8B0' }
+{ n: '木木不吃鱼', v: 246, v2: 86, c: '#3FB8B0' },
+{ n: '小满', v: 198, v2: 74, c: '#A87BE8' },
+{ n: '泡泡', v: 154, v2: 60, c: '#4FA8E0' },
+{ n: '阿树', v: 121, v2: 48, c: '#FF8A5B' },
+{ n: '彩云之川', v: 96, v2: 38, c: '#FFC53D' },
+{ n: 'wayne wong', v: 71, v2: 29, c: '#D96A9B' },
+{ n: '尼西ヾ゛26G', v: 60, v2: 24, c: '#63C88B' }
 ],
 2: [
-{ n: '泡泡', v: 120, c: '#4FA8E0' },
-{ n: '刘晓飞二大爷', v: 96, c: '#63C88B' },
-{ n: '尼西ヾ゛26G', v: 74, c: '#A87BE8' },
-{ n: '小满', v: 52, c: '#D96A9B' },
-{ n: 'wayne wong', v: 41, c: '#FFC53D' },
-{ n: '木木不吃鱼', v: 28, c: '#3FB8B0' },
-{ n: '阿树', v: 19, c: '#FF8A5B' }
+{ n: '连击王阿哲', v: 57, v2: 21, v3: 19, c: '#FF8A5B' },
+{ n: '泡泡', v: 48, v2: 19, v3: 16, c: '#4FA8E0' },
+{ n: '废的柴', v: 42, v2: 17, v3: 14, c: '#63C88B' },
+{ n: '小满', v: 33, v2: 15, v3: 11, c: '#A87BE8' },
+{ n: 'wayne wong', v: 27, v2: 13, v3: 9, c: '#D96A9B' },
+{ n: '彩云之川', v: 18, v2: 9, v3: 6, c: '#FFC53D' },
+{ n: '木木不吃鱼', v: 12, v2: 6, v3: 4, c: '#3FB8B0' }
 ]
 }
 },
