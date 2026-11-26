@@ -2258,7 +2258,8 @@
       state.winFx = makeWinFx(lv);
       state.petalScene = makePetalScene(lv);
       env.audio.play('sfx_win');
-      /* 星级沿用策划 5.7 原规则（三星=时限+步数；二星=时限内）。
+      /* 星级沿用策划 5.7 原规则（三星=时限+步数；二星=时限内），v0.60 把三星
+       * 的时限从 parTime 收到 parTime×0.8（见下方 t3）。
        * v0.3 A3 变更点：用提示（hint_used）从「只给 1 星」放宽为「封顶 ★★☆」。
        * v0.20：取消这条封顶 —— 提示从「三档作弊（含看全图）」收窄成「指一步」，
        * 而且是唯一档、每次都要付费（查找道具/40 巧币/看视频）。
@@ -2268,7 +2269,12 @@
        * 经济上不会刷币：三星多给 10 巧币，而一次提示 40 巧币。 */
       var stars = 1;
       if (state.elapsed <= lv.parTime * C.STAR.twoStarTimeFactor) stars = 2;
-      if (state.elapsed <= lv.parTime && state.steps <= lv.parSteps) stars = 3;
+      /* v0.60：三星加一档时间门槛（parTime × threeStarTimeFactor = 0.8）。
+       * 三星要作为排行榜指标，就必须是「又快又省步」的发挥，而不是拼完就给 ——
+       * 旧口径 elapsed ≤ parTime 配上 150 秒时限，正常拼完基本都落在三星。
+       * 步数门槛不动（parSteps 已是紧口径），见 config.STAR 注释。 */
+      var t3 = C.STAR.threeStarTimeFactor == null ? 1 : C.STAR.threeStarTimeFactor;
+      if (state.elapsed <= lv.parTime * t3 && state.steps <= lv.parSteps) stars = 3;
       var k = String(state.levelIdx + 1);
       var s = state.save;
       /* ---------- v0.40 星级奖励：总额制 + 补差价（v0.43 数值回正） ----------
@@ -7198,7 +7204,7 @@
       /* 主按钮跟着「现在真能用的那条路」走：有道具就高亮道具，
        * 没道具但巧币够就高亮巧币；两样都没有时只留视频按钮发光。 */
       if (hasItem) {
-        var bItem = { id: 'hint_item', x: C.DESIGN.w / 2, y: y, w: 480, h: 96,
+        var bItem = { id: 'hint_item', x: C.DESIGN.w / 2, y: y, w: 480, h: 92,
           label: '用' + H.itemName + ' · 剩 ' + items, variant: 'primary', size: 28 };
         addHit(bItem.x, bItem.y, bItem.w, bItem.h, 'hint_item');
         drawButton(bItem);
@@ -7209,9 +7215,12 @@
       /* v0.59：用户要求「『花 30 巧币』和『看视频』的汉字都改成相对应的图标」——
        * 巧币按钮左边挂金币徽章、文案只留「30 · 买 1 次」；
        * 不足时仍要能读出差多少，所以那一种保留「巧币不足 N/30」的文字。 */
-      var bCoin = { id: 'hint_coin', x: C.DESIGN.w / 2, y: y, w: 440, h: 84,
+      /* v0.60：两枚按钮尺寸必须**完全一致**。旧值巧币 440×84 / 视频 480×92，
+       * 上下叠放时巧币明显小一圈，读起来像「次要入口」，玩家会以为只有看视频那条路。
+       * 三行（道具 / 巧币 / 视频）统一 480×92、字号 28，间距 104 不变。 */
+      var bCoin = { id: 'hint_coin', x: C.DESIGN.w / 2, y: y, w: 480, h: 92,
         label: (s.coin || 0) >= H.coinCost ? (H.coinCost + ' · 买 1 次') : ('巧币不足 ' + (s.coin || 0) + '/' + H.coinCost),
-        variant: (!hasItem && canCoin) ? 'primary' : 'secondary', size: 26, disabled: !canCoin,
+        variant: (!hasItem && canCoin) ? 'primary' : 'secondary', size: 28, disabled: !canCoin,
         icon: 'coin', iconInline: true, iconScale: 1.06 };
       if (canCoin) addHit(bCoin.x, bCoin.y, bCoin.w, bCoin.h, 'hint_coin');
       drawButton(bCoin);
