@@ -5,7 +5,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = C;
 })(typeof window !== 'undefined' ? window : globalThis, function () {
 'use strict';
 return {
-version: 'v0.62',
+version: 'v0.63',
 BRAND: {
 name: '方寸巧拼',
 slogan: '四巧 · 七巧，拼出你的形状',

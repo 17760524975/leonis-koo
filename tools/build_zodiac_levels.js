@@ -100,7 +100,8 @@ const levels = EX.map((fig, k) => {
 });
 
 /* ---------- 2. 读 levels.js ---------- */
-let src = fs.readFileSync(LV, 'utf8');
+/* 同上：.gitattributes 是 eol=crlf，锚点按 LF 写，读进来先归一 */
+let src = fs.readFileSync(LV, 'utf8').replace(/\r\n/g, '\n');
 
 const MK_B = '/* ==== ZODIAC_LEVELS_BEGIN ==== */';
 const MK_E = '/* ==== ZODIAC_LEVELS_END ==== */';

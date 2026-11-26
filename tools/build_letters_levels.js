@@ -82,7 +82,10 @@ const levels = EX.map((fig, k) => {
 if (levels.length !== 26) throw new Error('字母数 ' + levels.length);
 
 /* ---------- 定位并替换 chapter 2 的 26 关 ---------- */
-let src = fs.readFileSync(LV, 'utf8');
+/* .gitattributes 把 *.js 定成 eol=crlf，但本脚本的定位锚点（head 里的 '\n'）按 LF 写的：
+ * 每次 git checkout 之后直接跑会「找不到第 20 关」。读进来先归一成 LF，写出去也是 LF，
+ * git 提交时按 eol=crlf 规范化，diff 不会炸。 */
+let src = fs.readFileSync(LV, 'utf8').replace(/\r\n/g, '\n');
 const head = '  {\n    "id": 20,\n    "chapter": 2,\n    "name": "A",';
 const start = src.indexOf(head);
 if (start < 0) throw new Error('找不到七巧板第 20 关（字母 A）');
