@@ -41,14 +41,15 @@ function check(label, ok, detail) {
 /* ---------- 1. 章节表 ---------- */
 console.log('==== 1. 章节表 ====');
 var CH = S.chapters || [];
-check('三章：几何 / 字母 / 生肖', CH.length === 3, CH.map(function (c) { return c.title + '(' + c.from + '-' + (c.from + c.count - 1) + ')'; }).join(' + '));
+/* v0.64：新增第 4 章「舞者」10 关（58–67），改判总章数。 */
+check('四章：几何 / 字母 / 生肖 / 舞者', CH.length === 4, CH.map(function (c) { return c.title + '(' + c.from + '-' + (c.from + c.count - 1) + ')'; }).join(' + '));
 var sumCnt = CH.reduce(function (a, c) { return a + c.count; }, 0);
 check('章节覆盖全部关卡', sumCnt === S.levels.length, sumCnt + ' / ' + S.levels.length);
 var zc = CH[2] || {};
 check('生肖章 from=46 count=12', zc.from === 46 && zc.count === 12, 'from=' + zc.from + ' count=' + zc.count);
 check('第七章名为「生肖」', zc.title === '生肖' && /生肖/.test(zc.name || ''), zc.name);
-check('completeSub 为 57 关口径', /57/.test(S.completeSub || ''), S.completeSub);
-check('关卡 id 连续 1..57', S.levels.every(function (l, i) { return l.id === i + 1; }), 'n=' + S.levels.length);
+check('completeSub 为 67 关口径', /67/.test(S.completeSub || ''), S.completeSub);
+check('关卡 id 连续 1..67', S.levels.every(function (l, i) { return l.id === i + 1; }), 'n=' + S.levels.length);
 
 /* ---------- 2..9 逐关 ---------- */
 var NAMES = ['鼠', '牛', '虎', '兔', '龙', '蛇', '马', '羊', '猴', '鸡', '狗', '猪'];

@@ -38,3 +38,8 @@ tools/figs4/out/
 tools/zodiac/*.bak.json
 tools/glyph/one.html
 tools/glyph/*.bak.json
+
+# 舞者反解：中间渲染与调试图（ref.png 作输入保留入库）
+tools/dancer/out/
+tools/dancer/d[0-9]*.png
+tools/dancer/z*.png

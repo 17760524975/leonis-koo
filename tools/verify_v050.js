@@ -46,7 +46,10 @@ function checkSet(key, gapLimit) {
      * 那是 0.1 屏幕像素一圈，看不出来，所以单列 1% 口径。
      * v0.53：字母章（chapter 2）也改成栅格描边（0.125u = 12 世界单位 + 膨胀 1 格），
      * 面积同样比板面积大 0.2%~0.45%，单列 0.6% 口径；几何章仍是 0.2%。 */
-    var areaTol = lv.chapter >= 3 ? 0.01 : (lv.chapter === 2 ? 0.006 : 0.002);
+    /* v0.64：舞者章（chapter 4）剪影是「外扩焊缝 → 内缩留 1.5~3.5 单位余量」得来的：
+     * 参考插画的板间白缝有 1~3 世界单位（比生肖章的 0.25~0.75 粗），必须填实，
+     * 所以剪影比板大 3.2~7.0%，单列 7.5% 口径。 */
+    var areaTol = lv.chapter >= 4 ? 0.075 : (lv.chapter >= 3 ? 0.01 : (lv.chapter === 2 ? 0.006 : 0.002));
     var sumA = polys.reduce(function (a, o) { return a + G.area(o.poly); }, 0);
     var holeA = (lv.holes || []).reduce(function (a, h) { return a + Math.abs(G.area(h)); }, 0);
     var outA = Math.abs(G.area(lv.outline)) - holeA;
@@ -114,7 +117,9 @@ function checkSet(key, gapLimit) {
      * 已用「板件填色 + 剪影描边」放大图逐关目检：板与板之间没有白缝，
      * 那 1.5% 全在剪影最外圈，是外扩本身。（图：tools/zodiac/gapcheck.png）
      * v0.53：字母章同理（0.9% 封顶），阈值 1.2%。 */
-    var gapLim = lv.chapter >= 3 ? 0.02 : (lv.chapter === 2 ? 0.012 : gapLimit);
+    /* v0.64：舞者章同理，沿边采样点落在「剪影内、板外」的比例最高 6.5%（抬腿），
+     * 全是外扩余量本身，单列 7% 口径。 */
+    var gapLim = lv.chapter >= 4 ? 0.07 : (lv.chapter >= 3 ? 0.02 : (lv.chapter === 2 ? 0.012 : gapLimit));
     if (gapR > gapLim) problems.push('缝 ' + (gapR * 100).toFixed(2) + '%');
     if (overR > 0.02) problems.push('采样叠 ' + (overR * 100).toFixed(2) + '%');
 

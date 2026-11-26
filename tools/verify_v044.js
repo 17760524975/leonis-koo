@@ -45,9 +45,12 @@ const LET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 /* v0.50：几何章补图案后关数变了（10→19），这里只锁「总数 = 各章之和、字母 26 关」，不再写死 36。
  * v0.51：又加了第 3 章「生肖」12 关，所以改成「总数 = 三章之和」。 */
 const zod = S7.levels.filter(l => l.chapter === 3);
-check('总关数 = 几何 + 字母 26 + 生肖 12',
-  S7.levels.length === geo.length + alp.length + zod.length && alp.length === 26 && zod.length === 12,
-  `总 ${S7.levels.length} / 几何 ${geo.length} / 字母 ${alp.length} / 生肖 ${zod.length}`);
+/* v0.64：又加了第 4 章「舞者」10 关，断言改成「全章之和」。 */
+const dan = S7.levels.filter(l => l.chapter === 4);
+check('总关数 = 各章之和（字母 26 / 生肖 12 / 舞者 10）',
+  S7.levels.length === geo.length + alp.length + zod.length + dan.length &&
+  alp.length === 26 && zod.length === 12 && dan.length === 10,
+  `总 ${S7.levels.length} / 几何 ${geo.length} / 字母 ${alp.length} / 生肖 ${zod.length} / 舞者 ${dan.length}`);
 check('字母关 id 紧接几何章连续排列', alp.every((l, i) => l.id === geo.length + 1 + i),
   alp[0].id + '…' + alp[alp.length - 1].id);
 check('字母关 name 依次 A..Z', alp.map(l => l.name).join('') === LET, alp.map(l => l.name).join(''));
@@ -59,8 +62,8 @@ const chapSum = S7.chapters ? S7.chapters.reduce((a, c) => a + c.count, 0) : 0;
 const chapChain = S7.chapters
   ? S7.chapters.every((c, i) => i === 0 ? c.from === 1 : c.from === S7.chapters[i - 1].from + S7.chapters[i - 1].count)
   : false;
-check('章节表（几何 + 字母 + 生肖）无缝覆盖全部关卡',
-  S7.chapPer === 10 && Array.isArray(S7.chapters) && S7.chapters.length === 3 &&
+check('章节表（几何 + 字母 + 生肖 + 舞者）无缝覆盖全部关卡',
+  S7.chapPer === 10 && Array.isArray(S7.chapters) && S7.chapters.length === 4 &&
   chapSum === S7.levels.length && chapChain,
   (S7.chapters || []).map(c => c.title + ' ' + c.from + '–' + (c.from + c.count - 1)).join(' / '));
 check('结算文案报的关数 = 实际关数',
@@ -85,7 +88,7 @@ console.log('\n==== C. 面积闭合（轮廓 = 7 块板总面积）====');
 {
   let worst = 0, worstCh = '', worstL = 0, worstLCh = '';
   for (const lv of S7.levels) {
-    if (lv.chapter >= 3) continue;              // 生肖章单独一组口径，见下
+    if (lv.chapter >= 3) continue;              // 生肖 / 舞者章单独一组口径，见下
     const holeA = (lv.holes || []).reduce((s, h) => s + Math.abs(G.area(h)), 0);
     const outA = Math.abs(G.area(lv.outline)) - holeA;
     const err = Math.abs(outA - EXPECT_AREA) / EXPECT_AREA * 100;
@@ -104,7 +107,7 @@ console.log('\n==== C. 面积闭合（轮廓 = 7 块板总面积）====');
     `最大偏差 ${worstL.toFixed(4)}%（${worstLCh}）`);
   let worstZ = 0, worstZCh = '';
   for (const lv of S7.levels) {
-    if (lv.chapter < 3) continue;
+    if (lv.chapter !== 3) continue;
     const holeA = (lv.holes || []).reduce((s, h) => s + Math.abs(G.area(h)), 0);
     const outA = Math.abs(G.area(lv.outline)) - holeA;
     const err = Math.abs(outA - EXPECT_AREA) / EXPECT_AREA * 100;
@@ -112,6 +115,19 @@ console.log('\n==== C. 面积闭合（轮廓 = 7 块板总面积）====');
   }
   check('生肖 12 关轮廓净面积 = 147456（误差 < 1%）', worstZ < 1,
     `最大偏差 ${worstZ.toFixed(4)}%（${worstZCh}）`);
+  /* v0.64：舞者章剪影是「外扩焊缝 → 内缩留余量」，参考插画的板间白缝有 1~3 世界单位
+   * （比生肖章的 0.25~0.75 粗），填缝 + 1.5~3.5 单位余量让剪影比板大 3.2~7.0%。
+   * 单列 7.5% 口径；结构硬指标由 tools/verify_v064.js 兜。 */
+  let worstD = 0, worstDCh = '';
+  for (const lv of S7.levels) {
+    if (lv.chapter !== 4) continue;
+    const holeA = (lv.holes || []).reduce((s, h) => s + Math.abs(G.area(h)), 0);
+    const outA = Math.abs(G.area(lv.outline)) - holeA;
+    const err = Math.abs(outA - EXPECT_AREA) / EXPECT_AREA * 100;
+    if (err > worstD) { worstD = err; worstDCh = lv.name; }
+  }
+  check('舞者 10 关轮廓净面积 = 147456（误差 < 7.5%）', worstD < 7.5,
+    `最大偏差 ${worstD.toFixed(4)}%（${worstDCh}）`);
 }
 
 console.log('\n==== D. 轮廓几何合法性 ====');
