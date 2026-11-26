@@ -1239,7 +1239,7 @@
       return true;
     }
 
-    /* 每关时限：v0.31 起全关统一 fixedSec（2 分钟，用户要求）。
+    /* 每关时限：v0.31 起全关统一 fixedSec（v0.59：2 分 30 秒，用户要求）。
      * 旧口径「parTime×parFactor 夹在 [90,240]」退化为 fixedSec=0 时的兜底；
      * parTime 现在只用于星级判定，不再决定时限。 */
     function timeLimitOf(lv) {
@@ -2159,7 +2159,7 @@
       for (var i = 0; i < others.length; i++) {
         var o = others[i];
         if (o === p) continue;
-        if (G.convexOverlapArea(poly, piecePoly(o)) > lim) return 'overlap';
+        if (G.overlapArea(poly, piecePoly(o)) > lim) return 'overlap';
       }
       if (!G.pieceInside(poly, lv.outline, lv.holes, tol)) return 'outside';
       return null;
@@ -3006,7 +3006,7 @@
       for (var i = 0; i < state.pieces.length; i++) {
         var q = state.pieces[i];
         if (!q || !q.onBoard) continue;
-        if (G.convexOverlapArea(piecePoly(q), slotPoly) > a * 0.98) return true;
+        if (G.overlapArea(piecePoly(q), slotPoly) > a * 0.98) return true;
       }
       return false;
     }
@@ -3852,8 +3852,23 @@
         ctx.restore();
         var fg = isDanger ? '#FFFFFF' : COL.btnText;
         if (b.disabled) fg = isDanger ? 'rgba(255,255,255,0.55)' : 'rgba(122,74,0,0.45)';
-        if (b.icon) drawIcon(b.icon, b.x - b.w / 2 + 56, b.y + dy, fg, 0.95);
-        text(b.label, b.x + (b.icon ? 18 : 0), b.y + dy, b.size || 32, fg, 'center', '600');
+        /* v0.59：b.iconInline —— 图标与文字测宽后**整体居中**。
+         * 结算页 / 提示面板的「看视频」按钮宽 265~480，旧的「图标钉在左边 56px、
+         * 文字居中」会在中间拉出一条空档，像两个不相干的东西。 */
+        if (b.icon && b.iconInline) {
+          var isz = 34, igap = 9;
+          ctx.save(); ctx.font = font(b.size || 32, '600');
+          var tw = ctx.measureText ? ctx.measureText(String(b.label)).width : 0;
+          ctx.restore();
+          var x0 = b.x - (isz + igap + tw) / 2;
+          drawIcon(b.icon, x0 + isz / 2, b.y + dy, fg, b.iconScale || 0.95);
+          text(b.label, x0 + isz + igap, b.y + dy, b.size || 32, fg, 'left', '600');
+        } else if (b.icon) {
+          drawIcon(b.icon, b.x - b.w / 2 + 56, b.y + dy, fg, 0.95);
+          text(b.label, b.x + 18, b.y + dy, b.size || 32, fg, 'center', '600');
+        } else {
+          text(b.label, b.x, b.y + dy, b.size || 32, fg, 'center', '600');
+        }
       } else if (b.variant === 'tool') {
         var dis = !!b.disabled;
         /* v0.35：对局页工具栏换成「糖果按钮」——五枚各自带柔光底色 + 6px 厚底边，
@@ -3935,9 +3950,21 @@
         ctx.fillRect(x, y + b.h - C.LAYOUT.BTN_EDGE + (pressed ? 2 : 0), b.w, C.LAYOUT.BTN_EDGE * 2);
         ctx.restore();
         // v0.8：secondary 也支持左侧图标（分享 / 排行榜），文字随之右移，避免压图标
-        if (b.icon) drawIcon(b.icon, x + 46, b.y + dy, COL.text, 0.86);
-        text(b.label, b.x + (b.icon ? 20 : 0), b.y + dy, b.size || 30,
-          b.disabled ? COL.disabledIcon : COL.text, 'center', '500');
+        // v0.59：iconInline 与主按钮同口径 —— 图标 + 文字整体居中（提示面板的巧币按钮）
+        var sfg = b.disabled ? COL.disabledIcon : COL.text;
+        if (b.icon && b.iconInline) {
+          var isz2 = 34, igap2 = 9;
+          ctx.save(); ctx.font = font(b.size || 30, '500');
+          var tw2 = ctx.measureText ? ctx.measureText(String(b.label)).width : 0;
+          ctx.restore();
+          var x2 = b.x - (isz2 + igap2 + tw2) / 2;
+          drawIcon(b.icon, x2 + isz2 / 2, b.y + dy, sfg, b.iconScale || 0.95);
+          text(b.label, x2 + isz2 + igap2, b.y + dy, b.size || 30, sfg, 'left', '500');
+        } else {
+          if (b.icon) drawIcon(b.icon, x + 46, b.y + dy, COL.text, 0.86);
+          text(b.label, b.x + (b.icon ? 20 : 0), b.y + dy, b.size || 30,
+            sfg, 'center', '500');
+        }
       }
       ctx.restore();
     }
@@ -4181,6 +4208,36 @@
         ctx.lineWidth = 3;
         rr(-15, -11, 30, 22, 5); ctx.stroke();
         ctx.beginPath(); ctx.moveTo(-4, -6); ctx.lineTo(8, 0); ctx.lineTo(-4, 6); ctx.closePath(); ctx.fill();
+      } else if (name === 'video') {
+        /* v0.59：可爱风「看视频」图标 —— 用户要求把「看视频」三个字换成图标。
+         * 结构：兔耳天线（两条外撇短线 + 圆头）→ 圆角小电视（半透明屏）
+         *       → 屏幕中间一枚播放三角 → 右上角一颗四角星光。
+         * 只用前景色 + 白透明度，压在橙红按钮上照样分得清。 */
+        ctx.save();
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.strokeStyle = color; ctx.fillStyle = color;
+        ctx.lineWidth = 3;
+        /* 兔耳天线 */
+        ctx.beginPath(); ctx.moveTo(-5.2, -8.4); ctx.lineTo(-8.6, -15.2); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(5.2, -8.4); ctx.lineTo(8.6, -15.2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(-8.9, -16.1, 2.0, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(8.9, -16.1, 2.0, 0, Math.PI * 2); ctx.fill();
+        /* 机身 */
+        rr(-14, -8.6, 28, 21, 6.5);
+        ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.fill();
+        ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke();
+        /* 播放三角（略偏左，给右上角闪光留位） */
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(-3.8, -2.4); ctx.lineTo(5.0, 1.9); ctx.lineTo(-3.8, 6.2);
+        ctx.closePath(); ctx.fill();
+        /* 四角星光（放在右耳外上方，别和天线头叠在一起） */
+        ctx.beginPath();
+        ctx.moveTo(15.6, -16.9); ctx.lineTo(16.5, -14.6); ctx.lineTo(18.8, -13.7);
+        ctx.lineTo(16.5, -12.8); ctx.lineTo(15.6, -10.5); ctx.lineTo(14.7, -12.8);
+        ctx.lineTo(12.4, -13.7); ctx.lineTo(14.7, -14.6);
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
       } else if (name === 'check') {
         ctx.lineWidth = 4.6;
         ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(-2, 8); ctx.lineTo(10, -8); ctx.stroke();
@@ -6714,10 +6771,13 @@
 
       if (showMul) {
         /* 用 danger 而不是 primary：全 App 的「看视频」都是橙红（提示面板、
-         * 复活弹窗），保持"红=看广告"的一致语义；也和金色的「下一关」区分开。 */
+         * 复活弹窗），保持"红=看广告"的一致语义；也和金色的「下一关」区分开。
+         * v0.59：用户要求「看视频不用汉字，改成可爱图标 + 10倍奖励」——
+         * 文案只剩「10倍奖励」，倍率仍从 ECON.coinWinAdMul 取，不写死。 */
         var bMul = { id: 'win_ad5', x: adX, y: W.primaryY + dy, w: W.adMulW, h: W.primaryH,
-          label: canAd ? ('看视频 ×' + mul) : '本关已看完',
-          variant: 'danger', size: canAd ? 22 : 20, disabled: !!state.adSim || !canAd };
+          label: canAd ? (mul + '倍奖励') : '本关已看完',
+          variant: 'danger', size: canAd ? 25 : 20, disabled: !!state.adSim || !canAd,
+          icon: 'video', iconInline: true, iconScale: 1.05 };
         if (canAd && !state.adSim) addHit(bMul.x, bMul.y, bMul.w, bMul.h, 'win_ad5');
         drawButton(bMul);
       }
@@ -7146,9 +7206,13 @@
       }
 
       var canCoin = (s.coin || 0) >= H.coinCost && !busy;
+      /* v0.59：用户要求「『花 30 巧币』和『看视频』的汉字都改成相对应的图标」——
+       * 巧币按钮左边挂金币徽章、文案只留「30 · 买 1 次」；
+       * 不足时仍要能读出差多少，所以那一种保留「巧币不足 N/30」的文字。 */
       var bCoin = { id: 'hint_coin', x: C.DESIGN.w / 2, y: y, w: 440, h: 84,
-        label: (s.coin || 0) >= H.coinCost ? ('花 ' + H.coinCost + ' 巧币 · 买 1 次') : ('巧币不足 ' + (s.coin || 0) + '/' + H.coinCost),
-        variant: (!hasItem && canCoin) ? 'primary' : 'secondary', size: 26, disabled: !canCoin };
+        label: (s.coin || 0) >= H.coinCost ? (H.coinCost + ' · 买 1 次') : ('巧币不足 ' + (s.coin || 0) + '/' + H.coinCost),
+        variant: (!hasItem && canCoin) ? 'primary' : 'secondary', size: 26, disabled: !canCoin,
+        icon: 'coin', iconInline: true, iconScale: 1.06 };
       if (canCoin) addHit(bCoin.x, bCoin.y, bCoin.w, bCoin.h, 'hint_coin');
       drawButton(bCoin);
       y += 104;
@@ -7157,13 +7221,14 @@
        * 不能让玩家点了之后只弹一句 toast —— 那样每次都要多试一次才知道没额度。 */
       var adLvOk = adLvLeft() > 0;
       var bAd = { id: 'hint_ad', x: C.DESIGN.w / 2, y: y, w: 480, h: 92,
-        label: adLvOk ? '看视频 · 免费一次' : '本关看视频次数已用完',
-        variant: 'danger', size: adLvOk ? 28 : 24, icon: 'tv',
+        label: adLvOk ? '免费一次' : '本关看视频次数已用完',
+        variant: 'danger', size: adLvOk ? 28 : 24, icon: 'video', iconInline: true, iconScale: 1.05,
         disabled: busy || !adLvOk };
       if (!busy && adLvOk) addHit(bAd.x, bAd.y, bAd.w, bAd.h, 'hint_ad');
       drawButton(bAd);
       if (adLvOk) {
-        text('本关还可看 ' + adLvLeft() + '/' + adLvLimit() + ' 次（含复活与 ×5）',
+        /* v0.59：用户要求删掉「（含复活与 ×5）」这层内部口径，只留次数 */
+        text('本关还可看 ' + adLvLeft() + '/' + adLvLimit() + ' 次',
           C.DESIGN.w / 2, y + 74, 20, COL.textSub, 'center');
         sheetClose(y + 130, 'close_hint');
       } else {

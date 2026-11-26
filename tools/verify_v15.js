@@ -305,7 +305,8 @@ async function main() {
   p.S.save.hintItems = 2;
   tx = grab(() => step(16));
   check('有道具时提示面板出现「用查找道具 · 剩 2」', /用查找道具 · 剩 2/.test(tx), tx.slice(0, 300));
-  check('仍保留看视频 / 巧币两条路', /看视频/.test(tx) && /巧币/.test(tx));
+  /* v0.59：两处汉字改图标 —— 巧币按钮「30 · 买 1 次」、视频按钮「免费一次」 */
+  check('仍保留看视频 / 巧币两条路', /免费一次/.test(tx) && /买 1 次/.test(tx));
 
   p.D.fireBtn('hint_item');
   check('用道具后数量 -1', p.S.save.hintItems === 1, 'n=' + p.S.save.hintItems);

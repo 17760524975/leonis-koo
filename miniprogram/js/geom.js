@@ -209,6 +209,58 @@
     return area(out);
   }
 
+  /* ---------- v0.59：一般简单多边形的交叠面积 ----------
+   * 上面那个 Sutherland–Hodgman 要求**裁剪窗是凸的**。四巧板的「燕尾块」(D)
+   * 是凹五边形，直接拿它当裁剪窗会把交叠算小甚至算成 0 ——
+   * 表现就是「D 明明摆对了，提示还在指 D」（slotCovered 永远 false）。
+   * 下面先耳切成三角形（三角形必凸），再两两求凸交叠求和，画面不变、结论正确。 */
+  function triCross(a, b, c) {
+    return (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+  }
+  function pointInTri(p, a, b, c) {
+    var d1 = triCross(a, b, p), d2 = triCross(b, c, p), d3 = triCross(c, a, p);
+    return d1 >= -1e-9 && d2 >= -1e-9 && d3 >= -1e-9;
+  }
+  /* 耳切三角化（输入按逆时针归一化，顶点数 ≤ 6，够用且不引入依赖） */
+  function triangulate(poly) {
+    var P = ccw(poly).map(function (v) { return [v[0], v[1]]; });
+    var out = [], guard = 0;
+    while (P.length > 3 && guard++ < 32) {
+      var clipped = false;
+      for (var i = 0; i < P.length; i++) {
+        var n = P.length;
+        var a = P[(i + n - 1) % n], b = P[i], c = P[(i + 1) % n];
+        if (triCross(a, b, c) <= 1e-9) continue;      // 凹点或共线，不是耳
+        var ok = true;
+        for (var j = 0; j < n; j++) {
+          if (j === i || j === (i + n - 1) % n || j === (i + 1) % n) continue;
+          if (pointInTri(P[j], a, b, c)) { ok = false; break; }
+        }
+        if (!ok) continue;
+        out.push([a, b, c]);
+        P.splice(i, 1);
+        clipped = true;
+        break;
+      }
+      if (!clipped) break;                            // 自交/退化：退出兜底
+    }
+    if (P.length === 3) out.push([P[0], P[1], P[2]]);
+    else if (P.length > 3) {
+      for (var k = 1; k + 1 < P.length; k++) out.push([P[0], P[k], P[k + 1]]);
+    }
+    return out;
+  }
+  /* 任意简单多边形交叠面积（凸块走快路，凹块先耳切） */
+  function overlapArea(A, B) {
+    if (!A || !B || A.length < 3 || B.length < 3) return 0;
+    if (A.length === 3 && B.length === 3) return convexOverlapArea(A, B);
+    var ta = triangulate(A), tb = triangulate(B), s = 0;
+    for (var i = 0; i < ta.length; i++) {
+      for (var j = 0; j < tb.length; j++) s += convexOverlapArea(ta[i], tb[j]);
+    }
+    return s;
+  }
+
   function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
   function easeInOutCubic(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
   function easeOutBack(t) {
@@ -223,7 +275,7 @@
     pointInPoly: pointInPoly, distPtSeg: distPtSeg, distPtPolyEdge: distPtPolyEdge,
     makeLocal: makeLocal, toWorld: toWorld, clampPoly: clampPoly,
     pointOnPoly: pointOnPoly, segCross: segCross, pieceInside: pieceInside,
-    convexOverlapArea: convexOverlapArea,
+    convexOverlapArea: convexOverlapArea, overlapArea: overlapArea, triangulate: triangulate,
     easeOutCubic: easeOutCubic, easeInOutCubic: easeInOutCubic,
     easeOutBack: easeOutBack, easeOutQuint: easeOutQuint
   };

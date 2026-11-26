@@ -189,8 +189,11 @@ function badgeTexts() {
   const tx = rec.texts.map(t => t.s);
   check('面板里没有「查找道具」按钮了', !tx.some(s => /查找道具/.test(s)),
     tx.filter(s => /查找道具/.test(s)).join('|'));
-  check('面板里有「花 30 巧币」', tx.some(s => /30 巧币/.test(s)), tx.filter(s => /巧币/.test(s)).join('|'));
-  check('面板里有「看视频」', tx.some(s => /看视频/.test(s)), tx.filter(s => /视频/.test(s)).join('|'));
+  /* v0.59：「花 30 巧币」「看视频」两处汉字改成图标，只剩数字与「买 1 次 / 免费一次」 */
+  check('面板里有「30 · 买 1 次」（金币图标 + 数字）', tx.some(s => /30 · 买 1 次/.test(s)),
+    tx.filter(s => /巧币|买 1 次/.test(s)).join('|'));
+  check('面板里有「免费一次」（视频图标 + 文案）', tx.some(s => /免费一次/.test(s)),
+    tx.filter(s => /视频|免费/.test(s)).join('|'));
   check('面板高度收了两行按钮（ch=616）', CFG.DESIGN.h / 2 - 308 + 330 > 0);
 
   /* 巧币买一次 */

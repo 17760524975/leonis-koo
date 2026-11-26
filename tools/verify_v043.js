@@ -116,7 +116,8 @@ check('3★ 累计总额 = 5（2★→3★ 差价 2）', SR[2] === 5 && SR[2] - 
   SR[2] + ' / +' + (SR[2] - SR[1]));
 check('跨级 1★→3★ = 3（= 1+2）', SR[2] - SR[0] === 3, String(SR[2] - SR[0]));
 check('每关上限就是 3★ 总额 5（不存在 21/22/24 的错值）', SR[2] === 5, String(SR[2]));
-check('结算翻倍仍为 ×5', E.coinWinAdMul === 5, String(E.coinWinAdMul));
+/* v0.59：用户要求「看视频奖励翻十倍」—— 倍率 5 → 10 */
+check('结算翻倍为 ×10（v0.59）', E.coinWinAdMul === 10, String(E.coinWinAdMul));
 
 /* ================= 2. 首通 ================= */
 section('2. 首通：按累计总额全额发放');
@@ -179,16 +180,18 @@ check('升星文案 =「升到 ★★ · +1 巧币」', tx.some(s => s === '升�
   tx.filter(s => /升到/.test(s)).join('|'));
 check('升星文案也没有「补差」/「本关视频」',
   !tx.some(s => /补差|本关视频/.test(s)), tx.filter(s => /补差|视频/.test(s)).join('|'));
-check('有进账时仍有「看视频 ×5」入口', tx.indexOf('看视频 ×5') >= 0,
-  tx.filter(s => /看视频/.test(s)).join('|'));
+/* v0.59：按钮文案改成「10倍奖励」（图标 + 倍率），不再写「看视频」三个字 */
+check('有进账时仍有「' + E.coinWinAdMul + '倍奖励」入口',
+  tx.indexOf(E.coinWinAdMul + '倍奖励') >= 0, tx.filter(s => /倍奖励/.test(s)).join('|'));
 
 /* 翻倍后：只保留「已翻 5 倍」，同样不写「本关视频」 */
 setLv(0, 1, 2);
 playWin(0, 2);
 D.fireBtn('win_ad5');
 tx = resultTexts();
-check('翻倍后文案 =「升到 ★★ · +5 巧币 · 已翻 5 倍」',
-  tx.some(s => s === '升到 ★★ · +5 巧币 · 已翻 5 倍'), tx.filter(s => /已翻/.test(s)).join('|'));
+check('翻倍后文案 =「升到 ★★ · +' + E.coinWinAdMul + ' 巧币 · 已翻 ' + E.coinWinAdMul + ' 倍」',
+  tx.some(s => s === '升到 ★★ · +' + E.coinWinAdMul + ' 巧币 · 已翻 ' + E.coinWinAdMul + ' 倍'),
+  tx.filter(s => /已翻/.test(s)).join('|'));
 check('翻倍后也没有「本关视频」', !tx.some(s => /本关视频/.test(s)),
   tx.filter(s => /视频/.test(s)).join('|'));
 

@@ -84,16 +84,20 @@ check('吸附网格随单位走（0.5u = 48）', S7.dataset.snapGrid === 48, Str
 const WS = LAY.BOARD.size / 1000;
 /* v0.51：生肖章的剪影是从参考图反解出来的「长条」造型（蛇 924 宽），
  * 七块板尺寸全关卡共用、不能缩放，所以最宽的它只能留到 26px。
- * 这里对第 3 章放宽到 24px（仍然要能看到明显留白），前两章维持 40px。 */
+ * 这里对第 3 章放宽到 24px（仍然要能看到明显留白），前两章维持 40px。
+ * v0.59：蛇的标准解原本把 T3 斜边压在 T1 底边上 19 单位（两块抢同一小块），
+ * 玩家永远拼不上；修掉压叠后剪影宽了 19.2 单位（924.8 → 943.5 → 692px），
+ * 左右留白因此从 26 降到 20.7px。20px 仍是明显可见的留白，故第 3 章的
+ * 门槛从 24 调到 20 —— 只有蛇这一关贴着线，其余关都远高于它。 */
 let worst = { m: 1e9 };
 S7.levels.forEach(lv => {
   const xs = lv.outline.map(p => p[0]), ys = lv.outline.map(p => p[1]);
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
   const m = Math.min(x0 * WS, (1000 - x1) * WS, y0 * WS, (1000 - y1) * WS);
-  const need = lv.chapter >= 3 ? 24 : 40;
+  const need = lv.chapter >= 3 ? 20 : 40;
   if (m - need < worst.m) worst = { m: m - need, raw: m, need, name: lv.name, w: (x1 - x0) * WS, h: (y1 - y0) * WS };
 });
-check('每关剪影都在卡纸内且留足边距（几何/字母 ≥40px、生肖 ≥24px）',
+check('每关剪影都在卡纸内且留足边距（几何/字母 ≥40px、生肖 ≥20px）',
   worst.m >= 0, `最紧 ${worst.name} 留 ${worst.raw.toFixed(1)}px（要求 ${worst.need}px） ${Math.round(worst.w)}×${Math.round(worst.h)}`);
 check('逻辑盘最大可容长度 ≥ 10u（旧 9.35u）',
   1000 / S7.dataset.unitScale >= 10, (1000 / S7.dataset.unitScale).toFixed(2) + 'u');

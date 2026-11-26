@@ -211,9 +211,10 @@ function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).dig
     panelTexts.filter(s2 => /来源|奖励|★★/.test(s2)).join('|'));
   check('没道具时面板不画道具按钮（v0.22 改到工具栏直用）',
     !panelTexts.some(s2 => /查找道具/.test(s2)), panelTexts.filter(s2 => /查找道具/.test(s2)).join('|'));
+  /* v0.59：「花 30 巧币 / 看视频」改成图标，文案变成「30 · 买 1 次」「免费一次」 */
   check('同时给出巧币 / 看视频两条路',
-    panelTexts.some(s2 => new RegExp(H.coinCost + ' 巧币').test(s2)) &&
-    panelTexts.some(s2 => /看视频/.test(s2)), panelTexts.slice(-4).join('|'));
+    panelTexts.some(s2 => new RegExp('^' + H.coinCost + ' · ').test(s2)) &&
+    panelTexts.some(s2 => /免费一次/.test(s2)), panelTexts.slice(-4).join('|'));
   S.toast = null;
   tapD(BTN_AD.x, BTN_AD.y);
   check('看广告 → 给下一步提示、面板关闭',

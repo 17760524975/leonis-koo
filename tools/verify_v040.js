@@ -119,7 +119,8 @@ check('逐级差价为正（升星有回报）', STEP1 > 0 && STEP2 > 0, STEP1 +
 check('跨级 = 两段逐级之和（不会比逐级少）', STEP13 === STEP1 + STEP2,
   STEP13 + ' vs ' + (STEP1 + STEP2));
 check('旧字段 coinFirst 已下线', E.coinFirst === undefined, String(E.coinFirst));
-check('结算翻倍仍为 ×5', E.coinWinAdMul === 5, String(E.coinWinAdMul));
+/* v0.59：用户要求「看视频奖励翻十倍」—— 倍率 5 → 10 */
+check('结算翻倍为 ×10（v0.59）', E.coinWinAdMul === 10, String(E.coinWinAdMul));
 check('泡泡漂浮 100 巧币', CFG.BG_FX.bubbles.price === 100, String(CFG.BG_FX.bubbles.price));
 check('萤火之森 100 巧币', CFG.BG_FX.firefly.price === 100, String(CFG.BG_FX.firefly.price));
 check('付费背景共 5 套（3×150 + 2×100）',

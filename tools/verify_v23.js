@@ -105,7 +105,8 @@ function resultTexts(S, D) {
     Array.isArray(E.starReward) && E.starReward.length === 3 &&
     E.starReward[0] < E.starReward[1] && E.starReward[1] < E.starReward[2],
     JSON.stringify(E.starReward));
-  check('结算页 ×5 倍率 = 5', E.coinWinAdMul === 5, String(E.coinWinAdMul));
+  /* v0.59：用户要求「通关后看视频奖励翻十倍」—— 倍率 5 → 10，按钮文案改「10倍奖励」 */
+  check('结算页倍率 = 10（v0.59：5 → 10）', E.coinWinAdMul === 10, String(E.coinWinAdMul));
   check('巧币复活 80（旧版 100）', E.coinRevive === 80, String(E.coinRevive));
   check('提示 30（旧版 40）', H.coinCost === 30, String(H.coinCost));
   check('复活次数上限字段已移除', E.reviveMaxPerLevel === undefined, String(E.reviveMaxPerLevel));
@@ -167,26 +168,26 @@ function resultTexts(S, D) {
   /* v0.35：奖励条后面接了「· 本关视频 N/3」，用前缀匹配，别再锁死整句 */
   check('结算页显示「首通奖励 +' + gain0 + ' 巧币」',
     tx.some(s => s.indexOf('首通奖励 +' + gain0 + ' 巧币') >= 0), tx.filter(s => /首通/.test(s)).join('|'));
-  check('结算页出现「看视频 ×5」按钮', tx.indexOf('看视频 ×5') >= 0,
-    tx.filter(s => /看视频/.test(s)).join('|'));
+  check('结算页出现「' + E.coinWinAdMul + '倍奖励」按钮（图标 + 文案）',
+    tx.indexOf(E.coinWinAdMul + '倍奖励') >= 0, tx.filter(s => /倍奖励/.test(s)).join('|'));
   check('翻倍前没有「已领」标', !tx.some(s => /已领/.test(s)), tx.filter(s => /已领/.test(s)).join('|'));
 
   const cBeforeAd = S.save.coin;
   D.fireBtn('win_ad5');
   check('广告回调 kind=coin5', adLog.rewarded.indexOf('coin5') >= 0, adLog.rewarded.join(','));
-  check('×5 → 补发 4 倍差额（+' + (gain0 * 4) + '）',
+  check('×' + E.coinWinAdMul + ' → 补发 ' + (E.coinWinAdMul - 1) + ' 倍差额（+' + (gain0 * (E.coinWinAdMul - 1)) + '）',
     S.save.coin - cBeforeAd === gain0 * (E.coinWinAdMul - 1),
     `+${S.save.coin - cBeforeAd}`);
-  check('总到账 = 首通 ×5', S.save.coin - cWin === gain0 * E.coinWinAdMul,
+  check('总到账 = 首通 ×' + E.coinWinAdMul, S.save.coin - cWin === gain0 * E.coinWinAdMul,
     `+${S.save.coin - cWin} / want ${gain0 * E.coinWinAdMul}`);
   check('result.adUsed 被锁住', S.result.adUsed === true, String(S.result.adUsed));
 
   tx = resultTexts(S, D);
-  check('翻倍后文案变成「首通奖励 +' + (gain0 * 5) + ' 巧币」',
-    tx.some(s => s.indexOf('首通奖励 +' + gain0 * 5 + ' 巧币') >= 0),
+  check('翻倍后文案变成「首通奖励 +' + (gain0 * E.coinWinAdMul) + ' 巧币」',
+    tx.some(s => s.indexOf('首通奖励 +' + gain0 * E.coinWinAdMul + ' 巧币') >= 0),
     tx.filter(s => /首通/.test(s)).join('|'));
-  check('翻倍后按钮消失、文案改「已翻 5 倍」',
-    tx.indexOf('看视频 ×5') < 0 && tx.some(s => /已翻 5 倍/.test(s)),
+  check('翻倍后按钮消失、文案改「已翻 ' + E.coinWinAdMul + ' 倍」',
+    tx.indexOf(E.coinWinAdMul + '倍奖励') < 0 && tx.some(s => new RegExp('已翻 ' + E.coinWinAdMul + ' 倍').test(s)),
     tx.filter(s => /已翻|看视频/.test(s)).join('|'));
 
   const cAgain = S.save.coin;
@@ -210,7 +211,7 @@ function resultTexts(S, D) {
   /* v0.40：文案改成「已通过 · 星级未提升，无奖励」（升星补差也有进账，不能一律说无奖励） */
   check('文案写「已通过 · 星级未提升，无奖励」',
     tx.some(s => s.indexOf('已通过 · 星级未提升') >= 0), tx.filter(s => /已通过/.test(s)).join('|'));
-  check('重复通关没有「看视频 ×5」按钮', tx.indexOf('看视频 ×5') < 0,
+  check('重复通关没有「看视频」按钮', tx.indexOf(E.coinWinAdMul + '倍奖励') < 0,
     tx.filter(s => /看视频/.test(s)).join('|'));
 
   /* ================= 6. 广告复活：不给币、不限次 ================= */

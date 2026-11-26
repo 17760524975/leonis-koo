@@ -204,8 +204,9 @@ function profile(file) {
     !tx.some(s => /最高 ★★|★★/.test(s)), tx.filter(s => /★/.test(s)).join('|'));
   check('不再显示巧币 / 道具余量小字（按钮里已经有）',
     !tx.some(s => /^巧币 \d+ · /.test(s)), tx.filter(s => /^巧币/.test(s)).join('|'));
+  /* v0.59：巧币 / 看视频改成图标，文案变成「30 · 买 1 次」「免费一次」 */
   check('没道具时面板只剩两条付费路径：巧币 / 视频',
-    tx.some(s => new RegExp(CFG.HINT.coinCost + ' 巧币').test(s)) && tx.some(s => /看视频/.test(s)),
+    tx.some(s => new RegExp('^' + CFG.HINT.coinCost + ' · ').test(s)) && tx.some(s => /免费一次/.test(s)),
     tx.slice(-4).join('|'));
   check('面板里不再有禁用的道具按钮（v0.22 改成工具栏直用）',
     !tx.some(s => /查找道具/.test(s)), tx.filter(s => /查找道具/.test(s)).join('|'));

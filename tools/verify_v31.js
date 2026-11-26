@@ -4,7 +4,7 @@
  * 这一版改的都是"看得见、但单测容易漏"的东西：
  *   ① 细长屏（vivo X200s 1260×2800）上下留白 —— 用尺寸模拟验算，不靠肉眼；
  *   ② 皮肤/背景/板件/音效风格是否真的跨数据集共享（以前的锅是两套存档各存一份）；
- *   ③ 每关 120 秒，且旧存档的 240 秒快照要被夹住；
+ *   ③ 每关统一时限，且旧存档的超长快照要被夹住；（v0.59 起 120 → 150 秒）
  *   ④ 免费体力只剩"看视频"，一次 +20；
  *   ⑤ 新音效素材存在、两包一致、采样率/时长合理。
  */
@@ -152,27 +152,30 @@ check('深色背景自动叠暗色调色板（星夜）',
 D.applyBgFx('geometric');
 D.applySkin('warm'); D.applyPieceStyle('classic'); D.applySfxStyle('wood');
 
-/* ================= 3. 每关 2 分钟 ================= */
-console.log('\n==== 3. 倒计时统一 120 秒 ====');
-check('TIMER.fixedSec = 120', CFG.TIMER.fixedSec === 120, String(CFG.TIMER.fixedSec));
+/* ================= 3. 每关统一时限 ================= */
+/* v0.59：用户要求倒计时 2 分钟 → 2 分 30 秒，这里改成读配置而不是写死 120，
+ * 以后调时限只改 TIMER.fixedSec，别再动断言。 */
+const FIXED = CFG.TIMER.fixedSec;
+console.log('\n==== 3. 倒计时统一 ' + FIXED + ' 秒 ====');
+check('TIMER.fixedSec = 150（v0.59）', FIXED === 150, String(FIXED));
 let allSame = true, seen = {};
 ['tangram4', 'tangram7'].forEach(k => {
   D.useSet(k); step(16);
   D.LEVELS.forEach(lv => {
     const t = D.timeLimitOf(lv);
     seen[k + ':' + lv.id] = t;
-    if (t !== 120) allSame = false;
+    if (t !== FIXED) allSame = false;
   });
 });
-check('两套数据集全部关卡都是 120 秒', allSame,
+check('两套数据集全部关卡都是 ' + FIXED + ' 秒', allSame,
   Object.keys(seen).length + ' 关，取值 ' + Array.from(new Set(Object.values(seen))).join('/'));
 
-/* 旧存档快照：tl=240 / left=239，进入时必须被夹到 120 */
+/* 旧存档快照：tl=600 / left=599，进入时必须被夹到当前时限 */
 D.useSet('tangram4'); step(16);
-D.openLevel(1, { resume: { lv: 1, tl: 240, left: 239, el: 20, st: 3, rv: 0, pc: [], at: Date.now() } });
+D.openLevel(1, { resume: { lv: 1, tl: 600, left: 599, el: 20, st: 3, rv: 0, pc: [], at: Date.now() } });
 step(16);
-check('旧快照的 240 秒被夹到 120，剩余时间不会白拿',
-  S.timeLimit === 120 && S.timeLeft <= 120,
+check('旧快照的 600 秒被夹到 ' + FIXED + '，剩余时间不会白拿',
+  S.timeLimit === FIXED && S.timeLeft <= FIXED,
   `limit=${S.timeLimit} left=${(S.timeLeft || 0).toFixed(1)}`);
 S.page = 'home'; S.overlay = null; S.resume = null;
 

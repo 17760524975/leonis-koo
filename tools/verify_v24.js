@@ -169,7 +169,9 @@ function hit(hits, id) { return hits.find(h => h.id === id); }
   check('翻倍后主按钮居中（x 中心 = 375）',
     hNext2 && Math.abs(hNext2.x + hNext2.w / 2 - DW / 2) < 0.6,
     hNext2 ? String(hNext2.x + hNext2.w / 2) : '-');
-  check('翻倍后文案写「已翻 5 倍」', f.tx.some(t => /已翻 5 倍/.test(t)),
+  /* v0.59：倍率 5 → 10，文案跟着配置走 */
+  check('翻倍后文案写「已翻 ' + CFG.ECON.coinWinAdMul + ' 倍」',
+    f.tx.some(t => new RegExp('已翻 ' + CFG.ECON.coinWinAdMul + ' 倍').test(t)),
     f.tx.filter(t => /已翻/.test(t)).join('|'));
 
   S.save.starOf['1'] = 3;

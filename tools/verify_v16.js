@@ -211,8 +211,9 @@ function placeAllSolved(game) {
     S.overlay === 'hint' && S.hintLv === 0 && !S.hint,
     `overlay=${S.overlay} lv=${S.hintLv} hint=${!!S.hint}`);
   /* v0.22：道具这条路挪到工具栏（一点直用），面板只留巧币 / 视频 */
+  /* v0.59：巧币 / 看视频改成图标，文案变成「30 · 买 1 次」「免费一次」 */
   check('没道具时面板只剩巧币 / 视频两条路',
-    /30 巧币/.test(panelTx) && /看视频/.test(panelTx), panelTx.slice(0, 260));
+    /30 · 买 1 次/.test(panelTx) && /免费一次/.test(panelTx), panelTx.slice(0, 260));
   check('没道具时面板不画道具按钮', !/查找道具/.test(panelTx), panelTx.slice(0, 200));
   /* v0.20：来源那行小字已删（需求：截图中这里的提示删除掉） */
   check('面板不再写道具来源（v0.20 删除）',
