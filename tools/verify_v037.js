@@ -185,7 +185,7 @@ check('其它图标分支未被改动（rotL/rotR/flip/restart 仍在）',
   /\} else if \(name === 'restart'\)/.test(coreSrc), 'other branches intact');
 
 /* ================= 6. 三端同步 ================= */
-section('6. js/ → preview/js/ 与 miniprogram/js/ 逐字节一致');
+section('6. js/ → preview/js/ 与 miniprogram/js/ 语义一致（v0.62 起产物去注释/缩进）');
 const pairs = [
   ['js/core.js', 'preview/js/core.js'],
   ['js/core.js', 'miniprogram/js/core.js'],
@@ -194,8 +194,9 @@ const pairs = [
 ];
 pairs.forEach(pr => {
   const a = path.join(ROOT, pr[0]), b = path.join(ROOT, pr[1]);
-  const ok = fs.existsSync(b) && fs.readFileSync(a).equals(fs.readFileSync(b));
-  check(`${pr[0]} ≡ ${pr[1]}（逐字节）`, ok,
+  const sem = p => require('./lib/pack.js').strip(fs.readFileSync(p, 'utf8'));
+  const ok = fs.existsSync(b) && sem(a) === sem(b);
+  check(`${pr[0]} ≡ ${pr[1]}（语义）`, ok,
     fs.existsSync(b) ? `${fs.statSync(b).size} bytes` : 'missing');
 });
 

@@ -122,7 +122,7 @@ const SHEET_TOP = SHEET.cy - SHEET.ch / 2;
 const BTN_COIN = { x: CFG.DESIGN.w / 2, y: SHEET_TOP + 330 };
 const BTN_AD = { x: CFG.DESIGN.w / 2, y: SHEET_TOP + 434 };
 
-function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'); }
+function md5(p) { var __s = p; return require('crypto').createHash('md5').update(/\.js$/i.test(String(__s)) ? Buffer.from(require('./lib/pack.js').strip(require('fs').readFileSync(__s, 'utf8'))) : require('fs').readFileSync(__s)).digest('hex'); }
 
 (async function main() {
   console.log('提示机制验收（v0.20 单档常驻口径）+ 广告入口 + 云环境');

@@ -249,8 +249,9 @@ const cfgSrc = fs.readFileSync(path.join(ROOT, 'js/config.js'), 'utf8');
 check('配置注释标明 v0.36 全局化口径', /v0\.36 全局化[\s\S]{0,200}tangram_online_v1/.test(cfgSrc));
 ['preview/js/core.js', 'miniprogram/js/core.js', 'preview/js/config.js', 'miniprogram/js/config.js'].forEach(f => {
   const base = f.indexOf('config.js') >= 0 ? 'js/config.js' : 'js/core.js';
-  check('三端一致：' + f,
-    fs.readFileSync(path.join(ROOT, f), 'utf8') === fs.readFileSync(path.join(ROOT, base), 'utf8'));
+  /* v0.62：preview/miniprogram 写的是打包产物（去注释/缩进），比语义而不是字节 */
+  const sem = p => require('./lib/pack.js').strip(fs.readFileSync(path.join(ROOT, p), 'utf8'));
+  check('语义一致：' + f, sem(f) === sem(base));
 });
 
 console.log('\n' + (fail === 0 ? 'v0.36 验收全部通过' : `!! ${fail} 项未通过`));

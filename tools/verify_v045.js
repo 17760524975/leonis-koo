@@ -132,7 +132,9 @@ check('36 关全部覆盖率 ≥ 0.99（引擎通关线）', badLevels.length ==
 
 /* ---------- G. 三端一致 ---------- */
 section('G. 三端一致');
-const h = f => crypto.createHash('sha1').update(fs.readFileSync(f)).digest('hex').slice(0, 12);
+/* v0.62：产物是去注释/缩进版，先归一化再哈希（语义一致即可） */
+const h = f => crypto.createHash('sha1')
+  .update(require('./lib/pack.js').strip(fs.readFileSync(f, 'utf8'))).digest('hex').slice(0, 12);
 const h0 = h(path.join(ROOT, 'js', 'levels.js'));
 for (const pkg of ['preview', 'miniprogram']) {
   const p = path.join(ROOT, pkg, 'js', 'levels.js');

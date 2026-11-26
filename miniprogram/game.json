@@ -5,5 +5,11 @@
     "request": 10000,
     "downloadFile": 10000
   },
-  "openDataContext": "openDataContext"
+  "openDataContext": "openDataContext",
+  "subpackages": [
+    {
+      "name": "audio",
+      "root": "audio-pkg/"
+    }
+  ]
 }

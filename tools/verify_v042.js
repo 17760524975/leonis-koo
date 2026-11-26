@@ -228,7 +228,7 @@ D.applySkin('warm');
 
 /* ================= 8. 三端一致 / 包体 ================= */
 section('8. 三端同步与包体积');
-const md5 = p => crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex');
+function md5(p) { var __s = p; return require('crypto').createHash('md5').update(/\.js$/i.test(String(__s)) ? Buffer.from(require('./lib/pack.js').strip(require('fs').readFileSync(__s, 'utf8'))) : require('fs').readFileSync(__s)).digest('hex'); }
 ['config.js', 'core.js'].forEach(function (f) {
   const a1 = md5(path.join(ROOT, 'js', f));
   const p1 = md5(path.join(ROOT, 'preview/js', f));

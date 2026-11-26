@@ -204,7 +204,7 @@ check('三个数字两两不互相压（胶囊在左、倒计时在中）',
 
 /* ================= D. 三端一致 ================= */
 section('D. 三端代码一致');
-const md5 = p => crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex');
+function md5(p) { var __s = p; return require('crypto').createHash('md5').update(/\.js$/i.test(String(__s)) ? Buffer.from(require('./lib/pack.js').strip(require('fs').readFileSync(__s, 'utf8'))) : require('fs').readFileSync(__s)).digest('hex'); }
 const h0 = md5(path.join(ROOT, 'js/core.js'));
 const h0c = md5(path.join(ROOT, 'js/config.js'));
 check('preview/js 与主包一致',

@@ -372,7 +372,7 @@ async function main() {
 
   /* ================= 5. md5 与包体 ================= */
   section('5. 三端一致与包体');
-  const md5 = p => crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex');
+  function md5(p) { var __s = p; return require('crypto').createHash('md5').update(/\.js$/i.test(String(__s)) ? Buffer.from(require('./lib/pack.js').strip(require('fs').readFileSync(__s, 'utf8'))) : require('fs').readFileSync(__s)).digest('hex'); }
   for (const f of ['config', 'core', 'judge', 'geom', 'levels']) {
     const a = md5(path.join(ROOT, 'js', f + '.js'));
     check(`${f}.js 三端一致`,

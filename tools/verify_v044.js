@@ -178,7 +178,11 @@ check('26 关 splitLines ≥ 2', okS, '最少 ' + minS + ' 条');
 
 console.log('\n==== G. 三端一致 / 包体 ====');
 {
-  function h(p) { return crypto.createHash('sha1').update(fs.readFileSync(p)).digest('hex').slice(0, 8); }
+  /* v0.62：产物是去注释/缩进版，先归一化再哈希 */
+  function h(p) {
+    return crypto.createHash('sha1')
+      .update(require('./lib/pack.js').strip(fs.readFileSync(p, 'utf8'))).digest('hex').slice(0, 8);
+  }
   const a = h(path.join(ROOT, 'js', 'levels.js'));
   const b = h(path.join(ROOT, 'miniprogram', 'js', 'levels.js'));
   const c = h(path.join(ROOT, 'preview', 'js', 'levels.js'));

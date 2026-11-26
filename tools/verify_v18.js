@@ -378,9 +378,10 @@ store[CFG.SAVE_KEY] = JSON.stringify({
   /* ================= 9. 三端一致 ================= */
   section('9. 三端模块一致');
   for (const m of ['config', 'core']) {
-    const a = crypto.createHash('md5').update(fs.readFileSync(path.join(ROOT, `js/${m}.js`))).digest('hex');
-    const b = crypto.createHash('md5').update(fs.readFileSync(path.join(ROOT, `preview/js/${m}.js`))).digest('hex');
-    const c = crypto.createHash('md5').update(fs.readFileSync(path.join(ROOT, `miniprogram/js/${m}.js`))).digest('hex');
+    const __mp = f => fs.existsSync(f) ? require('./lib/pack.js').strip(fs.readFileSync(f, 'utf8')) : '';
+    const a = crypto.createHash('md5').update(__mp(path.join(ROOT, `js/${m}.js`))).digest('hex');
+    const b = crypto.createHash('md5').update(__mp(path.join(ROOT, `preview/js/${m}.js`))).digest('hex');
+    const c = crypto.createHash('md5').update(__mp(path.join(ROOT, `miniprogram/js/${m}.js`))).digest('hex');
     check(m + '.js 三端一致', a === b && b === c, a.slice(0, 8));
   }
 

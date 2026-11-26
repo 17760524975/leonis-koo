@@ -9,7 +9,7 @@
   'use strict';
 
   return {
-    version: 'v0.60',
+    version: 'v0.62',
 
     /* ---------- 品牌（v0.6 改名「方寸巧拼」） ----------
      * 游戏名只在这里定义一次：主页标题、分享文案、工程名都从这里取，
@@ -1052,7 +1052,11 @@
      * 音效仍是 wav（MP3 固定 25ms 编码延迟，手感可感知）。 */
     AUDIO: {
       enabled: true,
+      /* 主包内只剩 5 个短音效（约 85KB）；4 首关卡 BGM 已迁到分包 audio-pkg/。
+       * 分包目录下必须有 game.js 入口（小游戏硬性校验），加载失败就走静音降级。 */
       base: './assets/audio/',
+      bgmPkg: 'audio-pkg/assets/audio/',
+      subpackage: 'audio',
       files: {
         sfx_pick: 'sfx_pick.wav',
         sfx_snap: 'sfx_snap.wav',

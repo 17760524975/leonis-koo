@@ -43,6 +43,7 @@ function makeCtx() {
 
 const storage = {};
 const players = [];
+const SUBPKG = [];          // v0.62：loadSubpackage 的调用记录
 function mkPlayer() {
   const a = {
     src: '', loop: false, volume: 1, playbackRate: 1, obeyMuteSwitch: true, paused: true,
@@ -125,6 +126,14 @@ const wx = {
     });
     return img;
   },
+  /* v0.62：BGM 在 audio-pkg 分包里。这里给一个「成功」的桩：
+   * 关键是要验证 loadSubpackage 之前**不建 InnerAudioContext**，
+   * 成功之后才预载 4 首（src 必须带 audio-pkg/ 前缀）。 */
+  loadSubpackage: opt => {
+    SUBPKG.push(opt);
+    setImmediate(() => { if (opt && opt.success) opt.success({ errMsg: 'loadSubpackage:ok' }); });
+    return { onProgressUpdate() {} };
+  },
   getFileSystemManager: () => ({ readFileSync() { throw new Error('no fs'); }, statSync() {} }),
   onTouchStart() {}, onTouchMove() {}, onTouchEnd() {}, onTouchCancel() {},
   onHide() {}, onShow() {}, offHide() {}, offShow() {},
@@ -163,6 +172,12 @@ setImmediate(async function () {
   /* v0.14.1：预载挪到解锁后 120ms（不再堵住点击那一拍），所以这里等一下 */
   await sleep(200);
   check('4 首关卡曲在解锁后预载完成', audio.bgmInfo().ctxs === 4, 'ctxs=' + audio.bgmInfo().ctxs);
+  /* v0.62：分包闸门 —— 解锁时先拉 audio-pkg，成功后才建实例，路径必须指向分包 */
+  check('解锁触发了音频分包加载（1 次）', SUBPKG.length === 1, 'calls=' + SUBPKG.length);
+  check('分包名 / 路径正确', SUBPKG[0] && SUBPKG[0].name === 'audio', SUBPKG[0] && SUBPKG[0].name);
+  check('4 首关卡曲的 src 都在 audio-pkg/assets/audio/ 下',
+    players.length >= 4 && players.every(p => /^audio-pkg\/assets\/audio\/bgm_lv\d\.mp3$/.test(p.src)),
+    players.slice(0, 4).map(p => p.src).join(' | '));
   check('预载不留声（没有 mp3 在播）', audio.bgmInfo().playing === 0, 'playing=' + audio.bgmInfo().playing);
   check('解锁当拍只做「出声」（不阻塞点击）', i1.ctxs === 0 && i1.home === true,
     'instant ctxs=' + i1.ctxs + ' home=' + i1.home);
@@ -239,9 +254,12 @@ setImmediate(async function () {
   check('回前台恢复', audio.bgmInfo().playing === 1 || audio.bgmInfo().home === true,
     'playing=' + audio.bgmInfo().playing + ' home=' + audio.bgmInfo().home);
 
-  console.log('\n== 6. 四首关卡曲资源齐（主页已不用文件） ==');
+  console.log('\n== 6. 四首关卡曲资源齐（v0.62：都在 audio-pkg 分包里） ==');
+  /* 主包不能再有 mp3 —— 有就说明分包没生效，包体又回到 3.2MB */
+  const mainPkgLv = CFG.AUDIO.bgm.lv.filter(f => fs.existsSync(path.join(ROOT, 'miniprogram', 'assets/audio', f)));
+  check('主包内不再残留关卡曲', mainPkgLv.length === 0, mainPkgLv.join(',') || 'none');
   for (const f of CFG.AUDIO.bgm.lv) {
-    const fp = path.join(ROOT, 'miniprogram', 'assets/audio', f);
+    const fp = path.join(ROOT, 'miniprogram', 'audio-pkg', 'assets/audio', f);
     check(f, fs.existsSync(fp) && fs.statSync(fp).size > 100 * 1024,
       fs.existsSync(fp) ? Math.round(fs.statSync(fp).size / 1024) + 'KB' : '缺失');
   }

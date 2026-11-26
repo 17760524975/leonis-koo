@@ -341,7 +341,7 @@ async function main() {
   check('在线时长不进云端覆盖（mergeSave 保留本地）',
     /out\.onlineDay = a\.onlineDay/.test(coreSrc) && /out\.onlineSec = a\.onlineSec/.test(coreSrc));
 
-  const md5 = f => crypto.createHash('md5').update(fs.readFileSync(f)).digest('hex');
+  function md5(f) { var __s = f; return require('crypto').createHash('md5').update(/\.js$/i.test(String(__s)) ? Buffer.from(require('./lib/pack.js').strip(require('fs').readFileSync(__s, 'utf8'))) : require('fs').readFileSync(__s)).digest('hex'); }
   for (const f of ['config', 'core', 'judge', 'geom', 'levels']) {
     const a = md5(path.join(ROOT, 'js', f + '.js'));
     check(`${f}.js 三端一致`,

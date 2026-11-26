@@ -132,7 +132,7 @@ function hintByItem() {
   D.fireBtn('hint');
   D.fireBtn('hint_item');
 }
-function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'); }
+function md5(p) { var __s = p; return require('crypto').createHash('md5').update(/\.js$/i.test(String(__s)) ? Buffer.from(require('./lib/pack.js').strip(require('fs').readFileSync(__s, 'utf8'))) : require('fs').readFileSync(__s)).digest('hex'); }
 function walkSize(dir) {
   /* 微信主包 = miniprogram 根 - cloudfunctionRoot；云函数的 node_modules
    * 既不进包体也不该入库（部署时云端安装依赖），这里一并跳过。
@@ -179,7 +179,8 @@ check('换曲只发生在进关/回主页', (coreSrc.match(/setScene\(/g) || [])
   'setScene 调用 ' + (coreSrc.match(/setScene\(/g) || []).length + ' 处');
 
 section('3. mp3 资源与包体');
-const assets = ['preview/assets/audio', 'miniprogram/assets/audio'];
+/* v0.62：miniprogram 的 4 首关卡曲搬进了 audio-pkg 分包（主包只留短音效） */
+const assets = ['preview/assets/audio', 'miniprogram/audio-pkg/assets/audio'];
 for (const dir of assets) {
   const d = path.join(ROOT, dir);
   /* v0.12：主页换成合成和弦，assets 里只留 4 首关卡曲 */
@@ -194,8 +195,10 @@ for (const dir of assets) {
 }
 const pkg = walkSize(path.join(ROOT, 'miniprogram'));
 check('小游戏主包 < 4MB（微信硬限制）', pkg < 4 * 1024 * 1024, (pkg / 1024 / 1024).toFixed(2) + 'MB');
-check('配置里的关卡曲名与文件一致',
-  CFG.AUDIO.bgm.lv.every(f => fs.existsSync(path.join(ROOT, 'miniprogram/assets/audio', f))));
+check('配置里的关卡曲名与分包文件一致',
+  CFG.AUDIO.bgm.lv.every(f => fs.existsSync(path.join(ROOT, 'miniprogram/audio-pkg/assets/audio', f))));
+check('主包 assets/audio 里没有残留关卡曲（否则分包白做）',
+  CFG.AUDIO.bgm.lv.every(f => !fs.existsSync(path.join(ROOT, 'miniprogram/assets/audio', f))));
 check('主页不再引用任何音频文件', CFG.AUDIO.bgm.home === '', "'" + CFG.AUDIO.bgm.home + "'");
 
 section('4. 提示选块：先挑没上板的，再挑上板没放对的');

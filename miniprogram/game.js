@@ -34,9 +34,29 @@ function viewportSize() {
   var i = sysInfo();
   return { w: i.windowWidth || 375, h: i.windowHeight || 667 };
 }
+/* v0.62：设备档位（官方《运行性能》的「机型适配」）——
+ * benchmarkLevel 在 Android 上由微信给出（10 以下低端 / 20 以上高端），iOS 拿不到就按高端算。
+ * 真机实测：Canvas 2D 的成本几乎全在填充率，而全屏填充 ∝ dpr²，
+ * 所以档位第一件事就是压 dpr 上限，第二件事才是关阴影 / 减粒子。 */
+var _devTier = -1;
+function deviceInfo() {
+  try {
+    if (wx.getDeviceInfo) return wx.getDeviceInfo() || {};
+    return wx.getSystemInfoSync() || {};
+  } catch (e) { return {}; }
+}
+function deviceTier() {
+  if (_devTier >= 0) return _devTier;
+  var bl = deviceInfo().benchmarkLevel;
+  _devTier = (typeof bl === 'number' && bl > 0) ? (bl < 10 ? 0 : bl < 20 ? 1 : 2) : 2;
+  return _devTier;
+}
 function dpr() {
   var i = sysInfo();
-  return Math.min(i.pixelRatio || 1, 3);
+  var pr = i.pixelRatio || 1;
+  /* 3 → 2.5 省 31% 填充，3 → 2 省 56%；纯色矢量的观感差别远小于这笔收益 */
+  var cap = deviceTier() >= 2 ? 2.5 : (deviceTier() === 1 ? 2 : 1.75);
+  return Math.min(pr, cap);
 }
 function safeInsets() {
   var i = sysInfo();
@@ -629,8 +649,53 @@ function homeStop(soft) {
 
 /* ---------------- 关卡 mp3：每首一个 InnerAudioContext，解锁时建好预载 ----------------
  * 切曲 = 暂停旧的 + 播新的，同步完成；实例在解锁时就建好并设 src，
- * 平台据此开始缓冲，真正播的时候不用再等解码。 */
+ * 平台据此开始缓冲，真正播的时候不用再等解码。
+ * v0.62：4 首 mp3 搬进分包 audio-pkg/，上面这套逻辑不变，只在「拿路径」处加一道闸门。
+ */
 var BGM_CTX = {}, curCtx = null, bgmScene = 'home', bgmFileNow = '';
+
+/* v0.62 音频分包闸门 —— BGM 占旧主包 2.0MB / 63%，是「关卡扩不动」的真正原因。
+ * 现在主包只装短音效，mp3 全部在 audio-pkg/ 里按需下载：
+ *   · 首次触摸就 wx.preDownloadSubpackage 预取（玩家在主页点两下再进关，基本已就绪）；
+ *   · 真正要放关卡曲时若还没好，先让主页合成曲继续响，就绪后由 done() 补播，中间不静默；
+ *   · 失败 = 永久静音降级（主页仍有合成轻音乐），绝不影响玩法；
+ *   · 失败 60s 后允许重试一次，网络恢复的用户不用重启小程序。
+ * 注意：分包没就绪时**不能**建 InnerAudioContext —— src 指向分包内路径，
+ * 此时加载必然失败，还会把「错误」缓存进实例里。 */
+var PKG = { state: 0, cbs: [], failAt: 0, task: null };   // 0 未开始 / 1 加载中 / 2 就绪 / 3 失败
+function bgmPkgName() { return (CONFIG.AUDIO && CONFIG.AUDIO.subpackage) || 'audio'; }
+function loadBgmPkg(cb) {
+  if (cb) {
+    if (PKG.state === 2) { cb(true); return; }
+    if (PKG.state === 3 && (Date.now() - PKG.failAt) < 60000) { cb(false); return; }
+    PKG.cbs.push(cb);
+  }
+  if (PKG.state === 1 || PKG.state === 2) return;
+  if (PKG.state === 3) { PKG.state = 0; PKG.failAt = 0; }   // 超时重试
+  PKG.state = 1;
+  var done = function (ok) {
+    PKG.state = ok ? 2 : 3;
+    if (!ok) PKG.failAt = Date.now();
+    var list = PKG.cbs; PKG.cbs = [];
+    for (var i = 0; i < list.length; i++) { try { list[i](ok); } catch (e) {} }
+    if (ok) {
+      /* 就绪后才允许建实例 + 预载；如果玩家已经在关卡里等着听，立刻补播 */
+      bgmPreloaded = false;
+      preloadBgm();
+      if (unlocked && enabled.bgm && bgmScene !== 'home') bgmPlay(bgmScene);
+    }
+  };
+  if (!wx.loadSubpackage) { done(false); return; }
+  try {
+    PKG.task = wx.loadSubpackage({
+      name: bgmPkgName(),
+      success: function () { PKG.task = null; done(true); },
+      fail: function () { PKG.task = null; done(false); }
+    });
+  } catch (e) { done(false); }
+}
+/* 三个触发点：首次触摸（预取）、进关卡（必须）、设置里重新打开音乐 */
+function bgmPkgReady() { return PKG.state === 2; }
 
 function bgmFile(key) {
   var m = (CONFIG.AUDIO && CONFIG.AUDIO.bgm) || {};
@@ -641,10 +706,12 @@ function bgmFile(key) {
   return arr[((isFinite(i) && i > 0 ? i - 1 : 0) % arr.length)];
 }
 function bgmPath(file) {
-  return (CONFIG.AUDIO.base + file).replace(/^\.\//, '');
+  var base = (CONFIG.AUDIO.bgmPkg || CONFIG.AUDIO.base || '') + file;
+  return base.replace(/^\.\//, '');
 }
 function ctxFor(file) {
   if (BGM_CTX[file]) return BGM_CTX[file];
+  if (!bgmPkgReady()) return null;              // v0.62：分包未就绪不建实例
   var a = null;
   try {
     a = wx.createInnerAudioContext();
@@ -677,6 +744,8 @@ function ctxFor(file) {
  * 不需要真的出声去"暖机"；真正该响的时候由 startCtx 的 300ms 看门狗兜底。 */
 var bgmPreloaded = false;
 function preloadBgm() {
+  /* v0.62：分包没好就只排队，不能提前建实例（src 指向分包路径，必失败） */
+  if (!bgmPkgReady()) { loadBgmPkg(); return; }
   if (bgmPreloaded) return;
   bgmPreloaded = true;
   var lv = (CONFIG.AUDIO.bgm && CONFIG.AUDIO.bgm.lv) || [];
@@ -719,6 +788,9 @@ function bgmPlay(key) {
     homeStart();
     return;
   }
+  /* v0.62：分包还没就绪 —— 先让主页合成曲继续响着，别提前把音乐掐成静音。
+   * 分包成功回调里会再调一次 bgmPlay(bgmScene) 补播。 */
+  if (!bgmPkgReady()) { loadBgmPkg(); return; }
   homeStop(true);                               // 进关卡：主页曲淡出 150ms 让位给 mp3
   var a = ctxFor(file);
   if (!a) return;
@@ -947,6 +1019,22 @@ function bindInput(fn) {
   wx.onTouchCancel(function () { active = false; emit('cancel', 0, 0); });
 }
 
+/* v0.62：首次触摸就把 BGM 分包静默预取。
+ * 玩家在主网点一下（任何一下）→ 开始下载 2MB；等他真的进关卡时通常已就绪，
+ * 既不给首屏增加冷启动负担，也不会出现「进关半天没音乐」。
+ * 关掉了音乐设置的人不下 —— 省流量。 */
+var pkgKicked = false;
+function kickBgmPkg() {
+  if (pkgKicked) return;
+  pkgKicked = true;
+  if (!enabled.bgm) return;
+  loadBgmPkg();
+}
+try {
+  wx.onTouchStart(kickBgmPkg);
+  if (wx.onShow) wx.onShow(function () { if (unlocked && enabled.bgm) loadBgmPkg(); });
+} catch (e) {}
+
 /* ---------------- 启动 ---------------- */
 function boot() {
   var game = core({
@@ -955,6 +1043,10 @@ function boot() {
     dpr: dpr,
     safeInsets: safeInsets,
     bindInput: bindInput,
+    /* v0.62 性能三件套：设备档位、帧率上限、GC 提示 */
+    device: function () { return { tier: deviceTier(), benchmarkLevel: deviceInfo().benchmarkLevel }; },
+    setFps: function (n) { try { if (wx.setPreferredFramesPerSecond) wx.setPreferredFramesPerSecond(n); } catch (e) {} },
+    gc: function () { try { if (wx.triggerGC) wx.triggerGC(); } catch (e) {} },
     storage: storage,
     audio: audio,
     vibrate: vibrate,
@@ -991,6 +1083,16 @@ function boot() {
   });
   game.init();
   globalThis.__game = game;
+  /* v0.62：官方《垃圾回收》—— 内存告警时先丢缓存（渐变/测宽/粒子），再请系统 GC。
+   * 贴图与存档不动：丢图片会让首页闪白，存档丢了更不可接受。 */
+  try {
+    if (wx.onMemoryWarning) {
+      wx.onMemoryWarning(function () {
+        try { game.trimMemory(); } catch (e) {}
+        try { if (wx.triggerGC) wx.triggerGC(); } catch (e) {}
+      });
+    }
+  } catch (e) {}
 }
 
 loadArt(boot);

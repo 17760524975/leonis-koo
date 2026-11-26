@@ -749,6 +749,7 @@
       writeOnline(state.save);
     }
     function persist() {
+      state.dirty = true;            // v0.62：数值变了，静态浮层也要立刻重画
       writeLocal();
       cloudPush(false);
     }
@@ -809,6 +810,7 @@
       if (p.auth !== undefined && !!p.auth !== !!state.me.auth) { state.me.auth = !!p.auth; changed = true; }
       state.net.nick = meNick();
       if (!changed) return false;                       // 值没变就别写盘，免得每帧刷 storage
+      state.dirty = true;            // v0.62：昵称/头像变了（异步到达），下一帧必须重画
       state.save.profile = { nick: meNick(), avatar: meAvatarUrl(), src: state.me.src, auth: !!state.me.auth };
       if (push === false) return true;                  // 纯内存
       if (push === 'local') writeLocal();
@@ -1113,6 +1115,7 @@
         }
         var data = res || { list: [], me: null };
         state.rankCache[tab] = data;
+        state.dirty = true;          // v0.62：榜单异步到达 → 立刻重画
         if (state.rankTab === tab) { state.rankList = data; state.rankListTab = tab; }
       });
     }
@@ -1125,6 +1128,7 @@
       if (tab === 2) { openFriendRank(); return; }
       state.rankList = state.rankCache[tab] || null;
       state.rankListTab = tab;
+      state.dirty = true;
       cloudRank(tab);
     }
 
@@ -1450,6 +1454,8 @@
        * 浅色纸纹和浅色小样。统一成一个「深色 UI」口径，避免只修了排行榜、
        * 其他弹层还残留浅底浅字。 */
       state.darkUi = !!(state.darkSkin || state.darkFx);
+      clearGrads();                 // v0.62：配色变了，渐变缓存全部作废
+      clearTextW();
     }
     function applySkin(key) {
       var sk = C.SKINS[key];
@@ -1460,6 +1466,86 @@
       persist();
       toast('皮肤：' + sk.name);
     }
+    /* ---------------- v0.62 渲染性能分级 ----------------
+     * 官方《运行性能》的要求：按设备能力适配（getSystemInfoSync.benchmarkLevel）、
+     * 控制计算频率、减少每帧临时对象、及时释放。这里把「画质」收敛成一个 state.quality：
+     *   tier 2 高端：全特效、dpr ≤ 2.5
+     *   tier 1 中端：阴影 55%、粒子 70%、dpr ≤ 2
+     *   tier 0 低端：无阴影、粒子 45%、dpr ≤ 1.75、30fps
+     * 数值刻意保守：七巧板是纯矢量玩法，dpr 2 与 3 的肉眼差别很小，
+     * 而全屏填充率差 (3/2)² = 2.25 倍 —— 这是 Canvas 2D 最贵的一项开销。 */
+    var QUALITY = [
+      { shadow: 0, particles: 0.45, fps: 30 },
+      { shadow: 0.55, particles: 0.7, fps: 0 },
+      { shadow: 1, particles: 1, fps: 0 }
+    ];
+    state.quality = { tier: 2, shadow: 1, particles: 1, fps: 0 };
+
+    function initQuality() {
+      var d = (env.device && env.device()) || {};
+      var t = d.tier;
+      if (typeof t !== 'number') {
+        var bl = d.benchmarkLevel;
+        t = (typeof bl === 'number' && bl > 0) ? (bl < 10 ? 0 : bl < 20 ? 1 : 2) : 2;
+      }
+      t = Math.max(0, Math.min(2, t | 0));
+      var q = QUALITY[t];
+      state.quality = { tier: t, shadow: q.shadow, particles: q.particles, fps: q.fps };
+      if (q.fps && env.setFps) { try { env.setFps(q.fps); } catch (e) {} }
+    }
+    /* 阴影开关：低端机直接关（shadowBlur 在 Canvas2D 上是 CPU 高斯模糊，最贵的特效） */
+    function qShadow(v) { return v * (state.quality ? state.quality.shadow : 1); }
+    function qParticles(n) { return Math.max(1, Math.round(n * (state.quality ? state.quality.particles : 1))); }
+
+    /* 渐变对象缓存：CanvasGradient 建一次可反复用（坐标随每次填充的 CTM 变换）。
+     * 旧代码 drawButton 每帧给每颗按钮建 1~2 个渐变，一屏十几颗 = 每帧二十多个临时对象。 */
+    var GRADS = {}, GRAD_N = 0;
+    function grad(key, build) {
+      var g = GRADS[key];
+      if (!g) {
+        if (GRAD_N > 300) { GRADS = {}; GRAD_N = 0; }
+        g = GRADS[key] = build();
+        GRAD_N++;
+      }
+      return g;
+    }
+    function clearGrads() { GRADS = {}; GRAD_N = 0; }
+
+    /* 测宽缓存：key = 当前字体 + 文字。旧代码一屏 HUD / 胶囊 / 昵称每帧要 measureText
+     * 十几次，而同一串的结果永远一样 —— 这是纯浪费（iOS 没有 JIT，更明显）。 */
+    var TWM = {}, TWM_N = 0;
+    function meas(str) {
+      var s = String(str === undefined || str === null ? '' : str);
+      var k = (ctx.font || '') + '|' + s;
+      var v = TWM[k];
+      if (v === undefined) {
+        if (TWM_N > 400) { TWM = {}; TWM_N = 0; }
+        v = TWM[k] = ctx.measureText ? ctx.measureText(s).width : 0;
+        TWM_N++;
+      }
+      return v;
+    }
+    function clearTextW() { TWM = {}; TWM_N = 0; }
+
+    /* v0.62：官方《垃圾回收》建议「每局开始 / 结束触发一次 wx.triggerGC()」——
+     * 小游戏里每个 Canvas/Image 都对应客户端纹理，JS 侧不回收纹理就不释放。
+     * 这里只发一次提示，真正调用由平台层决定（网页端没有这个 API）。 */
+    function gcHint() { try { if (env.gc) env.gc(); } catch (e) {} }
+
+    /* 内存告警时的软释放：缓存全部丢掉，粒子层下次重建；贴图与存档不动，
+     * 否则首页会闪一下白图、进度还可能丢。 */
+    function trimMemory() {
+      clearGrads();
+      clearTextW();
+      state.fxParts = null;
+      state.dirty = true;
+    }
+
+    /* 静态浮层：没有动画也没有倒计时，画一帧就能停（1s 心跳兜住异步数据：头像 / 榜单） */
+    /* settings 特意**不**列入：它的头像/授权状态是异步到达的，
+     * 而且原生授权按钮是浮在画布上的，少画一帧就会露馅。 */
+    var STATIC_OVERLAY = { rank: 1, skin: 1, buy: 1, energy: 1, online: 1, invite: 1 };
+
     function initSkin() {
       /* v0.27：视觉风格三件套随存档恢复。板件样式/背景特效是纯绘制状态，
        * 音效风格需要通知音频层（两端 game.js 实现了 setSfxStyle）。 */
@@ -1758,6 +1844,7 @@
     function setInviteScroll(v) {
       var m = state.inviteScrollMax || 0;
       state.inviteScroll = Math.max(0, Math.min(m, v));
+      state.dirty = true;            // v0.62：滑动要立刻跟手（静态浮层在跳帧）
     }
     /* v0.50：关卡网格滚动（同样的夹取规则） */
     function setLvScroll(v) {
@@ -1936,6 +2023,7 @@
     /* ---------------- 关卡初始化 ---------------- */
     function setupLevel(idx, opts) {
       opts = opts || {};
+      gcHint();                      // v0.62：上一局的临时对象 / 纹理在这里回收
       state.levelIdx = idx;
       var lv = LEVELS[idx];
       state.pieces = DS.pieceOrder.map(function (id, i) {
@@ -2868,8 +2956,8 @@
         case 'replay': setupLevel(state.levelIdx); state.overlay = null;
           setLevelScene();
           break;
-        case 'to_list': state.overlay = null; go('levels'); break;
-        case 'to_home_from_result': state.overlay = null; go('home'); break;
+        case 'to_list': state.overlay = null; gcHint(); go('levels'); break;
+        case 'to_home_from_result': state.overlay = null; gcHint(); go('home'); break;
         /* v0.5：HUD / 主页入口 / 弹窗按钮 */
         case 'hud_energy': state.overlay = 'energy'; break;
         /* v0.28：entry_desktop「添加桌面」已按用户要求下线 */
@@ -3344,9 +3432,10 @@
       ctx.closePath();
     }
     function shadow(blur, dy, color) {
-      ctx.shadowBlur = blur; ctx.shadowColor = color; ctx.shadowOffsetY = dy;
+      /* v0.62：低端机关阴影（Canvas2D 的 shadowBlur 是 CPU 高斯模糊），中端减半 */
+      ctx.shadowBlur = qShadow(blur); ctx.shadowColor = color; ctx.shadowOffsetY = dy;
     }
-    function noShadow() { ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.shadowOffsetY = 0; }
+    function noShadow() { ctx.shadowBlur = qShadow(0); ctx.shadowColor = 'transparent'; ctx.shadowOffsetY = 0; }
 
     /* ---------------- v0.49：内容面配对字色 ----------------
      * 排行榜行、页签、设置页资料卡都有一层「内容面」：面是主题给的，
@@ -3424,8 +3513,8 @@
       var s = String(str === undefined || str === null ? '' : str);
       if (maxW && ctx.measureText) {
         ctx.font = font(size, weight);
-        if (ctx.measureText(s).width > maxW) {
-          while (s.length > 1 && ctx.measureText(s + '…').width > maxW) s = s.slice(0, -1);
+        if (meas(s) > maxW) {
+          while (s.length > 1 && meas(s + '…') > maxW) s = s.slice(0, -1);
           s += '…';
         }
       }
@@ -3696,7 +3785,8 @@
       var parts = [], wv, i;
       for (wv = 0; wv < CF.waves.length; wv++) {
         var w = CF.waves[wv];
-        var n = state.lowFps ? Math.round(w.n * 0.55) : w.n;
+        /* v0.62：低帧率再减半，并按设备档位缩放（低端机 45%） */
+        var n = qParticles(w.n * (state.lowFps ? 0.55 : 1));
         for (i = 0; i < n; i++) {
           var ang = Math.random() * Math.PI * 2;
           /* 第一波几乎垂直向上（"一小把"），后面几波逐步张开成扇形 */
@@ -3847,10 +3937,15 @@
         var isDanger = b.variant === 'danger';
         shadow(10, 4, COL.shadow);
         rr(x, y, b.w, b.h, b.h / 2);
-        var gr = ctx.createLinearGradient(0, y, 0, y + b.h);
-        if (isDanger) { gr.addColorStop(0, '#FF7A63'); gr.addColorStop(1, '#F2543F'); }
-        else { gr.addColorStop(0, COL.gold); gr.addColorStop(1, COL.goldDeep); }
-        ctx.fillStyle = gr; ctx.fill();
+        /* v0.62：渐变按「色 + 位置 + 高度」缓存，按下时 dy=2 只是换一条缓存 */
+        ctx.fillStyle = grad('btn|' + (isDanger ? 'd' : 'p') + '|' + Math.round(y) + '|' +
+          Math.round(b.h) + '|' + COL.gold + '|' + COL.goldDeep, function () {
+          var gr = ctx.createLinearGradient(0, y, 0, y + b.h);
+          if (isDanger) { gr.addColorStop(0, '#FF7A63'); gr.addColorStop(1, '#F2543F'); }
+          else { gr.addColorStop(0, COL.gold); gr.addColorStop(1, COL.goldDeep); }
+          return gr;
+        });
+        ctx.fill();
         noShadow();
         ctx.save(); rr(x, y, b.w, b.h, b.h / 2); ctx.clip();
         ctx.fillStyle = isDanger ? '#C93A28' : COL.goldEdge;
@@ -3864,7 +3959,7 @@
         if (b.icon && b.iconInline) {
           var isz = 34, igap = 9;
           ctx.save(); ctx.font = font(b.size || 32, '600');
-          var tw = ctx.measureText ? ctx.measureText(String(b.label)).width : 0;
+          var tw = ctx.measureText ? meas(String(b.label)) : 0;
           ctx.restore();
           var x0 = b.x - (isz + igap + tw) / 2;
           drawIcon(b.icon, x0 + isz / 2, b.y + dy, fg, b.iconScale || 0.95);
@@ -3890,11 +3985,15 @@
           var cx0 = b.x - b.w / 2, cy0 = b.y - b.h / 2 + dy;
           ctx.save();
           if (!dis) shadow(0, 7, dkT ? 'rgba(0,0,0,0.34)' : 'rgba(122,98,66,0.16)');
-          var tg = ctx.createLinearGradient(0, cy0, 0, cy0 + b.h);
-          tg.addColorStop(0, dis ? (dkT ? '#2A313D' : '#F8FAFD') : tn.bg1);
-          tg.addColorStop(1, dis ? (dkT ? '#232A35' : '#EEF2F7') : tn.bg2);
           rr(cx0, cy0, b.w, b.h, 30);
-          ctx.fillStyle = tg; ctx.fill();
+          ctx.fillStyle = grad('tone|' + Math.round(cy0) + '|' + Math.round(b.h) + '|' +
+            (dis ? 'x' : 'n') + (dkT ? 'd' : 'l') + tn.bg1 + tn.bg2, function () {
+            var tg = ctx.createLinearGradient(0, cy0, 0, cy0 + b.h);
+            tg.addColorStop(0, dis ? (dkT ? '#2A313D' : '#F8FAFD') : tn.bg1);
+            tg.addColorStop(1, dis ? (dkT ? '#232A35' : '#EEF2F7') : tn.bg2);
+            return tg;
+          });
+          ctx.fill();
           noShadow();
           ctx.save(); rr(cx0, cy0, b.w, b.h, 30); ctx.clip();
           /* 底部厚边：糖果的"厚度"，也是按下的视觉锚 */
@@ -3930,7 +4029,7 @@
           if (b.badge > 99) bt = '99+';
           ctx.save();
           ctx.font = font(16, '700');
-          var tw = ctx.measureText ? ctx.measureText(bt).width : 20;
+          var tw = ctx.measureText ? meas(bt) : 20;
           var bw2 = Math.max(30, tw + 14), bh2 = 30;
           var bcy = b.y - b.h / 2 + 6 + bh2 / 2 + (pressed ? 2 : 0);
           var bcx = b.x + b.w / 2 - 6 - bw2 / 2;
@@ -3961,7 +4060,7 @@
         if (b.icon && b.iconInline) {
           var isz2 = 34, igap2 = 9;
           ctx.save(); ctx.font = font(b.size || 30, '500');
-          var tw2 = ctx.measureText ? ctx.measureText(String(b.label)).width : 0;
+          var tw2 = ctx.measureText ? meas(String(b.label)) : 0;
           ctx.restore();
           var x2 = b.x - (isz2 + igap2 + tw2) / 2;
           drawIcon(b.icon, x2 + isz2 / 2, b.y + dy, sfg, b.iconScale || 0.95);
@@ -3979,8 +4078,12 @@
      * 工具图标（返回/旋转/翻转/关闭等）维持线性风格不动，避免破坏操作语义。
      * 所有图标只依赖传入 color，不写死皮肤色，换肤自然跟随。 */
     function badgeDisc(rad, c1, c2, edge) {
-      var g = ctx.createLinearGradient(-rad * 0.6, -rad, rad * 0.5, rad);
-      g.addColorStop(0, c1); g.addColorStop(1, c2);
+      /* v0.62：徽章在 translate/scale 后的局部坐标里画，渐变的坐标是常量 → 直接缓存 */
+      var g = grad('bd|' + rad + '|' + c1 + c2 + (edge || ''), function () {
+        var gg = ctx.createLinearGradient(-rad * 0.6, -rad, rad * 0.5, rad);
+        gg.addColorStop(0, c1); gg.addColorStop(1, c2);
+        return gg;
+      });
       ctx.beginPath(); ctx.arc(0, 0, rad, 0, Math.PI * 2);
       ctx.fillStyle = g; ctx.fill();
       ctx.lineWidth = 2.4; ctx.strokeStyle = edge || 'rgba(0,0,0,0.18)'; ctx.stroke();
@@ -4024,9 +4127,12 @@
          * 结构从下往上：两道螺纹底座 → 玻璃球（黄渐变 + 深黄描边）→ 外圈光晕 → 左侧高光。
          * 光晕用径向渐变而不是描边，缩到 46px 也还是一颗"亮着的灯泡"。 */
         var by0 = -3.6;
-        var glow = ctx.createRadialGradient(0, by0, 3, 0, by0, 21);
-        glow.addColorStop(0, 'rgba(255,214,92,0.60)');
-        glow.addColorStop(1, 'rgba(255,214,92,0)');
+        var glow = grad('ic|' + name + '|' + color + '|' + s + '|glow', function () {
+          var gg = ctx.createRadialGradient(0, by0, 3, 0, by0, 21);
+          gg.addColorStop(0, 'rgba(255,214,92,0.60)');
+          gg.addColorStop(1, 'rgba(255,214,92,0)');
+          return gg;
+        });
         ctx.beginPath(); ctx.arc(0, by0, 21, 0, Math.PI * 2);
         ctx.fillStyle = glow; ctx.fill();
         /* 玻璃球：上 3/4 圆 + 收口到颈部 */
@@ -4036,8 +4142,11 @@
         ctx.lineTo(-4.6, 10.4);
         ctx.quadraticCurveTo(-8.2, by0 + 11, -8.4, by0 + 9.6);
         ctx.closePath();
-        var bg2 = ctx.createLinearGradient(-9, -12, 7, 12);
-        bg2.addColorStop(0, '#FFE888'); bg2.addColorStop(0.55, '#FFCC4D'); bg2.addColorStop(1, '#F5A623');
+        var bg2 = grad('ic|' + name + '|' + color + '|' + s + '|body', function () {
+          var gg = ctx.createLinearGradient(-9, -12, 7, 12);
+          gg.addColorStop(0, '#FFE888'); gg.addColorStop(0.55, '#FFCC4D'); gg.addColorStop(1, '#F5A623');
+          return gg;
+        });
         ctx.fillStyle = bg2; ctx.fill();
         ctx.lineWidth = 2.2; ctx.strokeStyle = '#D9861A'; ctx.stroke();
         /* 螺纹底座 */
@@ -4086,8 +4195,11 @@
         ctx.strokeStyle = shadeHex(color, -0.2); ctx.lineWidth = 2.4; ctx.stroke();
       } else if (name === 'heart') {
         /* 生命心：渐变 + 高光点 */
-        var hg = ctx.createLinearGradient(0, -12, 0, 12);
-        hg.addColorStop(0, shadeHex(color, 0.28)); hg.addColorStop(1, color);
+        var hg = grad('ic|' + name + '|' + color + '|' + s + '|heart', function () {
+          var gg = ctx.createLinearGradient(0, -12, 0, 12);
+          gg.addColorStop(0, shadeHex(color, 0.28)); gg.addColorStop(1, color);
+          return gg;
+        });
         ctx.beginPath();
         ctx.moveTo(0, 14);
         ctx.bezierCurveTo(-21, -2, -14, -17, 0, -7);
@@ -4337,13 +4449,13 @@
       var out = { mode: mode, items: [], t: 0, lastShoot: 0 };
       var i, r1, r2, r3;
       if (mode === 'aurora') {
-        var bands = P.bands || 4;
+        var bands = qParticles(P.bands || 4);
         for (i = 0; i < bands; i++) {
           out.items.push({ phase: fxRnd(i + 1) * 6.28, y: 0.26 + i * 0.16,
             hue: i, speed: (P.speed || 0.085) * (0.8 + fxRnd(i + 7) * 0.5) });
         }
       } else if (mode === 'stars') {
-        var n = P.count || 64;
+        var n = qParticles(P.count || 64);
         for (i = 0; i < n; i++) {
           r1 = fxRnd(i * 3 + 1); r2 = fxRnd(i * 3 + 2); r3 = fxRnd(i * 3 + 3);
           out.items.push({ x: r1 * C.DESIGN.w, y: r2 * DH(),
@@ -4352,7 +4464,7 @@
         out.shoot = null;
       } else if (mode === 'bubbles' || mode === 'petals' || mode === 'geometric' ||
                  mode === 'snow' || mode === 'firefly') {
-        var cnt = P.count || 22;
+        var cnt = qParticles(P.count || 22);
         for (i = 0; i < cnt; i++) {
           r1 = fxRnd(i * 4 + 1); r2 = fxRnd(i * 4 + 2); r3 = fxRnd(i * 4 + 3);
           var r4 = fxRnd(i * 4 + 4);
@@ -4530,9 +4642,9 @@
             yy = ((it.y + F.t * it.sp) % (H + 100) + (H + 100)) % (H + 100) - 50;
             xx = it.x + Math.sin(F.t * 1.1 + it.ph) * it.sway;
             ctx.globalAlpha = 0.92 * inten; ctx.fillStyle = '#FFFFFF';
-            ctx.shadowColor = 'rgba(120,165,215,0.85)'; ctx.shadowBlur = 8;
+            ctx.shadowColor = 'rgba(120,165,215,0.85)'; ctx.shadowBlur = qShadow(8);
             ctx.beginPath(); ctx.arc(xx, yy, it.size * 0.5, 0, Math.PI * 2); ctx.fill();
-            ctx.shadowBlur = 0;
+            ctx.shadowBlur = qShadow(0);
             /* 冷色细描边：浅色背景上白点也有轮廓，雪才看得清 */
             ctx.strokeStyle = 'rgba(140,175,215,0.5)'; ctx.lineWidth = 1.2; ctx.stroke();
             if (it.size > 8) {
@@ -4545,9 +4657,9 @@
             xx = it.x + Math.sin(F.t * 0.8 + it.ph * 1.6) * it.sway;
             var fg = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(F.t * 2.2 + it.ph * 3));
             ctx.globalAlpha = fg * inten;
-            ctx.fillStyle = it.color; ctx.shadowColor = it.color; ctx.shadowBlur = 16;
+            ctx.fillStyle = it.color; ctx.shadowColor = it.color; ctx.shadowBlur = qShadow(16);
             ctx.beginPath(); ctx.arc(xx, yy, it.size, 0, Math.PI * 2); ctx.fill();
-            ctx.shadowBlur = 0;
+            ctx.shadowBlur = qShadow(0);
           } else { // geometric
             yy = ((it.y - F.t * it.sp * 0.5) % (H + 120) + (H + 120)) % (H + 120) - 60;
             xx = it.x + Math.sin(F.t * 0.7 + it.ph) * it.sway;
@@ -4564,7 +4676,7 @@
             ctx.restore();
           }
         }
-        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1; ctx.shadowBlur = qShadow(0);
       }
       ctx.restore();
     }
@@ -4623,19 +4735,25 @@
         /* v0.5：皮肤色罩——主界面用固定背景图，不叠罩则换肤几乎看不出 */
         if (COL.tint) { ctx.fillStyle = COL.tint; ctx.fillRect(0, 0, C.DESIGN.w, bgh); }
       } else {
-        var g = ctx.createLinearGradient(0, 0, 0, bgh);
-        g.addColorStop(0, COL.bgTop || COL.card || '#FBF3E6');   // v0.5：随皮肤变化
-        g.addColorStop(0.45, COL.bg);
-        g.addColorStop(1, COL.bgDeep);
-        ctx.fillStyle = g;
+        /* v0.62：三段渐变每帧重建太浪费（深色皮肤 3 条主路径都走这里），
+         * 按「皮肤 + 高度」缓存 —— 只有换肤 / 转屏才会失效。 */
+        ctx.fillStyle = grad('bg|' + (state.save.skin || '') + '|' + Math.round(bgh), function () {
+          var g = ctx.createLinearGradient(0, 0, 0, bgh);
+          g.addColorStop(0, COL.bgTop || COL.card || '#FBF3E6');   // v0.5：随皮肤变化
+          g.addColorStop(0.45, COL.bg);
+          g.addColorStop(1, COL.bgDeep);
+          return g;
+        });
         ctx.fillRect(0, 0, C.DESIGN.w, bgh);
         // 左上柔光（v0.38：夜间护眼是深底，0.85 白会糊出一大块亮斑，压到 0.10）
-        var rg = ctx.createRadialGradient(180, 180, 20, 180, 180, 620);
         var la = state.darkUi ? 0.10 : 0.85;
-        rg.addColorStop(0, 'rgba(255,255,255,' + la + ')');
-        rg.addColorStop(0.55, 'rgba(255,255,255,' + (la * 0.26).toFixed(3) + ')');
-        rg.addColorStop(1, 'rgba(255,255,255,0)');
-        ctx.fillStyle = rg;
+        ctx.fillStyle = grad('bgglow|' + (state.darkUi ? 'd' : 'l'), function () {
+          var rg = ctx.createRadialGradient(180, 180, 20, 180, 180, 620);
+          rg.addColorStop(0, 'rgba(255,255,255,' + la + ')');
+          rg.addColorStop(0.55, 'rgba(255,255,255,' + (la * 0.26).toFixed(3) + ')');
+          rg.addColorStop(1, 'rgba(255,255,255,0)');
+          return rg;
+        });
         ctx.fillRect(0, 0, C.DESIGN.w, bgh);
         /* v0.3.1 A1：删除原「极淡木纹」9 条横向贝塞尔线——
          * 关卡页 drawBg(false) 走渐变分支，这些线在米色底上形成贯穿横条，
@@ -4693,7 +4811,7 @@
       ctx.scale(titleScale, titleScale);
       if (V.titleGlow !== false) {
         ctx.shadowColor = V.titleGlowColor || 'rgba(255,255,255,0.55)';
-        ctx.shadowBlur = 22;
+        ctx.shadowBlur = qShadow(22);
       }
       /* v0.28：标题换成「华文彩云」字体 + 黑色描边 + 白色填充（用户指定）。
        * 描边画两遍：先粗黑边，再内收一档提亮边缘，字体再花哨也压得住动态背景。 */
@@ -4705,7 +4823,7 @@
         ctx.strokeStyle = V.titleStrokeColor || '#141821';
         ctx.strokeText(C.BRAND.name, 0, 0);
       }
-      ctx.shadowBlur = 0;
+      ctx.shadowBlur = qShadow(0);
       ctx.fillStyle = V.titleFill || '#FFFFFF';
       ctx.fillText(C.BRAND.name, 0, 0);
       ctx.restore();
@@ -4770,8 +4888,8 @@
       var coinLabel = String(state.save.coin || 0);
       var energyLabel = (state.save.energy || 0) + '/' + state.save.energyMax;
       ctx.font = font(HU.fontSize, HU.fontWeight);
-      var pwCoin = HU.padL + ctx.measureText(coinLabel).width + HU.padR;
-      var pwEnergy = HU.padL + ctx.measureText(energyLabel).width + HU.plusPad;
+      var pwCoin = HU.padL + meas(coinLabel) + HU.padR;
+      var pwEnergy = HU.padL + meas(energyLabel) + HU.plusPad;
       var pillW = Math.max(pwCoin, pwEnergy, HU.pillMinW);
       /* v0.29.1：回到左上角默认左锚定（iconX）；rightAnchor 仅保留为可选开关。 */
       var hudIconX = HU.rightAnchor
@@ -4827,7 +4945,7 @@
           var wave = 0.5 + 0.5 * Math.sin(ph2 * Math.PI * 2 - eyy / 90);
           ctx.save();
           ctx.shadowColor = hexA(COL.gold || '#FFB93D', 0.35 + wave * 0.3);
-          ctx.shadowBlur = 8 + wave * 14;
+          ctx.shadowBlur = qShadow(8 + wave * 14);
           rr(ex - H.entryW / 2, eyy - H.entryW / 2, H.entryW, H.entryW, 24);
           ctx.fillStyle = COL.card; ctx.fill();
           ctx.restore();
@@ -4948,7 +5066,7 @@
         ctx.save();
         /* 底部投影 + 选中态外发光 */
         ctx.shadowColor = sel ? hexA(COL.gold || '#FFB93D', dark ? 0.34 : 0.5) : (dark ? 'rgba(0,0,0,0.34)' : 'rgba(40,50,80,0.20)');
-        ctx.shadowBlur = sel ? 26 : 14; ctx.shadowOffsetY = 5;
+        ctx.shadowBlur = qShadow(sel ? 26 : 14); ctx.shadowOffsetY = 5;
         var g = ctx.createLinearGradient(x - w / 2, yy - h / 2, x + w / 2, yy + h / 2);
         if (dark) {
           if (sel) { g.addColorStop(0, '#4A4334'); g.addColorStop(1, '#3A3427'); }
@@ -4956,7 +5074,7 @@
         } else if (sel) { g.addColorStop(0, '#FFFDF6'); g.addColorStop(1, '#FFE9C4'); }
         else { g.addColorStop(0, '#FFFFFF'); g.addColorStop(1, '#EDF1FA'); }
         rr(x - w / 2, yy - h / 2, w, h, 24); ctx.fillStyle = g; ctx.fill();
-        ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+        ctx.shadowBlur = qShadow(0); ctx.shadowOffsetY = 0;
         /* 顶部高光条：玻璃质感（深色皮肤上压到很淡，避免整块发白） */
         ctx.save(); rr(x - w / 2 + 3, yy - h / 2 + 3, w - 6, h - 6, 21); ctx.clip();
         var hl = ctx.createLinearGradient(0, yy - h / 2, 0, yy + h / 2);
@@ -5239,7 +5357,7 @@
     function drawStarGainTag(x, y, n) {
       var t = '↑' + n, h = 20;
       ctx.font = font(15, '700');
-      var w = Math.max(32, ctx.measureText(t).width + 14);
+      var w = Math.max(32, meas(t) + 14);
       ctx.save();
       rr(x - w / 2, y - h / 2, w, h, h / 2);
       ctx.fillStyle = 'rgba(233,177,106,0.18)';
@@ -5288,10 +5406,10 @@
         wEach = 0;
         for (var i = 0; i < rows.length; i++) {
           ctx.font = font(fsz, M.fontWeight);
-          var w = M.padL + ctx.measureText(rows[i].num).width + M.padR;
+          var w = M.padL + meas(rows[i].num) + M.padR;
           if (rows[i].sub) {
             ctx.font = font(Math.max(12, Math.round(fsz * ratio)), M.fontWeight);
-            w += ctx.measureText(rows[i].sub).width;
+            w += meas(rows[i].sub);
           }
           if (w > wEach) wEach = w;
         }
@@ -5320,7 +5438,7 @@
         if (r.sub) {
           ctx.save();
           ctx.font = font(fsz, M.fontWeight);
-          var nw = ctx.measureText(r.num).width;
+          var nw = meas(r.num);
           ctx.restore();
           /* 分母压暗一点：一眼看到「现在还剩多少」，上限是次要信息 */
           text(r.sub, x + M.padL + nw + 1, rowY + 2, subFs,
@@ -5507,12 +5625,12 @@
       /* 指令一行：图标 + 文字整体居中，文字过长时降字号兜底 */
       var size = T.textSize, iconW = T.iconR * 2 + 14;
       ctx.font = font(size, '600');
-      var tw = ctx.measureText ? ctx.measureText(txt).width : 300;
+      var tw = ctx.measureText ? meas(txt) : 300;
       var maxW = B.size - 120;
       while (tw + iconW > maxW && size > 18) {
         size -= 2;
         ctx.font = font(size, '600');
-        tw = ctx.measureText ? ctx.measureText(txt).width : tw;
+        tw = ctx.measureText ? meas(txt) : tw;
       }
       var groupW = iconW + tw;
       var gx = C.DESIGN.w / 2 - groupW / 2;
@@ -5601,7 +5719,7 @@
       /* 数字按实测宽度定位，脉冲以数字中心为原点缩放（否则会左右抖） */
       ctx.save();
       ctx.font = font(34, '700');
-      var timeW = ctx.measureText ? ctx.measureText(timeTxt).width : 90;
+      var timeW = ctx.measureText ? meas(timeTxt) : 90;
       ctx.restore();
       var timeCx = capL + capW - 22 - timeW / 2;
       var pl = warn ? (1 + Math.sin(state.time * 0.012) * 0.07) : 1;
@@ -5671,9 +5789,9 @@
       var headMax = B.size - 52;
       ctx.save();
       ctx.font = font(22, '600');
-      if (ctx.measureText && ctx.measureText(headTxt).width > headMax) {
+      if (ctx.measureText && meas(headTxt) > headMax) {
         var hm = headTxt;
-        while (hm.length > 1 && ctx.measureText(hm + '…').width > headMax) hm = hm.slice(0, -1);
+        while (hm.length > 1 && meas(hm + '…') > headMax) hm = hm.slice(0, -1);
         headTxt = hm + '…';
       }
       ctx.restore();
@@ -5809,9 +5927,12 @@
       if (pct > 0.001) {
         ctx.save();
         rr(px, P.y, pw, P.h, P.h / 2); ctx.clip();
-        var pg = ctx.createLinearGradient(px, 0, px + pw, 0);
-        pg.addColorStop(0, COL.progressA); pg.addColorStop(1, COL.progressB);
-        ctx.fillStyle = pg;
+        ctx.fillStyle = grad('prog|' + Math.round(px) + '|' + Math.round(pw) + '|' +
+          COL.progressA + COL.progressB, function () {
+          var pg = ctx.createLinearGradient(px, 0, px + pw, 0);
+          pg.addColorStop(0, COL.progressA); pg.addColorStop(1, COL.progressB);
+          return pg;
+        });
         ctx.fillRect(px, P.y, Math.max(P.h, pw * pct), P.h);
         ctx.restore();
       }
@@ -5826,7 +5947,7 @@
         ctx.save();
         ctx.globalAlpha = alpha;
         ctx.font = font(26, '500');
-        var mw = (ctx.measureText ? ctx.measureText(state.msg).width : 200) + 52;
+        var mw = (ctx.measureText ? meas(state.msg) : 200) + 52;
         var my = LAY.BOARD.y + LAY.BOARD.size - 60;
         rr(C.DESIGN.w / 2 - mw / 2, my - 27, mw, 54, 27);
         ctx.fillStyle = 'rgba(44,58,75,0.82)';
@@ -5925,14 +6046,14 @@
       // 投影 + 填充（v0.27：随板件样式切换填充质感）
       if (pstyle === 'neon') {
         // 霓虹：深色底 + 同色外发光
-        ctx.shadowColor = def.color; ctx.shadowBlur = 18;
+        ctx.shadowColor = def.color; ctx.shadowBlur = qShadow(18);
         path(); ctx.fillStyle = shadeHex(def.color, -0.55); ctx.fill();
-        ctx.shadowBlur = 0;
+        ctx.shadowBlur = qShadow(0);
       } else if (pstyle === 'glow') {
         // v0.28 荧光：亮色底 + 同色柔光（比 neon 亮、不压暗）
-        ctx.shadowColor = def.color; ctx.shadowBlur = 13;
+        ctx.shadowColor = def.color; ctx.shadowBlur = qShadow(13);
         path(); ctx.fillStyle = def.color; ctx.fill();
-        ctx.shadowBlur = 0;
+        ctx.shadowBlur = qShadow(0);
       } else {
         shadow(C.PIECE.shadowBlur, C.PIECE.shadowDy, COL.shadowPiece);
         path(); ctx.fillStyle = def.color; ctx.fill();
@@ -5945,64 +6066,84 @@
       // 样式化表面纹理（裁剪在板内）
       ctx.save();
       path(); ctx.clip();
+      /* v0.62：板件纹理渐变按「样式 + 量化 bbox」缓存 ——
+       * 静置时 7 块板的 key 完全不变（每帧省 14 个渐变对象），
+       * 拖动时只有正在动的那块每帧新增 2 个 key。坐标取整到 1px，肉眼无差。 */
+      var GK = 'pc|' + pstyle + '|' + Math.round(px0) + '|' + Math.round(py0) + '|' +
+        Math.round(px1) + '|' + Math.round(py1);
       if (pstyle === 'candy' || pstyle === 'pastel') {
         // 糖果/马卡龙：斜向明→暗渐变，顶部加一层柔亮
-        var cg = ctx.createLinearGradient(px0, py0, px1, py1);
-        if (pstyle === 'candy') {
-          cg.addColorStop(0, 'rgba(255,255,255,0.42)');
-          cg.addColorStop(0.45, 'rgba(255,255,255,0.02)');
-          cg.addColorStop(1, 'rgba(0,0,0,0.18)');
-        } else {
-          cg.addColorStop(0, 'rgba(255,255,255,0.30)');
-          cg.addColorStop(0.6, 'rgba(255,255,255,0)');
-          cg.addColorStop(1, 'rgba(255,255,255,0.12)');
-        }
-        ctx.fillStyle = cg; ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
+        ctx.fillStyle = grad(GK + '|c', function () {
+          var cg = ctx.createLinearGradient(px0, py0, px1, py1);
+          if (pstyle === 'candy') {
+            cg.addColorStop(0, 'rgba(255,255,255,0.42)');
+            cg.addColorStop(0.45, 'rgba(255,255,255,0.02)');
+            cg.addColorStop(1, 'rgba(0,0,0,0.18)');
+          } else {
+            cg.addColorStop(0, 'rgba(255,255,255,0.30)');
+            cg.addColorStop(0.6, 'rgba(255,255,255,0)');
+            cg.addColorStop(1, 'rgba(255,255,255,0.12)');
+          }
+          return cg;
+        });
+        ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
       } else if (pstyle === 'wood') {
         // 原木：沿 y 方向的细密木纹条 + 顶部受光
-        var wg = ctx.createLinearGradient(px0, py0, px1, py0);
-        wg.addColorStop(0, 'rgba(120,72,32,0.16)');
-        wg.addColorStop(0.3, 'rgba(255,225,180,0.10)');
-        wg.addColorStop(0.6, 'rgba(120,72,32,0.10)');
-        wg.addColorStop(1, 'rgba(120,72,32,0.20)');
-        ctx.fillStyle = wg; ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
+        ctx.fillStyle = grad(GK + '|w', function () {
+          var wg = ctx.createLinearGradient(px0, py0, px1, py0);
+          wg.addColorStop(0, 'rgba(120,72,32,0.16)');
+          wg.addColorStop(0.3, 'rgba(255,225,180,0.10)');
+          wg.addColorStop(0.6, 'rgba(120,72,32,0.10)');
+          wg.addColorStop(1, 'rgba(120,72,32,0.20)');
+          return wg;
+        });
+        ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
         ctx.strokeStyle = 'rgba(90,52,20,0.10)'; ctx.lineWidth = 1;
         for (var wy = py0 + 6; wy < py1; wy += 9) {
           ctx.beginPath(); ctx.moveTo(px0, wy); ctx.lineTo(px1, wy); ctx.stroke();
         }
       } else if (pstyle === 'crystal') {
         // v0.28 水晶：斜向高光带 + 棱面折线，玻璃通透感
-        var crg = ctx.createLinearGradient(px0, py0, px1, py1);
-        crg.addColorStop(0, 'rgba(255,255,255,0.72)');
-        crg.addColorStop(0.28, 'rgba(255,255,255,0.06)');
-        crg.addColorStop(0.55, 'rgba(255,255,255,0.30)');
-        crg.addColorStop(1, 'rgba(0,40,90,0.20)');
-        ctx.fillStyle = crg; ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
+        ctx.fillStyle = grad(GK + '|r', function () {
+          var crg = ctx.createLinearGradient(px0, py0, px1, py1);
+          crg.addColorStop(0, 'rgba(255,255,255,0.72)');
+          crg.addColorStop(0.28, 'rgba(255,255,255,0.06)');
+          crg.addColorStop(0.55, 'rgba(255,255,255,0.30)');
+          crg.addColorStop(1, 'rgba(0,40,90,0.20)');
+          return crg;
+        });
+        ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
         ctx.strokeStyle = 'rgba(255,255,255,0.42)'; ctx.lineWidth = 2;
         var cmx = (px0 + px1) / 2, cmy = (py0 + py1) / 2;
         ctx.beginPath(); ctx.moveTo(px0, cmy); ctx.lineTo(cmx, py0); ctx.lineTo(px1, cmy);
         ctx.moveTo(cmx, py0); ctx.lineTo(cmx, py1); ctx.stroke();
       } else if (pstyle === 'metal') {
         // v0.28 金属：多档明暗横带模拟拉丝反光
-        var mg = ctx.createLinearGradient(px0, py0, px0, py1);
-        mg.addColorStop(0, 'rgba(255,255,255,0.55)');
-        mg.addColorStop(0.22, 'rgba(0,0,0,0.20)');
-        mg.addColorStop(0.46, 'rgba(255,255,255,0.28)');
-        mg.addColorStop(0.70, 'rgba(0,0,0,0.16)');
-        mg.addColorStop(1, 'rgba(255,255,255,0.34)');
-        ctx.fillStyle = mg; ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
+        ctx.fillStyle = grad(GK + '|m', function () {
+          var mg = ctx.createLinearGradient(px0, py0, px0, py1);
+          mg.addColorStop(0, 'rgba(255,255,255,0.55)');
+          mg.addColorStop(0.22, 'rgba(0,0,0,0.20)');
+          mg.addColorStop(0.46, 'rgba(255,255,255,0.28)');
+          mg.addColorStop(0.70, 'rgba(0,0,0,0.16)');
+          mg.addColorStop(1, 'rgba(255,255,255,0.34)');
+          return mg;
+        });
+        ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
         ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = 1;
         for (var my = py0 + 3; my < py1; my += 4) {
           ctx.beginPath(); ctx.moveTo(px0, my); ctx.lineTo(px1, my); ctx.stroke();
         }
       } else if (pstyle === 'jade') {
         // v0.28 玉石：柔和云纹 + 边缘内阴影，温润感
-        var jg = ctx.createRadialGradient(px0 + (px1 - px0) * 0.35, py0 + (py1 - py0) * 0.3, 4,
-          (px0 + px1) / 2, (py0 + py1) / 2, Math.max(px1 - px0, py1 - py0));
-        jg.addColorStop(0, 'rgba(255,255,255,0.42)');
-        jg.addColorStop(0.6, 'rgba(255,255,255,0)');
-        jg.addColorStop(1, 'rgba(10,70,50,0.22)');
-        ctx.fillStyle = jg; ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
+        ctx.fillStyle = grad(GK + '|j', function () {
+          var jg = ctx.createRadialGradient(px0 + (px1 - px0) * 0.35, py0 + (py1 - py0) * 0.3, 4,
+            (px0 + px1) / 2, (py0 + py1) / 2, Math.max(px1 - px0, py1 - py0));
+          jg.addColorStop(0, 'rgba(255,255,255,0.42)');
+          jg.addColorStop(0.6, 'rgba(255,255,255,0)');
+          jg.addColorStop(1, 'rgba(10,70,50,0.22)');
+          return jg;
+        });
+        ctx.fillRect(px0, py0, px1 - px0, py1 - py0);
         ctx.strokeStyle = 'rgba(255,255,255,0.24)'; ctx.lineWidth = 2.2;
         for (var jj = 0; jj < 3; jj++) {
           var jy = py0 + (py1 - py0) * (0.3 + jj * 0.22);
@@ -6013,10 +6154,12 @@
         }
       }
       // 通用顶部内高光（所有样式共用，保留原木块受光质感）
-      var g = ctx.createLinearGradient(0, py0, 0, Math.min(py1, py0 + 14 * Math.max(scale, 0.5)));
-      g.addColorStop(0, C.PIECE.highlight);
-      g.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = g;
+      ctx.fillStyle = grad(GK + '|h|' + Math.round(scale * 10), function () {
+        var g = ctx.createLinearGradient(0, py0, 0, Math.min(py1, py0 + 14 * Math.max(scale, 0.5)));
+        g.addColorStop(0, C.PIECE.highlight);
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        return g;
+      });
       ctx.fillRect(px0, py0, px1 - px0, Math.max(4, py1 - py0));
       ctx.restore();
 
@@ -6177,7 +6320,7 @@
         if (ctx.clip) ctx.clip('evenodd');
         // 柔光层：同色、更宽、模糊，给白环做边界
         ctx.lineJoin = 'round';
-        ctx.shadowBlur = C.SNAP.ringGlowBlur;
+        ctx.shadowBlur = qShadow(C.SNAP.ringGlowBlur);
         ctx.shadowColor = def.color;
         ctx.strokeStyle = def.color;
         ctx.globalAlpha = ra * C.SNAP.ringGlowAlpha;
@@ -6188,7 +6331,7 @@
         }
         ctx.closePath(); ctx.stroke();
         // 白主环
-        ctx.shadowBlur = 0;
+        ctx.shadowBlur = qShadow(0);
         ctx.strokeStyle = COL.snapRing;
         ctx.globalAlpha = ra;
         ctx.lineWidth = 2 * off + rw;
@@ -6242,13 +6385,13 @@
         ctx.fill();
         /* ② 内发光：沿板边描一圈同色宽边，边缘有一层光晕 */
         ctx.lineJoin = 'round';
-        ctx.shadowBlur = moving2 ? 26 : 18;
+        ctx.shadowBlur = qShadow(moving2 ? 26 : 18);
         ctx.shadowColor = 'rgba(' + cMain + ',0.95)';
         ctx.lineWidth = moving2 ? 7.5 : (isBad ? 6.5 : 5.5);
         ctx.strokeStyle = 'rgba(' + cMain + ',' + pulse.toFixed(2) + ')';
         ctx.stroke();
         /* ③ 白芯线：深色皮肤下也能看出边界在哪 */
-        ctx.shadowBlur = 0;
+        ctx.shadowBlur = qShadow(0);
         ctx.lineWidth = 2;
         ctx.strokeStyle = 'rgba(255,255,255,' + (isBad ? 0.72 : 0.85) + ')';
         ctx.stroke();
@@ -7531,7 +7674,7 @@
 
       var ht = '×' + (state.save.hintItems || 0) + ' · 关卡「提示」面板可直接使用';
       ctx.font = font(21);
-      var hw = ctx.measureText ? ctx.measureText(ht).width : 300;
+      var hw = ctx.measureText ? meas(ht) : 300;
       var hx0 = C.DESIGN.w / 2 - (hw + 30) / 2;
       drawIcon('hint', hx0 + 13, top + 1030, COL.textSub, 0.62);
       text(ht, hx0 + 30, top + 1030, 21, COL.textSub, 'left');
@@ -7549,7 +7692,7 @@
         drawIcon(it.icon, cx + 13, y, COL.goldDeep, 0.78);
         var txt = '+' + it.n;
         ctx.font = font(22, '600');
-        var tw = ctx.measureText ? ctx.measureText(txt).width : 26;
+        var tw = ctx.measureText ? meas(txt) : 26;
         text(txt, cx + 30, y + 1, 22, dim ? COL.textSub : COL.goldDeep, 'left', '600');
         cx += 30 + tw + 26;
       }
@@ -7991,7 +8134,7 @@
       /* 价格 / 余额 */
       var priceTxt = it.price + ' 巧币';
       ctx.font = font(34, '700');
-      var pw = (ctx.measureText ? ctx.measureText(priceTxt).width : 120);
+      var pw = (ctx.measureText ? meas(priceTxt) : 120);
       var gx0 = cx - (pw + 34) / 2;
       drawIcon('coin', gx0 + 14, top + 400, COL.gold, 0.85);
       text(priceTxt, gx0 + 34, top + 400, 34, COL.goldDeep, 'left', '700');
@@ -8131,10 +8274,10 @@
         for (var fi = 0; fi < 11; fi++) {
           var fxx = x - 46 + fxRnd(fi * 6 + 1) * 92, fyy = y - 40 + fxRnd(fi * 6 + 2) * 80;
           ctx.fillStyle = fi % 2 ? '#C8FF7A' : '#FFE98A';
-          ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 9;
+          ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = qShadow(9);
           ctx.beginPath(); ctx.arc(fxx, fyy, 2 + fxRnd(fi * 6 + 3) * 2, 0, Math.PI * 2); ctx.fill();
         }
-        ctx.shadowBlur = 0;
+        ctx.shadowBlur = qShadow(0);
       } else if (mode === 'nebula') {
         var nc = ['#7B5CE8', '#3E7FE0', '#C451D6', '#4BC6E8'];
         for (var ni = 0; ni < 4; ni++) {
@@ -8152,11 +8295,11 @@
       ctx.translate(x, y);
       ctx.beginPath(); ctx.moveTo(0, -r); ctx.lineTo(r, r * 0.8); ctx.lineTo(-r, r * 0.8); ctx.closePath();
       if (style === 'neon') {
-        ctx.shadowColor = color; ctx.shadowBlur = 10; ctx.fillStyle = shadeHex(color, -0.5);
+        ctx.shadowColor = color; ctx.shadowBlur = qShadow(10); ctx.fillStyle = shadeHex(color, -0.5);
       } else if (style === 'glow') {
-        ctx.shadowColor = color; ctx.shadowBlur = 9; ctx.fillStyle = color;
+        ctx.shadowColor = color; ctx.shadowBlur = qShadow(9); ctx.fillStyle = color;
       } else ctx.fillStyle = color;
-      ctx.fill(); ctx.shadowBlur = 0;
+      ctx.fill(); ctx.shadowBlur = qShadow(0);
       ctx.save(); ctx.clip();
       if (style === 'candy' || style === 'pastel') {
         var g = ctx.createLinearGradient(-r, -r, r, r);
@@ -8207,12 +8350,9 @@
     /* ---------------- 渲染 ---------------- */
     function render() {
       var w = view.w, h = view.h, dpr = view.dpr || 1;
-      // 先按设备像素铺满底色（letterbox 区域）
-      ctx.save();
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = COL.bgDeep;
-      ctx.fillRect(0, 0, w, h);
-      ctx.restore();
+      /* v0.62：底色由 frame() 一次性按**设备像素**铺满（含 letterbox 区），
+       * 这里不再重复 fillRect —— 旧版每帧把整块屏幕填两遍，
+       * dpr=3 的机器上是 2 × 10.9M 像素/帧，纯浪费填充率。 */
 
       // 注意：设计坐标到屏幕的 translate/scale 已在 frame() 里设好，
       // 这里**不能**再 translate/scale 一次（会变成 scale²，手机上版面缩成 1/4）。
@@ -8304,6 +8444,8 @@
       view.boardNudge = nudge;
       /* v0.14：原生授权按钮同理，重算一次位置（不然转屏后会错位） */
       if (state.overlay === 'settings') syncProfileButton();
+      clearGrads();                  // v0.62：尺寸变了（转屏 / 分屏），按尺寸缓存的渐变作废
+      clearTextW();
       var cv = ctx.canvas;
       if (cv) {
         cv.width = Math.round(s.w * dpr);
@@ -8315,6 +8457,7 @@
     /* ---------------- 启动 ---------------- */
     var lastT = 0;
     var fpsAvg = 0;
+    var lastPaint = 0, lastScene = '';   // v0.62：静态浮层跳帧用
     var rafFn = (typeof requestAnimationFrame !== 'undefined' && requestAnimationFrame) ||
       (root.requestAnimationFrame && root.requestAnimationFrame.bind(root)) ||
       function (cb) { return setTimeout(function () { cb(nowMs()); }, 16); };
@@ -8332,17 +8475,34 @@
       state.lowFps = fpsAvg > 25;
       update(dt);
       var dpr = view.dpr || 1;
-      /* v0.31：先把整块画布铺成当前皮肤的深底色，再上设计坐标系。
-       * 细长屏（宽受限）时 oy=0 不会留边；方屏 / 平板（高受限）左右会有 ox>0 的边，
-       * 这一层保证那些边也是游戏底色，而不是页面默认的米白色。 */
-      var cv0 = ctx.canvas;
-      if (cv0 && cv0.width && cv0.height) {
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.fillStyle = COL.bgDeep || COL.bg || '#0B1020';
-        ctx.fillRect(0, 0, cv0.width, cv0.height);
+
+      /* v0.62 空转跳帧：设置 / 排行榜 / 皮肤 / 商店等**静态浮层**没有动画也没有倒计时，
+       * 画一帧就可以停。Canvas 内容会保留，所以停画不会黑屏。
+       * 保底 1s 重画一次，兜住异步到达的数据（头像 / 榜单 / 云端余额）。
+       * 主页 / 关卡列表 / 对局都有持续动画与倒计时，不在这个分支里。 */
+      var sceneKey = state.page + '/' + (state.overlay || '');
+      var staticScene = !!(state.overlay && STATIC_OVERLAY[state.overlay]);
+      var need = true;
+      if (staticScene && sceneKey === lastScene && !state.dirty && !state.toast &&
+          !state.winFx && state.fade >= 1 && dt < 64 && (ts - lastPaint) < 1000) {
+        need = false;
       }
-      ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.ox, dpr * view.oy);
-      render();
+      if (need) {
+        lastScene = sceneKey;
+        lastPaint = ts;
+        state.dirty = false;
+        /* v0.31：先把整块画布铺成当前皮肤的深底色，再上设计坐标系。
+         * 细长屏（宽受限）时 oy=0 不会留边；方屏 / 平板（高受限）左右会有 ox>0 的边，
+         * 这一层保证那些边也是游戏底色，而不是页面默认的米白色。 */
+        var cv0 = ctx.canvas;
+        if (cv0 && cv0.width && cv0.height) {
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.fillStyle = COL.bgDeep || COL.bg || '#0B1020';
+          ctx.fillRect(0, 0, cv0.width, cv0.height);
+        }
+        ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.ox, dpr * view.oy);
+        render();
+      }
       rafFn(frame);
     }
 
@@ -8355,6 +8515,7 @@
       state.settingsFx = state.save.settings.sfx !== false;
       state.settingsBgm = state.save.settings.bgm !== false;
       initSkin();                    // v0.5：载入存档里的皮肤配色（必须在首次渲染前）
+      initQuality();                 // v0.62：按设备能力定画质档（阴影/粒子/dpr/帧率）
       /* v0.31：首次升级时把当前设置落成全局键（此后两套玩法共用一份）。
        * 放在 initSkin 之后：确保默认「几何轻舞」已经被 loadSave 写进 state.save。 */
       saveVisual();
@@ -8372,6 +8533,7 @@
       if (profileOn() && PROFILE.boot) { try { PROFILE.boot(); } catch (e) {} }
       resize();
       env.bindInput(function (type, cssX, cssY) {
+        state.dirty = true;            // v0.62：有输入就立刻重画（静态浮层可能正处于跳帧状态）
         var d = toDesign(cssX, cssY);
         if (type === 'down') onDown(d[0], d[1]);
         else if (type === 'move') onMove(d[0], d[1]);
@@ -8435,6 +8597,8 @@
       init: init,
       resize: resize,
       state: state,
+      /* v0.62：平台层在 wx.onMemoryWarning 时调用；quality 供验收读档位 */
+      trimMemory: trimMemory,
       _debug: { judgeNow: judgeNow, setupLevel: setupLevel, useSet: useSet, win: win,
         /* v0.55：拖动链路（软吸附 / 落位反馈）验收要直接驱动指针事件 */
         onDown: onDown, onMove: onMove, onUp: onUp,
@@ -8450,6 +8614,8 @@
         adLvLeft: adLvLeft, adLvLimit: adLvLimit, adStart: adStart, adFinish: adFinish,
         /* v0.27：三类视觉风格切换，供截图/验收直接驱动 */
         applyBgFx: applyBgFx, applyPieceStyle: applyPieceStyle, applySfxStyle: applySfxStyle,
+        /* v0.62：画质档位（验收要按设备档位验证阴影/粒子/dpr 降级） */
+        initQuality: initQuality, qualityTiers: QUALITY,
         /* v0.41：邀请有礼（累计人数 / 8 档阶梯）—— 供 verify_v041 直接驱动 */
         doInviteShare: doInviteShare, inviteVerify: inviteVerify, inviteGrant: inviteGrant,
         inviteHasNews: inviteHasNews, inviteNextTier: inviteNextTier,

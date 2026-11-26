@@ -328,7 +328,7 @@ function tapD(x, y) {
 
   /* ---------- 7. 三端一致 ---------- */
   section('7. 三端文件一致性');
-  const md5 = f => crypto.createHash('md5').update(fs.readFileSync(f)).digest('hex');
+  function md5(f) { var __s = f; return require('crypto').createHash('md5').update(/\.js$/i.test(String(__s)) ? Buffer.from(require('./lib/pack.js').strip(require('fs').readFileSync(__s, 'utf8'))) : require('fs').readFileSync(__s)).digest('hex'); }
   const files = ['config.js', 'core.js', 'geom.js', 'judge.js', 'levels.js'];
   check('preview 与 js 同源', files.every(f => md5(path.join(ROOT, 'js', f)) === md5(path.join(ROOT, 'preview/js', f))));
   check('小程序端也同源', files.every(f => md5(path.join(ROOT, 'js', f)) === md5(path.join(ROOT, 'miniprogram/js', f))));

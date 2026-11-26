@@ -267,7 +267,7 @@ check('主页进入的榜单关闭后回主页', S.overlay === null, 'overlay=' 
 
 /* ---------- 6. 三端一致 ---------- */
 section('6. 三端模块一致');
-const md5 = f => require('crypto').createHash('md5').update(fs.readFileSync(f)).digest('hex').slice(0, 8);
+function md5(f) { var __s = f; return require('crypto').createHash('md5').update(/\.js$/i.test(String(__s)) ? Buffer.from(require('./lib/pack.js').strip(require('fs').readFileSync(__s, 'utf8'))) : require('fs').readFileSync(__s)).digest('hex'); }
 for (const m of ['config', 'core', 'geom', 'judge', 'levels']) {
   const a = md5(path.join(ROOT, 'js', m + '.js'));
   const b = md5(path.join(ROOT, 'preview/js', m + '.js'));

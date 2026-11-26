@@ -198,7 +198,7 @@ S.save.energy = CFG.ECON.energyMax;
 
 /* ================= 5. 音效素材 ================= */
 console.log('\n==== 5. 音效素材（v0.31 重制） ====');
-const md5 = f => require('crypto').createHash('md5').update(fs.readFileSync(f)).digest('hex');
+function md5(f) { var __s = f; return require('crypto').createHash('md5').update(/\.js$/i.test(String(__s)) ? Buffer.from(require('./lib/pack.js').strip(require('fs').readFileSync(__s, 'utf8'))) : require('fs').readFileSync(__s)).digest('hex'); }
 function wavInfo(f) {
   const b = fs.readFileSync(f);
   if (b.toString('ascii', 0, 4) !== 'RIFF') return null;

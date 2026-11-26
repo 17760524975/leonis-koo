@@ -147,7 +147,7 @@ function textsOf(arr) { return arr.map(t => t.s).join('|'); }
 function hudTexts(arr) {
   return arr.filter(t => t.x >= HUD_L - 4 && t.x <= HUD_R + 4);
 }
-function md5(p) { return crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'); }
+function md5(p) { var __s = p; return require('crypto').createHash('md5').update(/\.js$/i.test(String(__s)) ? Buffer.from(require('./lib/pack.js').strip(require('fs').readFileSync(__s, 'utf8'))) : require('fs').readFileSync(__s)).digest('hex'); }
 
 (async function main() {
   console.log('v0.17 验收：对局页常驻巧币 / 体力胶囊');

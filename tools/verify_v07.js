@@ -207,7 +207,7 @@ for (const file of ['preview/js/game.js', 'miniprogram/game.js']) {
 
 /* ---------- 6. 三端一致性 ---------- */
 section('6. 三端模块一致');
-const md5 = f => require('crypto').createHash('md5').update(fs.readFileSync(path.join(ROOT, f))).digest('hex');
+function md5(f) { var __s = path.join(ROOT, f); return require('crypto').createHash('md5').update(/\.js$/i.test(String(__s)) ? Buffer.from(require('./lib/pack.js').strip(require('fs').readFileSync(__s, 'utf8'))) : require('fs').readFileSync(__s)).digest('hex'); }
 for (const f of ['config', 'core', 'judge', 'geom', 'levels']) {
   const set = new Set(['js', 'preview/js', 'miniprogram/js'].map(d => md5(`${d}/${f}.js`)));
   check(`${f}.js 三端一致`, set.size === 1, [...set][0].slice(0, 8));

@@ -59,7 +59,7 @@ function check(label, ok, detail) {
   console.log(`  [${ok ? 'OK' : 'XX'}] ${label}${detail ? '  ' + detail : ''}`);
 }
 function section(t) { console.log('\n== ' + t + ' =='); }
-const md5 = p => crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex');
+function md5(p) { var __s = p; return require('crypto').createHash('md5').update(/\.js$/i.test(String(__s)) ? Buffer.from(require('./lib/pack.js').strip(require('fs').readFileSync(__s, 'utf8'))) : require('fs').readFileSync(__s)).digest('hex'); }
 
 const store = {};
 const adLog = { rewarded: [] };

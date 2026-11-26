@@ -196,10 +196,11 @@ check('底部道具余量行改成「×N」口径',
 /* ================= 10. 三端一致 ================= */
 section('10. 三端逐字节一致');
 ['core.js', 'config.js'].forEach(f => {
-  const a = fs.readFileSync(path.join(ROOT, 'js', f));
+  const sem = p => require('./lib/pack.js').strip(fs.readFileSync(p, 'utf8'));
+  const a = sem(path.join(ROOT, 'js', f));
   ['preview', 'miniprogram'].forEach(pkg => {
-    const b = fs.readFileSync(path.join(ROOT, pkg, 'js', f));
-    check(`${pkg}/js/${f} ≡ js/${f}`, a.equals(b), a.length + ' bytes');
+    const b = sem(path.join(ROOT, pkg, 'js', f));
+    check(`${pkg}/js/${f} ≡ js/${f}（语义）`, a === b, a.length + ' bytes');
   });
 });
 

@@ -407,7 +407,7 @@ function failNow() {
   /* ================= 7. 三端一致 ================= */
   section('7. 三端模块一致（5 个模块）');
   for (const m of ['config', 'core', 'geom', 'judge', 'levels']) {
-    const h = f => crypto.createHash('md5').update(fs.readFileSync(path.join(ROOT, f))).digest('hex');
+    const h = f => crypto.createHash('md5').update(require('./lib/pack.js').strip(fs.readFileSync(path.join(ROOT, f), 'utf8'))).digest('hex');
     const a = h(`js/${m}.js`), b = h(`preview/js/${m}.js`), c = h(`miniprogram/js/${m}.js`);
     check(m + '.js 三端一致', a === b && b === c, a.slice(0, 8));
   }
